@@ -34,10 +34,7 @@ Runtime provider settings live in `.config/provider.json`. The file is intention
     {
       "name": "openrouter",
       "http_endpoint": "https://openrouter.ai/api/v1",
-      "api_keys": [
-        "key-1",
-        "key-2"
-      ]
+      "api_keys": ["key-1", "key-2"]
     }
   ]
 }
@@ -47,16 +44,11 @@ The runtime loader is:
 
 ```go
 rt, err := runtime.Load(".config/provider.json")
-if err != nil {
-    panic(err)
-}
-
-if err := rt.RefreshModels(ctx); err != nil {
-    panic(err)
-}
+if err != nil { panic(err) }
+if err := rt.RefreshModels(ctx); err != nil { panic(err) }
 ```
 
-The runtime config contains only the three deployment settings: provider name, HTTP endpoint, and API key array. The adapter is inferred from the provider name: `openai`/`openrouter` use the OpenAI-compatible adapter, `anthropic`/`opencode` use the Anthropic adapter, and `gemini`/`google` use the Gemini adapter.
+The runtime config contains only provider name, HTTP endpoint, and API key array. The adapter is inferred from the provider name: `openai`/`openrouter` use the OpenAI-compatible adapter, `anthropic`/`opencode` use the Anthropic adapter, and `gemini`/`google` use the Gemini adapter.
 
 ## Retry policy
 
@@ -68,18 +60,42 @@ Streaming is retried only when the failure happens before the stream has emitted
 
 ## Session-owned history
 
-A `Session` owns a canonical history and returns defensive copies. Use `GenerateTurn()` or `StreamTurn()` when the Harness should manage a complete user turn transactionally:
-
-```go
-response, err := client.GenerateTurn(ctx, session, sdk.Turn{
-    Role: sdk.RoleUser,
-    Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "hello"}},
-}, sdk.Request{})
-```
+A `Session` owns a canonical history and returns defensive copies. Use `GenerateTurn()` or `StreamTurn()` when the Harness should manage a complete user turn transactionally.
 
 The user turn is committed first, but the model output is committed only after a successful request. If all retries fail, the session is restored to its exact history from before the turn. `StreamTurn()` follows the same rule: streamed output is committed only after `EventDone`; a failed stream restores the previous history.
 
-`Session.RepairHistory()` can also repair externally restored/corrupted history by removing orphan tool results, duplicate tool-call IDs, and incomplete tool calls. It never changes the selected API key.
+`Session.RepairHistory()` can repair externally restored/corrupted history by removing orphan tool results, duplicate tool-call IDs, and incomplete tool calls. It never changes the selected API key.
+
+## Agent loop
+
+`Agent` is the provider-neutral control loop above `RouterClient`. It repeatedly performs model → tool calls → tool results → model until the model returns no tool calls or the hard iteration limit is reached. Tool failures are returned to the model as `tool_result` entries with `IsError=true`, allowing the model to recover instead of crashing the whole turn.
+
+```go
+registry, err := tools.NewRegistry("/workspace/project")
+if err != nil { panic(err) }
+agent := &sdk.Agent{Client: client, Tools: registry, MaxIterations: 20}
+response, err := agent.RunTurn(ctx, session, userTurn, sdk.Request{})
+```
+
+`HarnessLoop` can use `Agent` directly. If `Agent` is nil, the existing one-request `RouterClient.GenerateTurn()` path remains available for compatibility.
+
+The coding registry exposes:
+
+- `read_file`
+- `write_file`
+- `edit_file`
+- `list_directory`
+- `search_files`
+- `run_command`
+- `run_job`
+- `check_job`
+- `close_job`
+
+File operations are restricted to the configured workspace root. `edit_file` requires exactly one match for `old_text`, preventing an ambiguous edit from silently modifying multiple locations.
+
+`run_command` is synchronous. For long-running work, `run_job` starts the command asynchronously and returns a job ID. The agent can call `check_job` later to inspect state/output, or `close_job` to terminate a running job. Job state is process-local and in-memory in this first implementation, and captured output is bounded.
+
+The agent intentionally has no `time` tool. Timestamp information can be attached to each request by the host/application layer.
 
 ## Input and display architecture
 
@@ -115,12 +131,12 @@ request AI
   ↓
 response
   ↓
-save to session
+save response to session
   ↓
 display (async)
 ```
 
-Display is a best-effort side effect. `HarnessLoop` never waits for a display implementation to finish. Display errors and panics are isolated from the processing loop, and a display timeout bounds the lifetime of its goroutine. This uses Go's context cancellation primitives for the display operation without making display cancellation a dependency of the core turn. citeturn2search0turn2search6
+Display is a best-effort side effect. `HarnessLoop` never waits for a display implementation to finish. Display errors and panics are isolated from the processing loop, and a display timeout bounds the lifetime of its goroutine.
 
 Discord is currently represented by `DiscordInputSource`, `DiscordToInput`, and `DiscordDisplay`. The actual Discord Gateway client stays outside the Harness core and only needs to translate its events into `DiscordInputMessage` and implement `DiscordSender`.
 
@@ -134,42 +150,9 @@ opencode   + Anthropic-compatible model -> anthropic adapter
 Google-native provider + Gemini model -> gemini adapter
 ```
 
-Example provider setup:
-
-```go
-keys := sdk.NewKeyPool("key-1", "key-2")
-router := sdk.NewRouter()
-router.RegisterProvider(sdk.ProviderConfig{
-    ID:      sdk.ProviderOpenRouter,
-    BaseURL: "https://openrouter.ai/api/v1",
-    Keys:    keys,
-    Adapter: sdk.AdapterOpenAI,
-})
-
-client := sdk.NewRouterClient(router)
-client.RegisterAdapter(sdk.AdapterOpenAI, openai.New(""))
-
-if err := client.RefreshModels(ctx, sdk.ProviderOpenRouter); err != nil {
-    panic(err)
-}
-models := router.Models(sdk.ProviderOpenRouter)
-```
-
 ## Session settings
 
 API keys are scoped to a logical provider and a session pins one key by index. Thinking level and temperature are session defaults and can be overridden per request.
-
-```go
-temperature := 0.7
-session := sdk.NewSession(sdk.SessionConfig{
-    ID:            "session-1",
-    Provider:      sdk.ProviderOpenRouter,
-    Model:         models[0].ID,
-    KeyIndex:      1,
-    ThinkingLevel: sdk.ThinkingHigh,
-    Temperature:   &temperature,
-}, keys)
-```
 
 ## Canonical model
 

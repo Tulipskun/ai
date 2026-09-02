@@ -68,7 +68,7 @@ if err != nil { panic(err) }
 defer session.Close()
 ```
 
-`OpenSession()` creates the database if needed and reloads the existing canonical history for `config.ID`. `Session.Append()` and `Session.ReplaceHistory()` persist the history, so Agent rollback also persists the rolled-back state. The database uses SQLite WAL mode for concurrent readers and durable transactional updates. SQLite transactions are atomic, and WAL permits readers to proceed while a writer is active. citeturn0search0turn0search1
+`OpenSession()` creates the database if needed and reloads the existing canonical history for `config.ID`. `Session.Append()` and `Session.ReplaceHistory()` persist the history, so Agent rollback also persists the rolled-back state. The database uses SQLite WAL mode for concurrent readers and transactional updates.
 
 The database records more than the reconstructed conversation history. It keeps:
 
@@ -79,7 +79,7 @@ The database records more than the reconstructed conversation history. It keeps:
 
 Therefore provider retries are visible individually in the database rather than being collapsed into one successful request. The request/response records are append-only; session `turns` represent the current durable conversation state.
 
-The SQLite driver is `modernc.org/sqlite`, a CGo-free pure-Go SQLite implementation. citeturn1search0
+The SQLite driver is `modernc.org/sqlite`, a CGo-free pure-Go SQLite implementation.
 
 ## Session-owned history
 

@@ -1,5 +1,6 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 
 const DOM_VERSION_SCRIPT = `(() => {
@@ -27,19 +28,11 @@ export async function startWorker(options = {}) {
   const sessions = new Map();
   const server = http.createServer(async (req, res) => {
     try {
-      if (req.method === 'GET' && req.url === '/health') {
-        return json(res, 200, { ready: true });
-      }
-      if (req.method !== 'POST' || req.url !== '/rpc') {
-        return json(res, 404, { ok: false, error: { code: 'not_found', message: 'not found' } });
-      }
-      if (req.headers.authorization !== `Bearer ${token}`) {
-        return json(res, 401, { ok: false, error: { code: 'unauthorized', message: 'unauthorized' } });
-      }
+      if (req.method === 'GET' && req.url === '/health') return json(res, 200, { ready: true });
+      if (req.method !== 'POST' || req.url !== '/rpc') return json(res, 404, { ok: false, error: { code: 'not_found', message: 'not found' } });
+      if (req.headers.authorization !== `Bearer ${token}`) return json(res, 401, { ok: false, error: { code: 'unauthorized', message: 'unauthorized' } });
       const request = await readJSON(req);
-      if (!request || typeof request.id !== 'string' || typeof request.method !== 'string') {
-        return json(res, 400, { id: request?.id ?? null, ok: false, error: { code: 'invalid_request', message: 'id and method are required' } });
-      }
+      if (!request || typeof request.id !== 'string' || typeof request.method !== 'string') return json(res, 400, { id: request?.id ?? null, ok: false, error: { code: 'invalid_request', message: 'id and method are required' } });
       const result = await dispatch(request.method, request.params ?? {}, { browser, sessions, config });
       return json(res, 200, { id: request.id, ok: true, result });
     } catch (error) {
@@ -83,9 +76,7 @@ export async function startWorker(options = {}) {
 
 export async function stopWorker(worker) {
   if (!worker) return;
-  for (const state of worker.sessions?.values?.() ?? []) {
-    await state.context.close().catch(() => {});
-  }
+  for (const state of worker.sessions?.values?.() ?? []) await state.context.close().catch(() => {});
   worker.sessions?.clear?.();
   await worker.browser?.close?.().catch(() => {});
   await new Promise(resolve => worker.server?.close(() => resolve()));
@@ -140,10 +131,10 @@ async function close({ session_id }, { sessions }) {
 async function navigate({ session_id, url }, runtime) {
   const pageState = currentPage(session_id, runtime.sessions);
   if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) throw coded('invalid_url', 'only http/https URLs are allowed');
-  await pageState.page.goto(url, { waitUntil: 'domcontentloaded', timeout: runtime.config.navigationTimeout });
+  const response = await pageState.page.goto(url, { waitUntil: 'domcontentloaded', timeout: runtime.config.navigationTimeout });
   pageState.snapshot = null;
   touch(runtime.sessions.get(session_id), pageState);
-  return { page_id: pageState.id, url: pageState.page.url(), title: await pageState.page.title(), status: 200 };
+  return { page_id: pageState.id, url: pageState.page.url(), title: await pageState.page.title(), status: response?.status() ?? 0 };
 }
 
 async function snapshot({ session_id }, runtime) {
@@ -180,13 +171,9 @@ async function scroll({ session_id, direction = 'down', amount = 700 }, runtime)
 
 async function getText({ session_id, ref }, runtime) {
   const pageState = currentPage(session_id, runtime.sessions);
-  let text;
-  if (ref) {
-    const target = await resolveRef(pageState, ref);
-    text = await target.innerText({ timeout: runtime.config.actionTimeout });
-  } else {
-    text = await pageState.page.locator('body').innerText({ timeout: runtime.config.actionTimeout });
-  }
+  const text = ref
+    ? await (await resolveRef(pageState, ref)).innerText({ timeout: runtime.config.actionTimeout })
+    : await pageState.page.locator('body').innerText({ timeout: runtime.config.actionTimeout });
   touch(runtime.sessions.get(session_id), pageState);
   return { page_id: pageState.id, text };
 }
@@ -262,10 +249,29 @@ function json(res, status, body) {
 async function readJSON(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
-  if (Buffer.concat(chunks).length > 1 << 20) throw coded('request_too_large', 'request body exceeds 1 MiB');
+  const data = Buffer.concat(chunks);
+  if (data.length > 1 << 20) throw coded('request_too_large', 'request body exceeds 1 MiB');
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return JSON.parse(data.toString('utf8'));
   } catch {
     throw coded('invalid_json', 'request body is not valid JSON');
   }
 }
+
+async function main() {
+  const args = new Map(process.argv.slice(2).map(arg => {
+    const [key, value = ''] = arg.replace(/^--/, '').split('=');
+    return [key, value];
+  }));
+  const worker = await startWorker({
+    host: process.env.AI_BROWSER_HOST || '127.0.0.1',
+    port: Number(process.env.AI_BROWSER_PORT || 0),
+    headless: (args.get('headless') || process.env.AI_BROWSER_HEADLESS || 'true') !== 'false'
+  });
+  process.stdout.write(JSON.stringify({ ready: true, host: new URL(worker.baseURL).hostname, port: Number(new URL(worker.baseURL).port), token: worker.token }) + '\n');
+  const shutdown = async () => { await stopWorker(worker); process.exit(0); };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+}
+
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) main().catch(error => { console.error(error?.message || error); process.exit(1); });

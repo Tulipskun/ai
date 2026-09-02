@@ -121,11 +121,14 @@ func newWebFetchToolWithLimits(policy *NetworkPolicy, maxBytes, maxTextChars int
 }
 
 var (
-	scriptStyleRE = regexp.MustCompile(`(?is)<(script|style|noscript|template)[^>]*>.*?</\1>`)
-	commentRE     = regexp.MustCompile(`(?s)<!--.*?-->`)
-	tagRE         = regexp.MustCompile(`(?s)<[^>]+>`)
-	spaceRE       = regexp.MustCompile(`[\t\r\n ]+`)
-	titleRE       = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+	scriptRE  = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
+	styleRE   = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
+	noscriptRE = regexp.MustCompile(`(?is)<noscript[^>]*>.*?</noscript>`)
+	templateRE = regexp.MustCompile(`(?is)<template[^>]*>.*?</template>`)
+	commentRE = regexp.MustCompile(`(?s)<!--.*?-->`)
+	tagRE     = regexp.MustCompile(`(?s)<[^>]+>`)
+	spaceRE   = regexp.MustCompile(`[\t\r\n ]+`)
+	titleRE   = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 )
 
 func extractWebText(body, contentType string) (string, string) {
@@ -134,7 +137,10 @@ func extractWebText(body, contentType string) (string, string) {
 		if match := titleRE.FindStringSubmatch(body); len(match) == 2 {
 			title = strings.TrimSpace(html.UnescapeString(tagRE.ReplaceAllString(match[1], " ")))
 		}
-		text := scriptStyleRE.ReplaceAllString(body, " ")
+		text := scriptRE.ReplaceAllString(body, " ")
+		text = styleRE.ReplaceAllString(text, " ")
+		text = noscriptRE.ReplaceAllString(text, " ")
+		text = templateRE.ReplaceAllString(text, " ")
 		text = commentRE.ReplaceAllString(text, " ")
 		text = tagRE.ReplaceAllString(text, " ")
 		text = html.UnescapeString(text)

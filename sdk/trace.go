@@ -5,22 +5,20 @@ import "context"
 type TraceStage string
 
 const (
-	TraceRequest    TraceStage = "request"
-	TraceResponse   TraceStage = "response"
 	TraceToolCall   TraceStage = "tool_call"
 	TraceToolResult TraceStage = "tool_result"
+	TraceResponse   TraceStage = "response"
 	TraceError      TraceStage = "error"
 )
 
-// TraceEvent is emitted for each model request/response and tool-loop step.
-// It is transport-neutral so a display can inspect the complete control flow.
+// TraceEvent is emitted for tool-loop steps and model responses.
+// It is transport-neutral so a display can inspect the control flow.
 type TraceEvent struct {
-	Stage      TraceStage `json:"stage"`
-	Request    *Request   `json:"request,omitempty"`
-	Response   *Response  `json:"response,omitempty"`
-	ToolCall   *ToolCall  `json:"tool_call,omitempty"`
+	Stage      TraceStage  `json:"stage"`
+	Response   *Response   `json:"response,omitempty"`
+	ToolCall   *ToolCall   `json:"tool_call,omitempty"`
 	ToolResult *ToolResult `json:"tool_result,omitempty"`
-	Err        error      `json:"-"`
+	Err        error       `json:"-"`
 }
 
 type TraceFunc func(context.Context, TraceEvent)

@@ -3,8 +3,6 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -24,5 +22,5 @@ func TestCloseBackgroundJob(t *testing.T) {
 }
 
 func TestRegistryJobTools(t *testing.T) {
-	root:=t.TempDir(); r,_:=NewRegistry(root); res:=r.Execute(context.Background(),sdkCall("run_job",map[string]any{"command":"sh","args":[]string{"-c","printf ok"}}));if res.IsError{t.Fatal(res.Content)};var payload map[string]string;if err:=json.Unmarshal([]byte(res.Content),&payload);err!=nil{t.Fatal(err)};if payload["job_id"]==""{t.Fatal("missing job id")}; _=os.Chdir(filepath.Dir(root))
+	root:=t.TempDir(); r,_:=NewRegistry(root); res:=r.Execute(context.Background(),sdkCall("run_job",map[string]any{"command":"sh","args":[]string{"-c","printf ok"}}));if res.IsError{t.Fatal(res.Content)};var payload map[string]string;if err:=json.Unmarshal([]byte(res.Content),&payload);err!=nil{t.Fatal(err)};if payload["job_id"]==""{t.Fatal("missing job id")}
 }

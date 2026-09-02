@@ -15,7 +15,7 @@ test('snapshot refs support fill, press, click and reject stale refs', async () 
   });
   await new Promise(resolve => pageServer.listen(0, '127.0.0.1', resolve));
   const port = pageServer.address().port;
-  const worker = await startWorker({ host: '127.0.0.1', port: 0, headless: true });
+  const worker = await startWorker({ host: '127.0.0.1', port: 0, headless: true, allowPrivate: true });
   try {
     await worker.rpc('browser.open', { session_id: 'a' });
     await worker.rpc('browser.navigate', { session_id: 'a', url: `http://127.0.0.1:${port}` });

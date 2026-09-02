@@ -13,7 +13,9 @@ const (
 
 type ContentType string
 
-const ContentText ContentType = "text"
+const (
+	ContentText ContentType = "text"
+)
 
 type ContentPart struct {
 	Type ContentType `json:"type"`
@@ -59,36 +61,6 @@ const (
 	ThinkingHigh   ThinkingLevel = "high"
 )
 
-// ProviderID identifies the logical service/account used for a request.
-type ProviderID string
-
-// AdapterID identifies the wire/API protocol adapter used to execute a request.
-type AdapterID string
-
-const (
-	ProviderOpenRouter ProviderID = "openrouter"
-	ProviderOpenCode   ProviderID = "opencode"
-
-	AdapterOpenAI    AdapterID = "openai"
-	AdapterAnthropic AdapterID = "anthropic"
-	AdapterGemini    AdapterID = "gemini"
-)
-
-// ModelRoute binds a logical provider/model pair to an underlying adapter.
-type ModelRoute struct {
-	Provider ProviderID `json:"provider"`
-	Model    string     `json:"model"`
-	Adapter  AdapterID  `json:"adapter"`
-}
-
-// SessionConfig defines immutable routing and credential affinity for a session.
-type SessionConfig struct {
-	ID       string     `json:"id"`
-	Provider ProviderID `json:"provider"`
-	Model    string     `json:"model"`
-	KeyIndex int        `json:"key_index"`
-}
-
 type Request struct {
 	Provider        ProviderID    `json:"provider,omitempty"`
 	SystemPrompt    string        `json:"system_prompt,omitempty"`
@@ -100,8 +72,6 @@ type Request struct {
 	MaxOutputTokens int           `json:"max_output_tokens,omitempty"`
 	Stream          bool          `json:"stream,omitempty"`
 }
-
-func (r Request) RequestProvider() ProviderID { return r.Provider }
 
 type Usage struct {
 	InputTokens      int `json:"input_tokens"`
@@ -147,4 +117,68 @@ type Provider interface {
 	Name() string
 	Generate(context.Context, Request) (Response, error)
 	Stream(context.Context, Request) (<-chan Event, error)
+}
+
+// ProviderID identifies the logical service/account used for a request.
+type ProviderID string
+
+// AdapterID identifies the wire/API protocol adapter used to execute a request.
+type AdapterID string
+
+const (
+	ProviderOpenRouter ProviderID = "openrouter"
+	ProviderOpenCode   ProviderID = "opencode"
+
+	AdapterOpenAI    AdapterID = "openai"
+	AdapterAnthropic AdapterID = "anthropic"
+	AdapterGemini    AdapterID = "gemini"
+)
+
+// Model describes a model discovered from a logical provider.
+type Model struct {
+	ID                  string `json:"id"`
+	Name                string `json:"name,omitempty"`
+	SupportsTools       bool   `json:"supports_tools"`
+	SupportsThinking    bool   `json:"supports_thinking"`
+	SupportsTemperature bool   `json:"supports_temperature"`
+	SupportsStreaming   bool   `json:"supports_streaming"`
+}
+
+// ProviderConfig describes a logical provider and its protocol adapter.
+type ProviderConfig struct {
+	ID      ProviderID `json:"id"`
+	BaseURL string     `json:"base_url"`
+	Keys    *KeyPool   `json:"-"`
+	Adapter AdapterID  `json:"adapter"`
+}
+
+// ModelRoute binds a logical provider/model pair to an underlying adapter.
+// It remains supported for static routes, while discovered models are preferred.
+type ModelRoute struct {
+	Provider ProviderID `json:"provider"`
+	Model    string     `json:"model"`
+	Adapter  AdapterID  `json:"adapter"`
+}
+
+// SessionConfig defines immutable routing, credential, and generation settings for a session.
+type SessionConfig struct {
+	ID            string        `json:"id"`
+	Provider      ProviderID    `json:"provider"`
+	Model         string        `json:"model"`
+	KeyIndex      int           `json:"key_index"`
+	ThinkingLevel ThinkingLevel `json:"thinking_level,omitempty"`
+	Temperature   *float64      `json:"temperature,omitempty"`
+}
+
+// RequestProvider returns the logical provider requested by this request.
+func (r Request) RequestProvider() ProviderID { return ProviderID(r.Provider) }
+
+// ModelLister discovers the live model catalogue for a provider.
+type ModelLister interface {
+	ListModels(context.Context, string) ([]Model, error)
+}
+
+// EndpointProvider allows the harness to inject a provider-specific base URL without mutating a shared adapter.
+type EndpointProvider interface {
+	WithBaseURL(string) Provider
 }

@@ -26,8 +26,8 @@ type Agent struct {
 
 const (
 	defaultAgentMaxIterations = 20
-	defaultAgentMaxRetries    = 2
-	maxRetryCooldown          = 60 * time.Second
+	defaultAgentMaxRetries    = 5
+	maxRetryCooldown          = 96 * time.Second
 )
 
 func (a *Agent) RunTurn(ctx context.Context, session *Session, user Turn, req Request) (Response, error) {
@@ -189,16 +189,18 @@ func retryDelay(err error, attempt int) time.Duration {
 		}
 	}
 
-	d := 250 * time.Millisecond
+	// Retry waits are fixed for 429s when Retry-After is absent:
+	// 3s, 6s, 12s, 24s, 48s, 96s. The sixth delay is only reachable
+	// when callers explicitly configure more retries than the default.
+	d := 3 * time.Second
 	for i := 1; i < attempt; i++ {
-		if d >= maxRetryCooldown/2 {
-			d = maxRetryCooldown
-			break
+		if d >= maxRetryCooldown {
+			return maxRetryCooldown
 		}
 		d *= 2
-	}
-	if d > maxRetryCooldown {
-		d = maxRetryCooldown
+		if d > maxRetryCooldown {
+			return maxRetryCooldown
+		}
 	}
 	return d
 }

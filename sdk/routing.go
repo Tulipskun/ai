@@ -17,15 +17,35 @@ func (r *Router) RefreshModels(ctx context.Context, provider ProviderID, adapter
 func (r *Router) Models(provider ProviderID) []Model { r.mu.RLock(); models := append([]Model(nil), r.catalogs[provider]...); r.mu.RUnlock(); return models }
 func (r *Router) Resolve(provider ProviderID, model string) (ModelRoute, error) { if provider == "" { return ModelRoute{}, errors.New("sdk: provider is required") }; if model == "" { return ModelRoute{}, errors.New("sdk: model is required") }; r.mu.RLock(); config, providerOK := r.providers[provider]; ready := r.catalogReady[provider]; route, staticOK := r.routes[routeKey{provider, model}]; if ready { for _, discovered := range r.catalogs[provider] { if discovered.ID == model { r.mu.RUnlock(); return ModelRoute{Provider: provider, Model: model, Adapter: config.Adapter}, nil } }; r.mu.RUnlock(); return ModelRoute{}, fmt.Errorf("sdk: model %q is not available for provider=%q", model, provider) }; r.mu.RUnlock(); if staticOK { return route, nil }; if providerOK { return ModelRoute{}, fmt.Errorf("sdk: model catalogue for provider=%q has not been refreshed", provider) }; return ModelRoute{}, fmt.Errorf("sdk: no route for provider=%q model=%q", provider, model) }
 
-type Session struct { mu sync.RWMutex; config SessionConfig; keys *KeyPool; history []Turn }
+type Session struct { mu sync.RWMutex; config SessionConfig; keys *KeyPool; history []Turn; store *SessionDB }
 func NewSession(config SessionConfig, keys *KeyPool) *Session { return &Session{config: config, keys: keys} }
+
+// OpenSession opens or creates a durable SQLite-backed session. Existing history
+// for config.ID is loaded automatically; new turns are persisted on append.
+func OpenSession(path string, config SessionConfig, keys *KeyPool) (*Session, error) {
+	store, err := OpenSessionDB(path); if err != nil { return nil, err }
+	if err := store.SaveSession(config); err != nil { store.Close(); return nil, err }
+	history, err := store.LoadHistory(config.ID); if err != nil { store.Close(); return nil, err }
+	return &Session{config: config, keys: keys, history: history, store: store}, nil
+}
+
+func (s *Session) Close() error { s.mu.RLock(); store := s.store; s.mu.RUnlock(); if store == nil { return nil }; return store.Close() }
 func (s *Session) ID() string { return s.config.ID }
 func (s *Session) Config() SessionConfig { s.mu.RLock(); defer s.mu.RUnlock(); c := s.config; if c.Temperature != nil { v := *c.Temperature; c.Temperature = &v }; return c }
 func (s *Session) APIKey() (string, error) { s.mu.RLock(); keys, index := s.keys, s.config.KeyIndex; s.mu.RUnlock(); if keys == nil { return "", errors.New("sdk: session has no key pool") }; return keys.At(index) }
 func (s *Session) History() []Turn { s.mu.RLock(); defer s.mu.RUnlock(); return cloneTurns(s.history) }
-// Append records canonical history exactly as supplied. Use RepairHistory after a failed turn.
-func (s *Session) Append(turns ...Turn) { s.mu.Lock(); defer s.mu.Unlock(); s.history = append(s.history, cloneTurns(turns)...) }
-func (s *Session) ReplaceHistory(turns []Turn) { s.mu.Lock(); defer s.mu.Unlock(); s.history = repairTurns(cloneTurns(turns)) }
-func (s *Session) RepairHistory() { s.mu.Lock(); defer s.mu.Unlock(); s.history = repairTurns(s.history) }
+func (s *Session) Append(turns ...Turn) {
+	if len(turns) == 0 { return }
+	s.mu.Lock(); defer s.mu.Unlock()
+	cloned := cloneTurns(turns); start := len(s.history); s.history = append(s.history, cloned...)
+	if s.store != nil { if err := s.store.AppendTurns(s.config.ID, cloned, start); err != nil { s.history = s.history[:start]; panic(fmt.Sprintf("sdk: persist session append: %v", err)) } }
+}
+func (s *Session) ReplaceHistory(turns []Turn) {
+	repaired := repairTurns(cloneTurns(turns)); s.mu.Lock(); defer s.mu.Unlock(); old := s.history; s.history = repaired
+	if s.store != nil { if err := s.store.ReplaceTurns(s.config.ID, repaired); err != nil { s.history = old; panic(fmt.Sprintf("sdk: persist session replace: %v", err)) } }
+}
+func (s *Session) RepairHistory() { s.ReplaceHistory(s.History()) }
+func (s *Session) RecordRequest(attempt int, req Request) (int64, error) { s.mu.RLock(); store, id := s.store, s.config.ID; s.mu.RUnlock(); if store == nil { return 0, nil }; return store.RecordRequest(id, attempt, req) }
+func (s *Session) RecordResponse(requestID int64, resp Response, err error) error { s.mu.RLock(); store := s.store; s.mu.RUnlock(); if store == nil { return nil }; return store.RecordResponse(requestID, resp, err) }
 func cloneTurns(in []Turn) []Turn { out := make([]Turn, len(in)); copy(out, in); for i := range out { out[i].Content = append([]ContentPart(nil), out[i].Content...); if out[i].ToolCall != nil { v := *out[i].ToolCall; out[i].ToolCall = &v }; if out[i].ToolResult != nil { v := *out[i].ToolResult; out[i].ToolResult = &v } }; return out }
 func repairTurns(in []Turn) []Turn { out := make([]Turn, 0, len(in)); pending := make(map[string]bool); for _, turn := range in { switch turn.Role { case RoleUser, RoleModel: out = append(out, turn); case RoleToolCall: if turn.ToolCall == nil || turn.ToolCall.ID == "" || turn.ToolCall.Name == "" || pending[turn.ToolCall.ID] { continue }; pending[turn.ToolCall.ID] = true; out = append(out, turn); case RoleToolResult: if turn.ToolResult == nil || turn.ToolResult.ID == "" || !pending[turn.ToolResult.ID] { continue }; delete(pending, turn.ToolResult.ID); out = append(out, turn) } }; if len(pending) == 0 { return out }; final := out[:0]; for _, turn := range out { if turn.Role == RoleToolCall && pending[turn.ToolCall.ID] { continue }; final = append(final, turn) }; return final }

@@ -79,15 +79,16 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		if a.Tools != nil {
 			req.Tools = a.Tools.Definitions()
 		}
-		traceEvent(ctx, trace, TraceEvent{Stage: TraceRequest, Request: cloneRequest(req)})
 
 		resp, err := a.Client.Generate(ctx, session, req)
 		if err != nil {
-			traceEvent(ctx, trace, TraceEvent{Stage: TraceError, Err: err})
 			return Response{}, err
 		}
-		traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponse(resp)})
 		commitResponse(session, resp)
+
+		if len(resp.Content) > 0 {
+			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
+		}
 
 		if len(resp.ToolCalls) == 0 {
 			return resp, nil
@@ -122,21 +123,8 @@ func traceEvent(ctx context.Context, trace TraceFunc, event TraceEvent) {
 	}
 }
 
-func cloneRequest(in Request) *Request {
-	out := in
-	out.Messages = append([]Turn(nil), in.Messages...)
-	out.Tools = append([]Tool(nil), in.Tools...)
-	return &out
-}
-
-func cloneResponse(in Response) *Response {
-	out := in
-	out.Content = append([]ContentPart(nil), in.Content...)
-	out.ToolCalls = append([]ToolCall(nil), in.ToolCalls...)
-	if in.Reasoning != nil {
-		r := *in.Reasoning
-		out.Reasoning = &r
-	}
+func cloneResponseContent(in Response) *Response {
+	out := Response{Content: append([]ContentPart(nil), in.Content...)}
 	return &out
 }
 

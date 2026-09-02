@@ -34,6 +34,8 @@ type DisplayFunc func(context.Context, Output) error
 
 func (f DisplayFunc) Display(ctx context.Context, output Output) error { return f(ctx, output) }
 
+const defaultDisplayTimeout = 10 * time.Second
+
 // DispatchDisplay makes display a best-effort side effect. It never waits for
 // the display implementation and recovers panics from that implementation.
 // A timeout prevents a broken transport from leaving an unbounded goroutine.
@@ -41,14 +43,13 @@ func DispatchDisplay(parent context.Context, display Display, output Output, tim
 	if display == nil {
 		return
 	}
+	if timeout <= 0 {
+		timeout = defaultDisplayTimeout
+	}
 	go func() {
 		defer func() { _ = recover() }()
-		ctx := context.WithoutCancel(parent)
-		if timeout > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
-		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), timeout)
+		defer cancel()
 		_ = display.Display(ctx, output)
 	}()
 }

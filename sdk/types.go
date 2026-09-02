@@ -59,7 +59,38 @@ const (
 	ThinkingHigh   ThinkingLevel = "high"
 )
 
+// ProviderID identifies the logical service/account used for a request.
+type ProviderID string
+
+// AdapterID identifies the wire/API protocol adapter used to execute a request.
+type AdapterID string
+
+const (
+	ProviderOpenRouter ProviderID = "openrouter"
+	ProviderOpenCode   ProviderID = "opencode"
+
+	AdapterOpenAI    AdapterID = "openai"
+	AdapterAnthropic AdapterID = "anthropic"
+	AdapterGemini    AdapterID = "gemini"
+)
+
+// ModelRoute binds a logical provider/model pair to an underlying adapter.
+type ModelRoute struct {
+	Provider ProviderID `json:"provider"`
+	Model    string     `json:"model"`
+	Adapter  AdapterID  `json:"adapter"`
+}
+
+// SessionConfig defines immutable routing and credential affinity for a session.
+type SessionConfig struct {
+	ID       string     `json:"id"`
+	Provider ProviderID `json:"provider"`
+	Model    string     `json:"model"`
+	KeyIndex int        `json:"key_index"`
+}
+
 type Request struct {
+	Provider        ProviderID    `json:"provider,omitempty"`
 	SystemPrompt    string        `json:"system_prompt,omitempty"`
 	Messages        []Turn        `json:"messages,omitempty"`
 	Tools           []Tool        `json:"tools,omitempty"`
@@ -69,6 +100,8 @@ type Request struct {
 	MaxOutputTokens int           `json:"max_output_tokens,omitempty"`
 	Stream          bool          `json:"stream,omitempty"`
 }
+
+func (r Request) RequestProvider() ProviderID { return r.Provider }
 
 type Usage struct {
 	InputTokens      int `json:"input_tokens"`

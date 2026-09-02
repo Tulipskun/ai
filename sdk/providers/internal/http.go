@@ -18,15 +18,12 @@ type HTTPError struct {
 	Body       string
 }
 
-func (e *HTTPError) Error() string {
-	return fmt.Sprintf("http %s: %s", e.Status, e.Body)
-}
+func (e *HTTPError) Error() string { return fmt.Sprintf("http %s: %s", e.Status, e.Body) }
+func (e *HTTPError) HTTPStatusCode() int { return e.StatusCode }
 
 func StatusCode(err error) (int, bool) {
 	var he *HTTPError
-	if errors.As(err, &he) {
-		return he.StatusCode, true
-	}
+	if errors.As(err, &he) { return he.StatusCode, true }
 	return 0, false
 }
 

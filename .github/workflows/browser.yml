@@ -1,0 +1,34 @@
+name: Browser
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'browser/**'
+      - 'scripts/setup-browser.sh'
+      - '.github/workflows/browser.yml'
+  pull_request:
+    paths:
+      - 'browser/**'
+      - 'scripts/setup-browser.sh'
+      - '.github/workflows/browser.yml'
+
+jobs:
+  browser:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: browser/package-lock.json
+      - name: Install dependencies
+        working-directory: browser
+        run: npm ci
+      - name: Install Chromium
+        working-directory: browser
+        run: npx playwright install --with-deps chromium
+      - name: Run worker tests
+        working-directory: browser
+        run: npm test

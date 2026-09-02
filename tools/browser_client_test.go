@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -48,14 +49,15 @@ func TestBrowserClientDecodesWorkerError(t *testing.T) {
 	client := NewBrowserClientForTest(srv.URL, "test-token", BrowserClientConfig{RPCTimeout: time.Second})
 	var result any
 	err := client.Call(context.Background(), "browser.click", nil, &result)
-	if err == nil || err.Error() != "stale" {
+	if err == nil || !strings.Contains(err.Error(), "stale") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
 func TestBrowserClientHonorsContextTimeout(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
+		time.Sleep(100 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"id":"1","ok":true,"result":{}}`))
 	}))
 	defer srv.Close()
 

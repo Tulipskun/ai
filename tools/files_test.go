@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Tulipskun/ai/sdk"
 )
 
 func TestFileToolsAndEditSemantics(t *testing.T) {

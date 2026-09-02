@@ -22,7 +22,7 @@ type Message struct { Role Role `json:"role"`; Content []ContentPart `json:"cont
 type Tool struct { Name string `json:"name"`; Description string `json:"description,omitempty"`; InputSchema any `json:"input_schema,omitempty"` }
 type ToolCall struct { ID string `json:"id"`; Name string `json:"name"`; Arguments string `json:"arguments"` }
 type ToolResult struct { ID string `json:"id"`; Content string `json:"content"`; IsError bool `json:"is_error,omitempty"` }
-type Turn struct { Role Role `json:"role"`; Content []ContentPart `json:"content,omitempty"`; ToolCall *ToolCall `json:"tool_call,omitempty"`; ToolResult *ToolResult `json:"tool_result,omitempty"` }
+type Turn struct { Role Role `json:"role"`; Content []ContentPart `json:"content,omitempty"`; ToolCall *ToolCall `json:"tool_call,omitempty"`; ToolResult *ToolResult `json:"tool_result,omitempty"`; Reasoning *ReasoningState `json:"reasoning,omitempty"` }
 
 type ThinkingLevel string
 const (
@@ -46,7 +46,7 @@ type Request struct {
 
 type Usage struct { InputTokens int `json:"input_tokens"`; OutputTokens int `json:"output_tokens"`; TotalTokens int `json:"total_tokens"`; CacheReadTokens int `json:"cache_read_tokens"`; CacheWriteTokens int `json:"cache_write_tokens"` }
 type CacheInfo struct { Hit bool `json:"hit"`; Layer string `json:"layer,omitempty"` }
-type Response struct { Provider string `json:"provider"`; Model string `json:"model"`; Content []ContentPart `json:"content,omitempty"`; ToolCalls []ToolCall `json:"tool_calls,omitempty"`; FinishReason string `json:"finish_reason,omitempty"`; Usage Usage `json:"usage"`; Cache CacheInfo `json:"cache"` }
+type Response struct { Provider string `json:"provider"`; Model string `json:"model"`; Content []ContentPart `json:"content,omitempty"`; ToolCalls []ToolCall `json:"tool_calls,omitempty"`; Reasoning *ReasoningState `json:"reasoning,omitempty"`; FinishReason string `json:"finish_reason,omitempty"`; Usage Usage `json:"usage"`; Cache CacheInfo `json:"cache"` }
 
 type EventType string
 const (

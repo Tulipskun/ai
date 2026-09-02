@@ -52,17 +52,24 @@ test('browser navigation, snapshot refs, and ref actions work', async () => {
     await worker.rpc('browser.open', { session_id: 'a' });
     const nav = await worker.rpc('browser.navigate', { session_id: 'a', url: `http://127.0.0.1:${port}` });
     assert.equal(nav.status, 200);
-    const snap = await worker.rpc('browser.snapshot', { session_id: 'a' });
+    let snap = await worker.rpc('browser.snapshot', { session_id: 'a' });
     assert.match(snap.snapshot, /button .*ref=e\d+/);
     assert.match(snap.snapshot, /textbox .*ref=e\d+/);
     assert.match(snap.snapshot, /combobox .*ref=e\d+/);
 
-    const buttonRef = snap.snapshot.match(/button .*\[ref=(e\d+)\]/)?.[1];
-    const textboxRef = snap.snapshot.match(/textbox .*\[ref=(e\d+)\]/)?.[1];
-    const selectRef = snap.snapshot.match(/combobox .*\[ref=(e\d+)\]/)?.[1];
-    assert.ok(buttonRef && textboxRef && selectRef);
+    let textboxRef = snap.snapshot.match(/textbox .*\[ref=(e\d+)\]/)?.[1];
+    let selectRef = snap.snapshot.match(/combobox .*\[ref=(e\d+)\]/)?.[1];
+    assert.ok(textboxRef && selectRef);
     await worker.rpc('browser.fill', { session_id: 'a', ref: textboxRef, text: 'Updated' });
+
+    snap = await worker.rpc('browser.snapshot', { session_id: 'a' });
+    selectRef = snap.snapshot.match(/combobox .*\[ref=(e\d+)\]/)?.[1];
+    assert.ok(selectRef);
     await worker.rpc('browser.select', { session_id: 'a', ref: selectRef, value: 'b' });
+
+    snap = await worker.rpc('browser.snapshot', { session_id: 'a' });
+    const buttonRef = snap.snapshot.match(/button .*\[ref=(e\d+)\]/)?.[1];
+    assert.ok(buttonRef);
     await worker.rpc('browser.click', { session_id: 'a', ref: buttonRef });
     const text = await worker.rpc('browser.get_text', { session_id: 'a' });
     assert.match(text.text, /Updated/);

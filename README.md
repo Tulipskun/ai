@@ -125,23 +125,26 @@ The agent intentionally has no `time` tool. Timestamp information can be attache
 The Harness core is transport-independent. Input sources convert external events into canonical `Input` values, while displays consume canonical `Output` values.
 
 ```text
-Discord / Web / Console / ...
-            ↓
-       InputSource
-            ↓
-       HarnessLoop
-            ↓
-         Session
-            ↓
-          AI API
-            ↓
-         Session
-            ↓
-          Output
-       ↙     ↓      ↘
-  Discord   Web    Console
-  Display  Display  Display
+Discord / Telegram / Web / Console / ...
+                 ↓
+            InputSource
+                 ↓
+            HarnessLoop
+                 ↓
+               Session
+                 ↓
+                 AI
+                 ↓
+               Output
+                 ↓
+             OutputRouter
+          ↙       ↓       ↘
+      Discord   Telegram   Web
 ```
+
+Transport adapters live outside `sdk`. The SDK knows only canonical `Input`, `Output`, `InputSource`, `Display`, and the optional source-aware `RoutedDisplay` contract. This means adding Telegram or a WebSocket/HTTP application does not require changing the Harness.
+
+A future transport only needs to translate its native events at this boundary; it must not introduce transport-specific types or dependencies into `sdk`.
 
 The turn ordering is strict:
 
@@ -159,9 +162,32 @@ save response to session
 display (async)
 ```
 
-Display is a best-effort side effect. `HarnessLoop` never waits for a display implementation to finish. Display errors and panics are isolated from the processing loop, and a display timeout bounds the lifetime of its goroutine.
+`HarnessLoop` serializes turns for the same `SessionID` while allowing different sessions to run independently. Display is a best-effort side effect; the loop does not wait for the transport send to finish, and display panics/errors are isolated.
 
-Discord is currently represented by `DiscordInputSource`, `DiscordToInput`, and `DiscordDisplay`. The actual Discord Gateway client stays outside the Harness core and only needs to translate its events into `DiscordInputMessage` and implement `DiscordSender`.
+## Discord runtime
+
+The first concrete transport is `transport/discord`. It uses DiscordGo as the Gateway/REST client while keeping Discord-specific types outside `sdk`. DiscordGo v0.29.0 supports the Gateway and is compatible with the project's Go 1.25 toolchain.
+
+The runnable entry point is:
+
+```text
+cmd/ai
+```
+
+Required environment variables:
+
+```text
+DISCORD_BOT_TOKEN=...
+AI_MODEL=...
+```
+
+`AI_PROVIDER` is required when `.config/provider.json` contains more than one provider. If exactly one provider is configured, it can be omitted. Optional variables include `AI_SYSTEM_PROMPT`, `AI_THINKING_LEVEL`, `AI_TEMPERATURE`, `AI_MAX_OUTPUT_TOKENS`, `AI_SESSION_DB`, and `AI_PROVIDER_CONFIG`.
+
+The example is `.config/transport.example.env`. Runtime session databases are stored under `.data/` by default and are ignored by Git.
+
+Discord message sessions default to `discord:channel:<channel_id>`, so the same Discord conversation reuses the same durable Session. The transport ignores bot-authored messages.
+
+Discord message handling requests guild messages, direct messages, and message content. `MESSAGE_CONTENT` is a privileged Discord intent; it must be enabled in the application's Bot settings, and verified/verification-eligible apps may also need approval.
 
 ## Routing and model discovery
 

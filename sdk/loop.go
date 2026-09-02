@@ -3,6 +3,7 @@ package sdk
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 )
 
@@ -18,6 +19,8 @@ type HarnessLoop struct {
 	Displays        []Display
 	DisplayTimeout  time.Duration
 	OnTurnError     func(Input, error)
+
+	sessionLocks sync.Map
 }
 
 func (h *HarnessLoop) Run(ctx context.Context) error {
@@ -55,6 +58,16 @@ func (h *HarnessLoop) Handle(ctx context.Context, input Input) error {
 		return errors.New("sdk: session resolver returned nil session")
 	}
 
+	lockKey := input.SessionID
+	if lockKey == "" {
+		lockKey = session.ID()
+	}
+	if lockKey != "" {
+		lock := h.sessionLock(lockKey)
+		lock.Lock()
+		defer lock.Unlock()
+	}
+
 	var req Request
 	if h.BuildRequest != nil {
 		req, err = h.BuildRequest(ctx, input, session)
@@ -84,6 +97,15 @@ func (h *HarnessLoop) Handle(ctx context.Context, input Input) error {
 		DispatchDisplay(ctx, display, output, h.DisplayTimeout)
 	}
 	return nil
+}
+
+func (h *HarnessLoop) sessionLock(id string) *sync.Mutex {
+	if existing, ok := h.sessionLocks.Load(id); ok {
+		return existing.(*sync.Mutex)
+	}
+	created := &sync.Mutex{}
+	actual, _ := h.sessionLocks.LoadOrStore(id, created)
+	return actual.(*sync.Mutex)
 }
 
 func cloneMetadata(in map[string]string) map[string]string {

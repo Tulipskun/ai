@@ -30,6 +30,15 @@ type Display interface {
 	Display(context.Context, Output) error
 }
 
+// RoutedDisplay is an optional extension for displays owned by a concrete
+// transport. A routed display receives only outputs whose Source matches.
+// Displays that do not implement RoutedDisplay retain the legacy broadcast
+// behavior for compatibility.
+type RoutedDisplay interface {
+	Display
+	Source() string
+}
+
 type DisplayFunc func(context.Context, Output) error
 
 func (f DisplayFunc) Display(ctx context.Context, output Output) error { return f(ctx, output) }
@@ -42,6 +51,12 @@ const defaultDisplayTimeout = 10 * time.Second
 func DispatchDisplay(parent context.Context, display Display, output Output, timeout time.Duration) {
 	if display == nil {
 		return
+	}
+	if routed, ok := display.(RoutedDisplay); ok {
+		source := routed.Source()
+		if source != "" && source != output.Source {
+			return
+		}
 	}
 	if timeout <= 0 {
 		timeout = defaultDisplayTimeout

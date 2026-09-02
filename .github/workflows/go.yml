@@ -20,6 +20,7 @@ jobs:
       - name: Regenerate module metadata
         run: go mod tidy
       - name: Commit regenerated module metadata
+        if: github.event_name == 'pull_request'
         run: |
           if git diff --quiet -- go.mod go.sum; then
             exit 0
@@ -28,6 +29,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add go.mod go.sum
           git commit -m "chore: regenerate Go module metadata"
-          git push
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
       - run: go test ./...
       - run: go vet ./...

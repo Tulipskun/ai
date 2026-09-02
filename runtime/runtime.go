@@ -64,14 +64,19 @@ func (r *Runtime) StartBrowser(ctx context.Context, cfg BrowserConfig) error {
 		return nil
 	}
 	client := tools.NewBrowserClient(tools.BrowserClientConfig{
-		Host:           cfg.Host,
-		Port:           cfg.Port,
-		NodeCommand:    cfg.NodeCommand,
-		WorkerPath:     cfg.WorkerPath,
-		WorkerDir:      cfg.WorkerDir,
-		Headless:       cfg.Headless,
-		RPCTimeout:     cfg.ActionTimeout,
-		StartupTimeout: cfg.RPCStartupTimeout,
+		Host:              cfg.Host,
+		Port:              cfg.Port,
+		NodeCommand:       cfg.NodeCommand,
+		WorkerPath:        cfg.WorkerPath,
+		WorkerDir:         cfg.WorkerDir,
+		Headless:          cfg.Headless,
+		AllowPrivate:      cfg.AllowPrivate,
+		IdleTimeout:       cfg.IdleTimeout,
+		NavigationTimeout: cfg.NavigationTimeout,
+		ActionTimeout:     cfg.ActionTimeout,
+		SnapshotTimeout:   cfg.SnapshotTimeout,
+		RPCTimeout:        cfg.ActionTimeout + 5*time.Second,
+		StartupTimeout:    cfg.RPCStartupTimeout,
 	})
 	if err := client.Start(ctx); err != nil {
 		return err

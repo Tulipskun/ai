@@ -26,7 +26,7 @@ type Agent struct {
 
 const (
 	defaultAgentMaxIterations = 20
-	defaultAgentMaxRetries    = 5
+	defaultAgentMaxRetries    = 6
 	maxRetryCooldown          = 96 * time.Second
 )
 
@@ -180,18 +180,13 @@ func isRateLimitError(err error) bool {
 }
 
 func retryDelay(err error, attempt int) time.Duration {
-	if rateLimit, ok := err.(RetryAfterError); ok {
-		if d := rateLimit.RetryAfter(); d > 0 {
-			if d > maxRetryCooldown {
-				return maxRetryCooldown
-			}
-			return d
-		}
+	// Ignore provider Retry-After for the agent retry schedule. Retries use
+	// the deterministic cooldown requested by the SDK: 3s, 6s, 12s, 24s,
+	// 48s, then 96s before the final attempt fails.
+	_ = err
+	if attempt <= 1 {
+		return 3 * time.Second
 	}
-
-	// Retry waits are fixed for 429s when Retry-After is absent:
-	// 3s, 6s, 12s, 24s, 48s, 96s. The sixth delay is only reachable
-	// when callers explicitly configure more retries than the default.
 	d := 3 * time.Second
 	for i := 1; i < attempt; i++ {
 		if d >= maxRetryCooldown {

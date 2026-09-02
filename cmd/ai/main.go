@@ -14,6 +14,7 @@ import (
 
 	"github.com/Tulipskun/ai/runtime"
 	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai/tools"
 	"github.com/Tulipskun/ai/transport"
 	discordtransport "github.com/Tulipskun/ai/transport/discord"
 )
@@ -102,8 +103,14 @@ func run() error {
 		return err
 	}
 
+	workspace := envOr("AI_WORKSPACE", ".")
+	agent, err := newAgent(rt.Client, workspace)
+	if err != nil {
+		return err
+	}
+
 	loop := &sdk.HarnessLoop{
-		Client:         rt.Client,
+		Agent:          agent,
 		Source:         discord,
 		ResolveSession: sessions.Resolve,
 		BuildRequest: func(context.Context, sdk.Input, *sdk.Session) (sdk.Request, error) {
@@ -121,6 +128,18 @@ func run() error {
 		},
 	}
 	return loop.Run(ctx)
+}
+
+func newAgent(client *sdk.RouterClient, workspace string) (*sdk.Agent, error) {
+	registry, err := tools.NewRegistry(workspace)
+	if err != nil {
+		return nil, err
+	}
+	return &sdk.Agent{
+		Client:        client,
+		Tools:         registry,
+		MaxIterations: 20,
+	}, nil
 }
 
 func envOr(name, fallback string) string {

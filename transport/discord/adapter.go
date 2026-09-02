@@ -101,26 +101,20 @@ func (d Display) Display(ctx context.Context, output sdk.Output) error {
 }
 
 func (d Display) displayTrace(ctx context.Context, channelID string, trace sdk.TraceEvent) error {
-	payload := any(nil)
+	var text string
 	switch trace.Stage {
-	case sdk.TraceRequest:
-		payload = sanitizeRequest(trace.Request)
-	case sdk.TraceResponse:
-		payload = sanitizeResponse(trace.Response)
 	case sdk.TraceToolCall:
-		payload = trace.ToolCall
+		text = formatTraceJSON("[AI tool_call]", trace.ToolCall)
 	case sdk.TraceToolResult:
-		payload = trace.ToolResult
-	case sdk.TraceError:
-		payload = map[string]string{"error": errorString(trace.Err)}
+		text = formatTraceJSON("[AI tool_result]", trace.ToolResult)
+	case sdk.TraceResponse:
+		text = responseContent(trace.Response)
 	default:
-		payload = trace
+		return nil
 	}
-	data, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return err
+	if text == "" {
+		return nil
 	}
-	text := fmt.Sprintf("[AI %s]\n```json\n%s\n```", trace.Stage, data)
 	for _, chunk := range discordChunks(text, 1900) {
 		if err := d.Sender.SendMessage(ctx, channelID, chunk); err != nil {
 			return err
@@ -129,44 +123,25 @@ func (d Display) displayTrace(ctx context.Context, channelID string, trace sdk.T
 	return nil
 }
 
-func sanitizeRequest(in *sdk.Request) any {
-	if in == nil {
-		return nil
-	}
-	copy := *in
-	copy.Messages = append([]sdk.Turn(nil), in.Messages...)
-	for i := range copy.Messages {
-		if copy.Messages[i].Reasoning != nil {
-			r := *copy.Messages[i].Reasoning
-			if r.Text != "" {
-				r.Text = "[redacted]"
-			}
-			copy.Messages[i].Reasoning = &r
-		}
-	}
-	return &copy
-}
-
-func sanitizeResponse(in *sdk.Response) any {
-	if in == nil {
-		return nil
-	}
-	copy := *in
-	if copy.Reasoning != nil {
-		r := *copy.Reasoning
-		if r.Text != "" {
-			r.Text = "[redacted]"
-		}
-		copy.Reasoning = &r
-	}
-	return &copy
-}
-
-func errorString(err error) string {
-	if err == nil {
+func formatTraceJSON(label string, value any) string {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
 		return ""
 	}
-	return err.Error()
+	return fmt.Sprintf("%s\n```json\n%s\n```", label, data)
+}
+
+func responseContent(response *sdk.Response) string {
+	if response == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, part := range response.Content {
+		if part.Type == sdk.ContentText {
+			b.WriteString(part.Text)
+		}
+	}
+	return b.String()
 }
 
 func discordChunks(text string, max int) []string {

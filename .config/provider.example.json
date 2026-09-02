@@ -1,0 +1,19 @@
+{
+  "providers": [
+    {
+      "name": "openrouter",
+      "http_endpoint": "https://openrouter.ai/api/v1",
+      "api_keys": [
+        "YOUR_API_KEY_1",
+        "YOUR_API_KEY_2"
+      ]
+    },
+    {
+      "name": "opencode",
+      "http_endpoint": "https://api.example.com/v1",
+      "api_keys": [
+        "YOUR_API_KEY"
+      ]
+    }
+  ]
+}

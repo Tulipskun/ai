@@ -8,12 +8,14 @@ import (
 	"github.com/Tulipskun/ai/sdk/providers/anthropic"
 	"github.com/Tulipskun/ai/sdk/providers/gemini"
 	"github.com/Tulipskun/ai/sdk/providers/openai"
+	"github.com/Tulipskun/ai/tools"
 )
 
 type Runtime struct {
 	Router    *sdk.Router
 	Client    *sdk.RouterClient
 	Providers []sdk.ProviderID
+	Browser   *tools.BrowserClient
 }
 
 func Load(path string) (*Runtime, error) {
@@ -49,6 +51,42 @@ func Load(path string) (*Runtime, error) {
 		registeredAdapters[config.Adapter] = true
 	}
 	return &Runtime{Router: router, Client: client, Providers: providers}, nil
+}
+
+func (r *Runtime) StartBrowser(ctx context.Context, cfg BrowserConfig) error {
+	if r == nil {
+		return fmt.Errorf("runtime: runtime is not initialized")
+	}
+	if !cfg.Enabled {
+		return nil
+	}
+	if r.Browser != nil && r.Browser.Ready() {
+		return nil
+	}
+	client := tools.NewBrowserClient(tools.BrowserClientConfig{
+		Host:           cfg.Host,
+		Port:           cfg.Port,
+		NodeCommand:    cfg.NodeCommand,
+		WorkerPath:     cfg.WorkerPath,
+		WorkerDir:      cfg.WorkerDir,
+		Headless:       cfg.Headless,
+		RPCTimeout:     cfg.ActionTimeout,
+		StartupTimeout: cfg.RPCStartupTimeout,
+	})
+	if err := client.Start(ctx); err != nil {
+		return err
+	}
+	r.Browser = client
+	return nil
+}
+
+func (r *Runtime) CloseBrowser() error {
+	if r == nil || r.Browser == nil {
+		return nil
+	}
+	err := r.Browser.Close()
+	r.Browser = nil
+	return err
 }
 
 func (r *Runtime) RefreshModels(ctx context.Context) error {

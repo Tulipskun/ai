@@ -54,6 +54,19 @@ func (e *RouteError) Error() string {
 	return "sdk: adapter not registered for provider=" + string(e.Provider) + " model=" + e.Model + " adapter=" + string(e.Adapter)
 }
 
+// RefreshModels fetches the live model catalogue using the provider's configured adapter and key pool.
+func (c *RouterClient) RefreshModels(ctx context.Context, provider ProviderID) error {
+	config, err := c.Router.Provider(provider)
+	if err != nil {
+		return err
+	}
+	adapter, ok := c.Adapters[config.Adapter]
+	if !ok {
+		return &RouteError{Provider: provider, Adapter: config.Adapter}
+	}
+	return c.Router.RefreshModels(ctx, provider, adapter)
+}
+
 func (c *RouterClient) Generate(ctx context.Context, session *Session, req Request) (Response, error) {
 	p, route, err := c.providerFor(session)
 	if err != nil {

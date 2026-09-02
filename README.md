@@ -24,6 +24,40 @@ create session
 
 A provider is registered with its base URL, adapter, and provider-scoped key pool. `RouterClient.RefreshModels()` fetches the current catalogue. The latest successful response replaces the old catalogue, so models missing from the provider response are no longer resolvable.
 
+## Runtime provider configuration
+
+Runtime provider settings live in `.config/provider.json`. The file is intentionally ignored by Git because it contains API keys. A safe template is provided at `.config/provider.example.json`.
+
+```json
+{
+  "providers": [
+    {
+      "name": "openrouter",
+      "http_endpoint": "https://openrouter.ai/api/v1",
+      "api_keys": [
+        "key-1",
+        "key-2"
+      ]
+    }
+  ]
+}
+```
+
+The runtime loader is:
+
+```go
+rt, err := runtime.Load(".config/provider.json")
+if err != nil {
+    panic(err)
+}
+
+if err := rt.RefreshModels(ctx); err != nil {
+    panic(err)
+}
+```
+
+The runtime config contains only the three deployment settings: provider name, HTTP endpoint, and API key array. The adapter is inferred from the provider name: `openai`/`openrouter` use the OpenAI-compatible adapter, `anthropic`/`opencode` use the Anthropic adapter, and `gemini`/`google` use the Gemini adapter.
+
 ## Retry policy
 
 Retries are deliberately separate from key rotation. The selected session key never changes during a retry.

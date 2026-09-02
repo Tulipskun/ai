@@ -69,13 +69,14 @@ const (
 )
 
 type Model struct { ID string `json:"id"`; Name string `json:"name,omitempty"`; SupportsTools bool `json:"supports_tools"`; SupportsThinking bool `json:"supports_thinking"`; SupportsTemperature bool `json:"supports_temperature"`; SupportsStreaming bool `json:"supports_streaming"` }
-type ProviderConfig struct { ID ProviderID `json:"id"`; BaseURL string `json:"base_url"`; Keys *KeyPool `json:"-"`; Adapter AdapterID `json:"adapter"` }
+type ProviderConfig struct { ID ProviderID `json:"id"`; BaseURL string `json:"base_url"`; Keys *KeyPool `json:"-"`; Adapter AdapterID `json:"adapter"`; RotateKeys bool `json:"rotate_keys,omitempty"` }
 type ModelRoute struct { Provider ProviderID `json:"provider"`; Model string `json:"model"`; Adapter AdapterID `json:"adapter"` }
 type SessionConfig struct { ID string `json:"id"`; Provider ProviderID `json:"provider"`; Model string `json:"model"`; KeyIndex int `json:"key_index"`; ThinkingLevel ThinkingLevel `json:"thinking_level,omitempty"`; Temperature *float64 `json:"temperature,omitempty"` }
 
 type RetryPolicy struct { MaxAttempts int; InitialBackoff time.Duration; MaxBackoff time.Duration }
-func DefaultRetryPolicy() RetryPolicy { return RetryPolicy{MaxAttempts: 3, InitialBackoff: 250 * time.Millisecond, MaxBackoff: 4 * time.Second} }
+func DefaultRetryPolicy() RetryPolicy { return RetryPolicy{MaxAttempts: 1, InitialBackoff: 250 * time.Millisecond, MaxBackoff: 60 * time.Second} }
 type HTTPStatusError interface { error; HTTPStatusCode() int }
+type RetryAfterError interface { error; RetryAfter() time.Duration }
 func (r Request) RequestProvider() ProviderID { return ProviderID(r.Provider) }
 type ModelLister interface { ListModels(context.Context, string) ([]Model, error) }
 type EndpointProvider interface { WithBaseURL(string) Provider }

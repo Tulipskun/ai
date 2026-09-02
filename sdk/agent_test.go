@@ -9,10 +9,12 @@ import (
 type agentTestProvider struct {
 	responses []Response
 	errors    []error
+	requests  []Request
 	calls     int
 }
 func (p *agentTestProvider) Name() string { return "test" }
-func (p *agentTestProvider) Generate(context.Context, Request) (Response,error) {
+func (p *agentTestProvider) Generate(_ context.Context, req Request) (Response,error) {
+	p.requests = append(p.requests, req)
 	if p.calls < len(p.errors) && p.errors[p.calls] != nil { err := p.errors[p.calls]; p.calls++; return Response{}, err }
 	idx := p.calls - len(p.errors)
 	if idx < 0 || idx >= len(p.responses) { return Response{}, errors.New("unexpected call") }
@@ -31,6 +33,16 @@ func newAgentTestSession(p Provider) (*RouterClient,*Session) {
 
 func TestAgentFinalResponse(t *testing.T) {
 	p:=&agentTestProvider{responses:[]Response{{Content:[]ContentPart{{Type:ContentText,Text:"done"}}}}}; c,s:=newAgentTestSession(p); a:=&Agent{Client:c,MaxIterations:4,MaxRetries:0}; resp,err:=a.RunTurn(context.Background(),s,Turn{Role:RoleUser,Content:[]ContentPart{{Type:ContentText,Text:"hi"}}},Request{}); if err!=nil{t.Fatal(err)}; if len(resp.Content)!=1||resp.Content[0].Text!="done"{t.Fatalf("unexpected response: %#v",resp)}; if len(s.History())!=2{t.Fatalf("history=%d",len(s.History()))}
+}
+
+func TestAgentToolDefinitionsReachProvider(t *testing.T) {
+	p:=&agentTestProvider{responses:[]Response{{Content:[]ContentPart{{Type:ContentText,Text:"done"}}}}}
+	c,s:=newAgentTestSession(p)
+	tools:=&agentTestTools{definitions:[]Tool{{Name:"echo",Description:"echo text"}}}
+	a:=&Agent{Client:c,Tools:tools,MaxIterations:4,MaxRetries:0}
+	_,err:=a.RunTurn(context.Background(),s,Turn{Role:RoleUser},Request{})
+	if err!=nil{t.Fatal(err)}
+	if len(p.requests)!=1 || len(p.requests[0].Tools)!=1 || p.requests[0].Tools[0].Name!="echo"{t.Fatalf("tools not sent: %#v",p.requests)}
 }
 
 func TestAgentToolThenFinal(t *testing.T) {

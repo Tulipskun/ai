@@ -8,7 +8,7 @@ import (
 
 type KeyedProvider interface { Provider; WithAPIKey(string) Provider }
 type RouterClient struct { Router *Router; Adapters map[AdapterID]Provider; Retry RetryPolicy }
-func NewRouterClient(router *Router) *RouterClient { return &RouterClient{Router: router, Adapters: make(map[AdapterID]Provider), Retry: DefaultRetryPolicy()} }
+func NewRouterClient(router *Router) *RouterClient { return &RouterClient{Router: router, Adapters: make(map[AdapterID]Provider), Retry: DefaultRetryPolicy() } }
 func (c *RouterClient) RegisterAdapter(id AdapterID, p Provider) { c.Adapters[id] = p }
 func (c *RouterClient) providerFor(session *Session) (Provider, ModelRoute, error) { route, err := c.Router.Resolve(session.config.Provider, session.config.Model); if err != nil { return nil, ModelRoute{}, err }; p, ok := c.Adapters[route.Adapter]; if !ok { return nil, ModelRoute{}, &RouteError{Provider: route.Provider, Model: route.Model, Adapter: route.Adapter} }; if kp, ok := p.(KeyedProvider); ok { key, err := session.APIKey(); if err != nil { return nil, ModelRoute{}, err }; p = kp.WithAPIKey(key) }; if config, err := c.Router.Provider(route.Provider); err == nil && config.BaseURL != "" { if ep, ok := p.(EndpointProvider); ok { p = ep.WithBaseURL(config.BaseURL) } }; return p, route, nil }
 type RouteError struct { Provider ProviderID; Model string; Adapter AdapterID }
@@ -19,7 +19,14 @@ func (c *RouterClient) RefreshModels(ctx context.Context, provider ProviderID) e
 func (c *RouterClient) Generate(ctx context.Context, session *Session, req Request) (Response, error) { p, route, err := c.providerFor(session); if err != nil { return Response{}, err }; req.Provider, req.Model = route.Provider, route.Model; if len(req.Messages) == 0 { req.Messages = session.History() }; cfg := session.Config(); if req.ThinkingLevel == "" { req.ThinkingLevel = cfg.ThinkingLevel }; if req.Temperature == nil && cfg.Temperature != nil { v := *cfg.Temperature; req.Temperature = &v }; resp, err := c.generateRetry(ctx, session, p, req); if err != nil { session.RepairHistory(); return Response{}, err }; resp.Provider, resp.Model = string(route.Provider), route.Model; return resp, nil }
 func (c *RouterClient) generateRetry(ctx context.Context, session *Session, p Provider, req Request) (Response, error) { policy := c.Retry; if policy.MaxAttempts <= 0 { policy.MaxAttempts = 1 }; if policy.InitialBackoff <= 0 { policy.InitialBackoff = time.Millisecond }; if policy.MaxBackoff <= 0 { policy.MaxBackoff = policy.InitialBackoff }; var last error; for attempt := 1; attempt <= policy.MaxAttempts; attempt++ { requestID, recordErr := session.RecordRequest(attempt, req); if recordErr != nil { return Response{}, recordErr }; resp, err := p.Generate(ctx, req); resp.Provider, resp.Model = string(req.Provider), req.Model; if err == nil { if recordErr := session.RecordResponse(requestID, resp, nil); recordErr != nil { return Response{}, recordErr }; return resp, nil }; last = err; if recordErr := session.RecordResponse(requestID, resp, err); recordErr != nil { return Response{}, recordErr }; if attempt == policy.MaxAttempts || !retryable(err) { break }; if err := sleepBackoff(ctx, policy, attempt); err != nil { return Response{}, err } }; return Response{}, last }
 
-func retryable(err error) bool { if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) { return false }; var statusErr HTTPStatusError; if !errors.As(err, &statusErr) { return false }; s := statusErr.HTTPStatusCode(); return s == 429 || s == 500 || s == 502 || s == 503 || s == 504 }
+// Provider failures are retried by default. This intentionally includes 4xx
+// errors because a provider gateway may surface transient or provider-specific
+// request failures as 400/401/403. Cancellation and deadline errors are not
+// retried because the caller explicitly stopped or timed out the operation.
+func retryable(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) { return false }
+	return true
+}
 func sleepBackoff(ctx context.Context, p RetryPolicy, attempt int) error { d := p.InitialBackoff; for i := 1; i < attempt; i++ { if d >= p.MaxBackoff/2 { d = p.MaxBackoff; break }; d *= 2 }; if d > p.MaxBackoff { d = p.MaxBackoff }; t := time.NewTimer(d); defer t.Stop(); select { case <-ctx.Done(): return ctx.Err(); case <-t.C: return nil } }
 
 func (c *RouterClient) GenerateTurn(ctx context.Context, session *Session, user Turn, req Request) (Response, error) { before := session.History(); session.Append(user); req.Messages = session.History(); resp, err := c.Generate(ctx, session, req); if err != nil { session.ReplaceHistory(before); return Response{}, err }; commitResponse(session, resp); return resp, nil }

@@ -144,6 +144,8 @@ Discord / Telegram / Web / Console / ...
 
 Transport adapters live outside `sdk`. The SDK knows only canonical `Input`, `Output`, `InputSource`, `Display`, and the optional source-aware `RoutedDisplay` contract. This means adding Telegram or a WebSocket/HTTP application does not require changing the Harness.
 
+A future transport only needs to translate its native events at this boundary; it must not introduce transport-specific types or dependencies into `sdk`.
+
 The turn ordering is strict:
 
 ```text
@@ -164,7 +166,7 @@ display (async)
 
 ## Discord runtime
 
-The first concrete transport is `transport/discord`. It uses DiscordGo as the Gateway/REST client while keeping Discord-specific types outside `sdk`. DiscordGo v0.29.0 supports the Gateway and is compatible with the project's Go 1.25 toolchain. citeturn6search0turn4view0
+The first concrete transport is `transport/discord`. It uses DiscordGo as the Gateway/REST client while keeping Discord-specific types outside `sdk`. DiscordGo v0.29.0 supports the Gateway and is compatible with the project's Go 1.25 toolchain.
 
 The runnable entry point is:
 
@@ -185,7 +187,7 @@ The example is `.config/transport.example.env`. Runtime session databases are st
 
 Discord message sessions default to `discord:channel:<channel_id>`, so the same Discord conversation reuses the same durable Session. The transport ignores bot-authored messages.
 
-Discord message handling requests guild messages, direct messages, and message content. `MESSAGE_CONTENT` is a privileged Discord intent; it must be enabled in the application's Bot settings, and verified/verification-eligible apps may also need approval. citeturn12search0turn12search3
+Discord message handling requests guild messages, direct messages, and message content. `MESSAGE_CONTENT` is a privileged Discord intent; it must be enabled in the application's Bot settings, and verified/verification-eligible apps may also need approval.
 
 ## Routing and model discovery
 

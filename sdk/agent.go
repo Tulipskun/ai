@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	ErrAgentMaxIterations = errors.New("sdk: agent reached maximum iterations")
+	ErrAgentMaxIterations   = errors.New("sdk: agent reached maximum iterations")
 	ErrAgentRetriesExhausted = errors.New("sdk: agent retries exhausted")
 )
 
@@ -67,7 +67,7 @@ func (a *Agent) RunTurn(ctx context.Context, session *Session, user Turn, req Re
 		}
 	}
 
-	return Response{}, fmt.Errorf("%w: attempts=%d: %v", ErrAgentRetriesExhausted, retries+1, lastErr)
+	return Response{}, fmt.Errorf("%w: attempts=%d: %w", ErrAgentRetriesExhausted, retries+1, lastErr)
 }
 
 func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, limit int) (Response, error) {

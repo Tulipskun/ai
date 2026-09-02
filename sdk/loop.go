@@ -11,6 +11,7 @@ type RequestResolver func(context.Context, Input, *Session) (Request, error)
 
 type HarnessLoop struct {
 	Client          *RouterClient
+	Agent           *Agent
 	Source          InputSource
 	ResolveSession  SessionResolver
 	BuildRequest    RequestResolver
@@ -20,7 +21,7 @@ type HarnessLoop struct {
 }
 
 func (h *HarnessLoop) Run(ctx context.Context) error {
-	if h == nil || h.Client == nil || h.Source == nil || h.ResolveSession == nil {
+	if h == nil || (h.Client == nil && h.Agent == nil) || h.Source == nil || h.ResolveSession == nil {
 		return errors.New("sdk: incomplete harness loop configuration")
 	}
 	inputs, err := h.Source.Receive(ctx)
@@ -43,7 +44,7 @@ func (h *HarnessLoop) Run(ctx context.Context) error {
 }
 
 func (h *HarnessLoop) Handle(ctx context.Context, input Input) error {
-	if h == nil || h.Client == nil || h.ResolveSession == nil {
+	if h == nil || (h.Client == nil && h.Agent == nil) || h.ResolveSession == nil {
 		return errors.New("sdk: incomplete harness loop configuration")
 	}
 	session, err := h.ResolveSession(ctx, input)
@@ -62,7 +63,12 @@ func (h *HarnessLoop) Handle(ctx context.Context, input Input) error {
 		}
 	}
 
-	resp, err := h.Client.GenerateTurn(ctx, session, input.Turn, req)
+	var resp Response
+	if h.Agent != nil {
+		resp, err = h.Agent.RunTurn(ctx, session, input.Turn, req)
+	} else {
+		resp, err = h.Client.GenerateTurn(ctx, session, input.Turn, req)
+	}
 	if err != nil {
 		return err
 	}

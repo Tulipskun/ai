@@ -12,9 +12,9 @@ import (
 )
 
 type NetworkPolicy struct {
-	AllowPrivate   bool
-	LookupIPAddr   func(context.Context, string) ([]net.IPAddr, error)
-	DialTimeout    time.Duration
+	AllowPrivate bool
+	LookupIPAddr func(context.Context, string) ([]net.IPAddr, error)
+	DialTimeout  time.Duration
 }
 
 func NewNetworkPolicy(allowPrivate bool) *NetworkPolicy {
@@ -85,11 +85,11 @@ func (p *NetworkPolicy) ValidateAndRoundTrip(ctx context.Context, client *http.C
 		if err != nil {
 			return nil, err
 		}
-		for _, ip := range ips {
-			if !p.AllowPrivate && isBlockedIP(ip) {
+		for _, addr := range ips {
+			if !p.AllowPrivate && isBlockedIP(addr.IP) {
 				continue
 			}
-			conn, err := baseDialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			conn, err := baseDialer.DialContext(ctx, network, net.JoinHostPort(addr.IP.String(), port))
 			if err == nil {
 				return conn, nil
 			}

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Tulipskun/ai/runtime"
 	"github.com/Tulipskun/ai/sdk"
@@ -108,8 +109,8 @@ func run() error {
 				MaxOutputTokens: maxOutputTokens,
 			}, nil
 		},
-		Displays:      []sdk.Display{discord},
-		DisplayTimeout: 10 * 1000 * 1000 * 1000,
+		Displays:       []sdk.Display{discord},
+		DisplayTimeout: 10 * time.Second,
 		OnTurnError: func(input sdk.Input, err error) {
 			log.Printf("turn failed source=%s session=%s: %v", input.Source, input.SessionID, err)
 		},

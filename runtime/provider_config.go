@@ -1,0 +1,98 @@
+package runtime
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/Tulipskun/ai/sdk"
+)
+
+const DefaultProviderConfigPath = ".config/provider.json"
+
+type ProviderFile struct {
+	Name       string   `json:"name"`
+	HTTPEndpoint string `json:"http_endpoint"`
+	APIKeys    []string `json:"api_keys"`
+}
+
+type ProviderFileConfig struct {
+	Providers []ProviderFile `json:"providers"`
+}
+
+func LoadProviderFile(path string) (ProviderFileConfig, error) {
+	if path == "" {
+		path = DefaultProviderConfigPath
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ProviderFileConfig{}, fmt.Errorf("runtime: read provider config %q: %w", path, err)
+	}
+	var config ProviderFileConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return ProviderFileConfig{}, fmt.Errorf("runtime: decode provider config %q: %w", path, err)
+	}
+	if len(config.Providers) == 0 {
+		return ProviderFileConfig{}, errors.New("runtime: provider config contains no providers")
+	}
+	seen := make(map[string]struct{}, len(config.Providers))
+	for i := range config.Providers {
+		p := &config.Providers[i]
+		p.Name = strings.TrimSpace(p.Name)
+		p.HTTPEndpoint = strings.TrimRight(strings.TrimSpace(p.HTTPEndpoint), "/")
+		if p.Name == "" {
+			return ProviderFileConfig{}, fmt.Errorf("runtime: provider[%d] name is required", i)
+		}
+		if p.HTTPEndpoint == "" {
+			return ProviderFileConfig{}, fmt.Errorf("runtime: provider %q http_endpoint is required", p.Name)
+		}
+		if _, ok := seen[p.Name]; ok {
+			return ProviderFileConfig{}, fmt.Errorf("runtime: duplicate provider %q", p.Name)
+		}
+		seen[p.Name] = struct{}{}
+		keys := make([]string, 0, len(p.APIKeys))
+		for _, key := range p.APIKeys {
+			key = strings.TrimSpace(key)
+			if key != "" {
+				keys = append(keys, key)
+			}
+		}
+		if len(keys) == 0 {
+			return ProviderFileConfig{}, fmt.Errorf("runtime: provider %q has no api_keys", p.Name)
+		}
+		p.APIKeys = keys
+	}
+	return config, nil
+}
+
+func (c ProviderFileConfig) ProviderConfigs() ([]sdk.ProviderConfig, error) {
+	configs := make([]sdk.ProviderConfig, 0, len(c.Providers))
+	for _, p := range c.Providers {
+		adapter, err := adapterForProvider(p.Name)
+		if err != nil {
+			return nil, err
+		}
+		configs = append(configs, sdk.ProviderConfig{
+			ID:      sdk.ProviderID(p.Name),
+			BaseURL: p.HTTPEndpoint,
+			Keys:    sdk.NewKeyPool(p.APIKeys...),
+			Adapter: adapter,
+		})
+	}
+	return configs, nil
+}
+
+func adapterForProvider(name string) (sdk.AdapterID, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "openai", "openrouter":
+		return sdk.AdapterOpenAI, nil
+	case "anthropic", "opencode":
+		return sdk.AdapterAnthropic, nil
+	case "gemini", "google":
+		return sdk.AdapterGemini, nil
+	default:
+		return "", fmt.Errorf("runtime: cannot infer adapter for provider %q", name)
+	}
+}

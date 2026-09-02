@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -86,4 +87,13 @@ func TestWebFetchRejectsInvalidURL(t *testing.T) {
 	if _, err := tool(context.Background(), mustRawJSON(t, map[string]string{"url": "file:///tmp/a"})); err == nil {
 		t.Fatal("expected invalid scheme error")
 	}
+}
+
+func mustRawJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }

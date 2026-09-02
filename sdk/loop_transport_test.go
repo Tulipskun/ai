@@ -90,7 +90,17 @@ func TestLoopSerializesConcurrentTurnsForSameSession(t *testing.T) {
 	close(start)
 	wg.Wait()
 
-	if got, want := len(session.History()), turns*2; got != want {
+	history := session.History()
+	if got, want := len(history), turns*2; got != want {
 		t.Fatalf("history length = %d, want %d", got, want)
+	}
+	for i, turn := range history {
+		want := RoleUser
+		if i%2 == 1 {
+			want = RoleModel
+		}
+		if turn.Role != want {
+			t.Fatalf("history[%d].Role = %q, want %q; history=%+v", i, turn.Role, want, history)
+		}
 	}
 }

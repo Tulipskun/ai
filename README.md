@@ -113,12 +113,71 @@ The coding registry exposes:
 - `run_job`
 - `check_job`
 - `close_job`
+- `web_fetch`
+- `browser_open`
+- `browser_close`
+- `browser_navigate`
+- `browser_snapshot`
+- `browser_click`
+- `browser_fill`
+- `browser_press`
+- `browser_select`
+- `browser_scroll`
+- `browser_get_text`
+- `browser_screenshot`
 
 File operations are restricted to the configured workspace root. `edit_file` requires exactly one match for `old_text`, preventing an ambiguous edit from silently modifying multiple locations.
 
 `run_command` is synchronous. For long-running work, `run_job` starts the command asynchronously and returns a job ID. The agent can call `check_job` later to inspect state/output, or `close_job` to terminate a running job. Job state is process-local and in-memory in this first implementation, and captured output is bounded.
 
 The agent intentionally has no `time` tool. Timestamp information can be attached to each request by the host/application layer.
+
+## Web fetch and browser automation
+
+`web_fetch` is the lightweight path for static HTTP/HTTPS pages, documentation, and APIs. It extracts text and a page title instead of returning raw HTML by default.
+
+Browser automation uses Playwright with Chromium in a separate Node.js worker. Use browser tools when the site requires JavaScript execution, interaction, login, form submission, or other page actions.
+
+```text
+static page / API / documentation
+        ↓
+    web_fetch
+
+interactive / dynamic website
+        ↓
+   browser_open
+        ↓
+ browser_navigate
+        ↓
+ browser_snapshot
+        ↓
+ click / fill / press / select / scroll
+```
+
+Each AI session gets an isolated browser context. Multiple tabs can exist inside that context. Browser snapshot references are scoped to the snapshot and must be refreshed after page changes.
+
+Browser setup is opt-in for existing deployments. From the repository root, run as root:
+
+```bash
+bash scripts/setup-browser.sh
+```
+
+The setup script verifies Node.js, installs the locked Node dependencies, installs Chromium with its required system dependencies, and performs a launch check. It does not use `sudo`.
+
+Enable the browser worker with:
+
+```text
+AI_BROWSER_ENABLED=true
+AI_BROWSER_HEADLESS=true
+```
+
+See `.config/transport.example.env` for all browser settings.
+
+Web access has SSRF protection by default. Loopback, private, link-local, IPv6 local/private, and metadata-style destinations are blocked. Set `AI_BROWSER_ALLOW_PRIVATE=true` only when access to private network services is intentionally required.
+
+Webpage content is untrusted external data. It must not be treated as system or tool instructions.
+
+V1 deliberately does not expose arbitrary JavaScript/eval, raw CDP, arbitrary filesystem access, cookie export/import, `file://` navigation, or arbitrary downloads/uploads.
 
 ## Input and display architecture
 

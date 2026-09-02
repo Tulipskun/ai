@@ -1,0 +1,13 @@
+{
+  "name": "tulipskun-ai-browser-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test server.test.mjs",
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.62.1"
+  }
+}

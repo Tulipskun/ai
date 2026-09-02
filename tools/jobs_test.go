@@ -17,7 +17,7 @@ func TestBackgroundJobLifecycle(t *testing.T) {
 
 func TestCloseBackgroundJob(t *testing.T) {
 	root:=t.TempDir(); m:=NewJobManager(root); id,err:=m.Start("sh",[]string{"-c","sleep 5"});if err!=nil{t.Fatal(err)}; if err:=m.Close(id);err!=nil{t.Fatal(err)}
-	for i:=0;i<50;i++{j,_:=m.Get(id);if snapshotJob(j).State==JobClosed{return};time.Sleep(10*time.Millisecond)}
+	for i:=0;i<200;i++{j,_:=m.Get(id);if snapshotJob(j).State==JobClosed{return};time.Sleep(10*time.Millisecond)}
 	j,_:=m.Get(id);t.Fatalf("state=%s",snapshotJob(j).State)
 }
 

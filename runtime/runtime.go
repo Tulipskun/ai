@@ -11,8 +11,9 @@ import (
 )
 
 type Runtime struct {
-	Router *sdk.Router
-	Client *sdk.RouterClient
+	Router    *sdk.Router
+	Client    *sdk.RouterClient
+	Providers []sdk.ProviderID
 }
 
 func Load(path string) (*Runtime, error) {
@@ -27,8 +28,14 @@ func Load(path string) (*Runtime, error) {
 
 	router := sdk.NewRouter()
 	client := sdk.NewRouterClient(router)
+	providers := make([]sdk.ProviderID, 0, len(configs))
+	registeredAdapters := make(map[sdk.AdapterID]bool)
 	for _, config := range configs {
 		router.RegisterProvider(config)
+		providers = append(providers, config.ID)
+		if registeredAdapters[config.Adapter] {
+			continue
+		}
 		switch config.Adapter {
 		case sdk.AdapterOpenAI:
 			client.RegisterAdapter(config.Adapter, openai.New(""))
@@ -39,19 +46,20 @@ func Load(path string) (*Runtime, error) {
 		default:
 			return nil, fmt.Errorf("runtime: unsupported adapter %q", config.Adapter)
 		}
+		registeredAdapters[config.Adapter] = true
 	}
-	return &Runtime{Router: router, Client: client}, nil
+	return &Runtime{Router: router, Client: client, Providers: providers}, nil
 }
 
 func (r *Runtime) RefreshModels(ctx context.Context) error {
 	if r == nil || r.Router == nil || r.Client == nil {
 		return fmt.Errorf("runtime: runtime is not initialized")
 	}
-	providers := make([]sdk.ProviderID, 0)
-	// The router exposes the registered provider configuration through Provider;
-	// keep the runtime config source of truth external to the router.
-	// Callers that need discovery should use RefreshProvider for a specific ID.
-	_ = providers
+	for _, provider := range r.Providers {
+		if err := r.Client.RefreshModels(ctx, provider); err != nil {
+			return fmt.Errorf("runtime: refresh provider %q: %w", provider, err)
+		}
+	}
 	return nil
 }
 

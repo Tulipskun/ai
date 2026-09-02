@@ -10,7 +10,7 @@ import (
 
 type routeKey struct { provider ProviderID; model string }
 type Router struct { mu sync.RWMutex; routes map[routeKey]ModelRoute; providers map[ProviderID]ProviderConfig; catalogs map[ProviderID][]Model; catalogReady map[ProviderID]bool }
-func NewRouter() *Router { return &Router{routes: make(map[routeKey]ModelRoute), providers: make(map[ProviderID]ProviderConfig), catalogs: make(map[ProviderID]bool)} }
+func NewRouter() *Router { return &Router{routes: make(map[routeKey]ModelRoute), providers: make(map[ProviderID]ProviderConfig), catalogs: make(map[ProviderID][]Model), catalogReady: make(map[ProviderID]bool)} }
 func (r *Router) RegisterProvider(config ProviderConfig) { if config.ID == "" || config.Adapter == "" { panic("sdk: invalid provider config") }; r.mu.Lock(); defer r.mu.Unlock(); r.providers[config.ID] = config; delete(r.catalogs, config.ID); r.catalogReady[config.ID] = false }
 func (r *Router) Provider(provider ProviderID) (ProviderConfig, error) { r.mu.RLock(); config, ok := r.providers[provider]; r.mu.RUnlock(); if !ok { return ProviderConfig{}, fmt.Errorf("sdk: provider %q is not registered", provider) }; return config, nil }
 func (r *Router) Register(route ModelRoute) { if route.Provider == "" || route.Model == "" || route.Adapter == "" { panic("sdk: invalid model route") }; r.mu.Lock(); defer r.mu.Unlock(); r.routes[routeKey{route.Provider, route.Model}] = route }

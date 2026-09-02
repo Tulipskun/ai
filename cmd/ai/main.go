@@ -85,6 +85,17 @@ func run() error {
 	}, providerConfig.Keys)
 	defer sessions.Close()
 
+	browserConfig, err := runtime.LoadBrowserConfig()
+	if err != nil {
+		return err
+	}
+	if browserConfig.Enabled {
+		if err := rt.StartBrowser(ctx, browserConfig); err != nil {
+			return fmt.Errorf("start browser: %w", err)
+		}
+		defer rt.CloseBrowser()
+	}
+
 	transportConfig, err := transport.LoadConfig()
 	if err != nil {
 		return err
@@ -104,7 +115,7 @@ func run() error {
 	}
 
 	workspace := envOr("AI_WORKSPACE", ".")
-	agent, err := newAgent(rt.Client, workspace)
+	agent, err := newAgent(rt.Client, workspace, rt.Browser, browserConfig.AllowPrivate)
 	if err != nil {
 		return err
 	}
@@ -130,8 +141,8 @@ func run() error {
 	return loop.Run(ctx)
 }
 
-func newAgent(client *sdk.RouterClient, workspace string) (*sdk.Agent, error) {
-	registry, err := tools.NewRegistry(workspace)
+func newAgent(client *sdk.RouterClient, workspace string, browser *tools.BrowserClient, allowPrivate bool) (*sdk.Agent, error) {
+	registry, err := tools.NewRegistryWithBrowser(workspace, browser, allowPrivate)
 	if err != nil {
 		return nil, err
 	}

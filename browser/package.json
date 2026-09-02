@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test server.test.mjs",
+    "test": "node --test *.test.mjs",
     "start": "node server.mjs"
   },
   "dependencies": {

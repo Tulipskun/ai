@@ -100,8 +100,8 @@ func newWebFetchToolWithLimits(policy *NetworkPolicy, maxBytes, maxTextChars int
 
 		contentType := resp.Header.Get("Content-Type")
 		text, title := extractWebText(string(body), contentType)
-		if int64(len(text)) > maxTextChars {
-			text = text[:maxTextChars]
+		if int64(len([]rune(text))) > maxTextChars {
+			text = string([]rune(text)[:maxTextChars])
 			truncated = true
 		}
 		result := webFetchResult{
@@ -121,14 +121,14 @@ func newWebFetchToolWithLimits(policy *NetworkPolicy, maxBytes, maxTextChars int
 }
 
 var (
-	scriptRE  = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
-	styleRE   = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
+	scriptRE   = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
+	styleRE    = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
 	noscriptRE = regexp.MustCompile(`(?is)<noscript[^>]*>.*?</noscript>`)
 	templateRE = regexp.MustCompile(`(?is)<template[^>]*>.*?</template>`)
-	commentRE = regexp.MustCompile(`(?s)<!--.*?-->`)
-	tagRE     = regexp.MustCompile(`(?s)<[^>]+>`)
-	spaceRE   = regexp.MustCompile(`[\t\r\n ]+`)
-	titleRE   = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+	commentRE  = regexp.MustCompile(`(?s)<!--.*?-->`)
+	tagRE      = regexp.MustCompile(`(?s)<[^>]+>`)
+	spaceRE    = regexp.MustCompile(`[\t\r\n ]+`)
+	titleRE    = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 )
 
 func extractWebText(body, contentType string) (string, string) {

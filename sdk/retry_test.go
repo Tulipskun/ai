@@ -16,21 +16,28 @@ func (e retryTestError) Error() string { return "rate limited" }
 func (e retryTestError) HTTPStatusCode() int { return e.status }
 func (e retryTestError) RetryAfter() time.Duration { return e.delay }
 
-func TestRetryDelayUsesRetryAfterAndCapsAt60Seconds(t *testing.T) {
+func TestRetryDelayUsesRetryAfterAndCapsAt96Seconds(t *testing.T) {
 	if got := retryDelay(retryTestError{status: 429, delay: 7 * time.Second}, 1); got != 7*time.Second {
 		t.Fatalf("delay=%s", got)
 	}
-	if got := retryDelay(retryTestError{status: 429, delay: 90 * time.Second}, 1); got != 60*time.Second {
+	if got := retryDelay(retryTestError{status: 429, delay: 120 * time.Second}, 1); got != 96*time.Second {
 		t.Fatalf("delay=%s", got)
 	}
 }
 
-func TestRetryDelayFallsBackToBoundedBackoff(t *testing.T) {
-	if got := retryDelay(errors.New("temporary"), 1); got != 250*time.Millisecond {
-		t.Fatalf("attempt 1 delay=%s", got)
+func TestRetryDelayUsesThreeSecondExponentialBackoff(t *testing.T) {
+	want := []time.Duration{
+		3 * time.Second,
+		6 * time.Second,
+		12 * time.Second,
+		24 * time.Second,
+		48 * time.Second,
+		96 * time.Second,
 	}
-	if got := retryDelay(errors.New("temporary"), 3); got != time.Second {
-		t.Fatalf("attempt 3 delay=%s", got)
+	for attempt, expected := range want {
+		if got := retryDelay(errors.New("temporary"), attempt+1); got != expected {
+			t.Fatalf("attempt %d delay=%s, want %s", attempt+1, got, expected)
+		}
 	}
 }
 

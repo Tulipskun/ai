@@ -27,11 +27,12 @@ create session
 A provider is registered with its base URL, adapter, and provider-scoped key pool. `RouterClient.RefreshModels()` then fetches the current model catalogue through the configured adapter. The latest response replaces the old catalogue, so models that no longer exist are no longer resolvable.
 
 ```go
+keys := sdk.NewKeyPool("key-1", "key-2")
 router := sdk.NewRouter()
 router.RegisterProvider(sdk.ProviderConfig{
     ID:      sdk.ProviderOpenRouter,
     BaseURL: "https://openrouter.ai/api/v1",
-    Keys:    sdk.NewKeyPool("key-1", "key-2"),
+    Keys:    keys,
     Adapter: sdk.AdapterOpenAI,
 })
 
@@ -76,7 +77,7 @@ session := sdk.NewSession(sdk.SessionConfig{
     KeyIndex:      1,
     ThinkingLevel: sdk.ThinkingHigh,
     Temperature:   &temperature,
-}, routerProviderKeys)
+}, keys)
 ```
 
 The session's thinking level and temperature become request defaults; an individual request can override them.
@@ -106,11 +107,12 @@ OpenRouter exposes an OpenAI-compatible API and a live model catalogue, so it ca
 ## Prototype
 
 ```go
+keys := sdk.NewKeyPool("key-1", "key-2")
 router := sdk.NewRouter()
 router.RegisterProvider(sdk.ProviderConfig{
     ID:      sdk.ProviderOpenRouter,
     BaseURL: "https://openrouter.ai/api/v1",
-    Keys:    sdk.NewKeyPool("key-1", "key-2"),
+    Keys:    keys,
     Adapter: sdk.AdapterOpenAI,
 })
 
@@ -131,7 +133,7 @@ session := sdk.NewSession(sdk.SessionConfig{
     KeyIndex:      0,
     ThinkingLevel: sdk.ThinkingMedium,
     Temperature:   &temperature,
-}, routerProviderKeys)
+}, keys)
 
 response, err := client.Generate(ctx, session, sdk.Request{
     SystemPrompt: "You are an AI coding agent.",

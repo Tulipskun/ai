@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
@@ -9,7 +10,7 @@ import (
 
 type routeKey struct { provider ProviderID; model string }
 type Router struct { mu sync.RWMutex; routes map[routeKey]ModelRoute; providers map[ProviderID]ProviderConfig; catalogs map[ProviderID][]Model; catalogReady map[ProviderID]bool }
-func NewRouter() *Router { return &Router{routes: make(map[routeKey]ModelRoute), providers: make(map[ProviderID]ProviderConfig), catalogs: make(map[ProviderID][]Model), catalogReady: make(map[ProviderID]bool)} }
+func NewRouter() *Router { return &Router{routes: make(map[routeKey]ModelRoute), providers: make(map[ProviderID]ProviderConfig), catalogs: make(map[ProviderID]bool)} }
 func (r *Router) RegisterProvider(config ProviderConfig) { if config.ID == "" || config.Adapter == "" { panic("sdk: invalid provider config") }; r.mu.Lock(); defer r.mu.Unlock(); r.providers[config.ID] = config; delete(r.catalogs, config.ID); r.catalogReady[config.ID] = false }
 func (r *Router) Provider(provider ProviderID) (ProviderConfig, error) { r.mu.RLock(); config, ok := r.providers[provider]; r.mu.RUnlock(); if !ok { return ProviderConfig{}, fmt.Errorf("sdk: provider %q is not registered", provider) }; return config, nil }
 func (r *Router) Register(route ModelRoute) { if route.Provider == "" || route.Model == "" || route.Adapter == "" { panic("sdk: invalid model route") }; r.mu.Lock(); defer r.mu.Unlock(); r.routes[routeKey{route.Provider, route.Model}] = route }
@@ -19,7 +20,7 @@ func (r *Router) Resolve(provider ProviderID, model string) (ModelRoute, error) 
 
 type Session struct { mu sync.RWMutex; config SessionConfig; keys *KeyPool; history []Turn; store *SessionDB }
 func NewSession(config SessionConfig, keys *KeyPool) *Session { return &Session{config: config, keys: keys} }
-func OpenSession(path string, config SessionConfig, keys *KeyPool) (*Session, error) { store, err := OpenSessionDB(path); if err != nil { return nil, err }; if err := store.SaveSession(config); err != nil { store.Close(); return nil, err }; history, err := store.LoadHistory(config.ID); if err != nil { store.Close(); return nil, err }; return &Session{config: config, keys: keys, history: history, store: store}, nil }
+func OpenSession(path string, config SessionConfig, keys *KeyPool) (*Session, error) { store, err := OpenSessionDB(path); if err != nil { return nil, err }; persisted, loadErr := store.LoadSession(config.ID); if loadErr == nil { config = persisted } else if !errors.Is(loadErr, sql.ErrNoRows) { store.Close(); return nil, loadErr } else if err := store.SaveSession(config); err != nil { store.Close(); return nil, err }; history, err := store.LoadHistory(config.ID); if err != nil { store.Close(); return nil, err }; return &Session{config: config, keys: keys, history: history, store: store}, nil }
 func (s *Session) Close() error { s.mu.RLock(); store := s.store; s.mu.RUnlock(); if store == nil { return nil }; return store.Close() }
 func (s *Session) ID() string { return s.config.ID }
 func (s *Session) Config() SessionConfig { s.mu.RLock(); defer s.mu.RUnlock(); c := s.config; if c.Temperature != nil { v := *c.Temperature; c.Temperature = &v }; return c }
@@ -31,5 +32,5 @@ func (s *Session) ReplaceHistory(turns []Turn) { repaired := repairTurns(cloneTu
 func (s *Session) RepairHistory() { s.ReplaceHistory(s.History()) }
 func (s *Session) RecordRequest(attempt int, req Request) (int64, error) { s.mu.RLock(); store, id := s.store, s.config.ID; s.mu.RUnlock(); if store == nil { return 0, nil }; return store.RecordRequest(id, attempt, req) }
 func (s *Session) RecordResponse(requestID int64, resp Response, err error) error { s.mu.RLock(); store := s.store; s.mu.RUnlock(); if store == nil { return nil }; return store.RecordResponse(requestID, resp, err) }
-func cloneTurns(in []Turn) []Turn { out := make([]Turn, len(in)); copy(out, in); for i := range out { out[i].Content = append([]ContentPart(nil), out[i].Content...); if out[i].ToolCall != nil { v := *out[i].ToolCall; out[i].ToolCall = &v }; if out[i].ToolResult != nil { v := *out[i].ToolResult; out[i].ToolResult = &v } }; return out }
+func cloneTurns(in []Turn) []Turn { out := make([]Turn, len(in)); copy(out, in); for i := range out { out[i].Content = append([]ContentPart(nil), out[i].Content...); if out[i].ToolCall != nil { v := *out[i].ToolCall; out[i].ToolCall = &v }; if out[i].ToolResult != nil { v := *out[i].ToolResult; out[i].ToolResult = &v }; if out[i].Reasoning != nil { v := *out[i].Reasoning; out[i].Reasoning = &v } }; return out }
 func repairTurns(in []Turn) []Turn { out := make([]Turn, 0, len(in)); pending := make(map[string]bool); for _, turn := range in { switch turn.Role { case RoleUser, RoleModel: out = append(out, turn); case RoleToolCall: if turn.ToolCall == nil || turn.ToolCall.ID == "" || turn.ToolCall.Name == "" || pending[turn.ToolCall.ID] { continue }; pending[turn.ToolCall.ID] = true; out = append(out, turn); case RoleToolResult: if turn.ToolResult == nil || turn.ToolResult.ID == "" || !pending[turn.ToolResult.ID] { continue }; delete(pending, turn.ToolResult.ID); out = append(out, turn) } }; if len(pending) == 0 { return out }; final := out[:0]; for _, turn := range out { if turn.Role == RoleToolCall && pending[turn.ToolCall.ID] { continue }; final = append(final, turn) }; return final }

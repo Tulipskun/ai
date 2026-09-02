@@ -28,12 +28,42 @@ func (c *Client) WithAPIKey(key string) sdk.Provider {
 	return &cp
 }
 
+func (c *Client) WithBaseURL(baseURL string) sdk.Provider {
+	cp := *c
+	cp.BaseURL = baseURL
+	return &cp
+}
+
+func (c *Client) ListModels(ctx context.Context, apiKey string) ([]sdk.Model, error) {
+	if apiKey != "" {
+		c = c.WithAPIKey(apiKey).(*Client)
+	}
+	var r struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := internal.DoJSON(ctx, c.http(), http.MethodGet, c.BaseURL+"/models", c.headers(), nil, &r); err != nil {
+		return nil, err
+	}
+	models := make([]sdk.Model, 0, len(r.Data))
+	for _, item := range r.Data {
+		if item.ID == "" {
+			continue
+		}
+		models = append(models, sdk.Model{ID: item.ID, Name: item.ID, SupportsStreaming: true, SupportsTemperature: true})
+	}
+	return models, nil
+}
+
 func (c *Client) Name() string { return "openai" }
 
 type response struct {
+	ID     string `json:"id"`
 	Model  string `json:"model"`
 	Output []struct {
 		Type      string `json:"type"`
+		ID        string `json:"id"`
 		CallID    string `json:"call_id"`
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
@@ -120,11 +150,14 @@ func parseResponse(r response) sdk.Response {
 	return out
 }
 
-func (c *Client) headers() map[string]string { return map[string]string{"Authorization": "Bearer " + c.APIKey} }
+func (c *Client) headers() map[string]string {
+	return map[string]string{"Authorization": "Bearer " + c.APIKey}
+}
 
 func (c *Client) Generate(ctx context.Context, req sdk.Request) (sdk.Response, error) {
 	var r response
-	if err := internal.DoJSON(ctx, c.http(), http.MethodPost, c.BaseURL+"/responses", c.headers(), build(req), &r); err != nil {
+	err := internal.DoJSON(ctx, c.http(), http.MethodPost, c.BaseURL+"/responses", c.headers(), build(req), &r)
+	if err != nil {
 		return sdk.Response{}, err
 	}
 	return parseResponse(r), nil

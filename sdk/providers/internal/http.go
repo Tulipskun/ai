@@ -5,11 +5,30 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 )
+
+type HTTPError struct {
+	StatusCode int
+	Status     string
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("http %s: %s", e.Status, e.Body)
+}
+
+func StatusCode(err error) (int, bool) {
+	var he *HTTPError
+	if errors.As(err, &he) {
+		return he.StatusCode, true
+	}
+	return 0, false
+}
 
 func DoJSON(ctx context.Context, client *http.Client, method, url string, headers map[string]string, body any, out any) error {
 	data, err := json.Marshal(body)
@@ -23,7 +42,7 @@ func DoJSON(ctx context.Context, client *http.Client, method, url string, header
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return fmt.Errorf("http %s: %s", resp.Status, strings.TrimSpace(string(b)))
+		return &HTTPError{StatusCode: resp.StatusCode, Status: resp.Status, Body: strings.TrimSpace(string(b))}
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }
@@ -40,7 +59,7 @@ func SSE(ctx context.Context, client *http.Client, method, url string, headers m
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return fmt.Errorf("http %s: %s", resp.Status, strings.TrimSpace(string(b)))
+		return &HTTPError{StatusCode: resp.StatusCode, Status: resp.Status, Body: strings.TrimSpace(string(b))}
 	}
 	s := bufio.NewScanner(resp.Body)
 	s.Buffer(make([]byte, 4096), 4<<20)

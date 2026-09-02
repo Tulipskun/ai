@@ -8,7 +8,7 @@ import (
 
 func TestNewAgentWithTools(t *testing.T) {
 	client := sdk.NewRouterClient(sdk.NewRouter())
-	agent, err := newAgent(client, t.TempDir())
+	agent, err := newAgent(client, t.TempDir(), nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

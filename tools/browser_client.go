@@ -10,31 +10,37 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 type BrowserClientConfig struct {
-	Host           string
-	Port           int
-	NodeCommand    string
-	WorkerPath     string
-	WorkerDir      string
-	Headless       bool
-	RPCTimeout     time.Duration
-	StartupTimeout time.Duration
+	Host              string
+	Port              int
+	NodeCommand       string
+	WorkerPath        string
+	WorkerDir         string
+	Headless          bool
+	AllowPrivate      bool
+	IdleTimeout       time.Duration
+	NavigationTimeout time.Duration
+	ActionTimeout     time.Duration
+	SnapshotTimeout   time.Duration
+	RPCTimeout        time.Duration
+	StartupTimeout    time.Duration
 }
 
 type BrowserClient struct {
-	cfg      BrowserClientConfig
-	mu       sync.RWMutex
-	baseURL  string
-	token    string
-	cmd      *exec.Cmd
+	cfg         BrowserClientConfig
+	mu          sync.RWMutex
+	baseURL     string
+	token       string
+	cmd         *exec.Cmd
 	processDone chan struct{}
-	ready    bool
-	client   *http.Client
+	ready       bool
+	client      *http.Client
 }
 
 func NewBrowserClient(config BrowserClientConfig) *BrowserClient {
@@ -44,8 +50,20 @@ func NewBrowserClient(config BrowserClientConfig) *BrowserClient {
 	if config.NodeCommand == "" {
 		config.NodeCommand = "node"
 	}
+	if config.IdleTimeout <= 0 {
+		config.IdleTimeout = 30 * time.Minute
+	}
+	if config.NavigationTimeout <= 0 {
+		config.NavigationTimeout = 30 * time.Second
+	}
+	if config.ActionTimeout <= 0 {
+		config.ActionTimeout = 10 * time.Second
+	}
+	if config.SnapshotTimeout <= 0 {
+		config.SnapshotTimeout = 10 * time.Second
+	}
 	if config.RPCTimeout <= 0 {
-		config.RPCTimeout = 30 * time.Second
+		config.RPCTimeout = config.ActionTimeout + 5*time.Second
 	}
 	if config.StartupTimeout <= 0 {
 		config.StartupTimeout = 30 * time.Second
@@ -82,6 +100,16 @@ func (c *BrowserClient) Start(ctx context.Context) error {
 	}
 	cmd := exec.Command(c.cfg.NodeCommand, args...)
 	cmd.Dir = c.cfg.WorkerDir
+	cmd.Env = append(os.Environ(),
+		"AI_BROWSER_HOST="+c.cfg.Host,
+		"AI_BROWSER_PORT="+strconv.Itoa(c.cfg.Port),
+		"AI_BROWSER_HEADLESS="+strconv.FormatBool(c.cfg.Headless),
+		"AI_BROWSER_ALLOW_PRIVATE="+strconv.FormatBool(c.cfg.AllowPrivate),
+		"AI_BROWSER_IDLE_TIMEOUT_MS="+strconv.FormatInt(c.cfg.IdleTimeout.Milliseconds(), 10),
+		"AI_BROWSER_NAVIGATION_TIMEOUT_MS="+strconv.FormatInt(c.cfg.NavigationTimeout.Milliseconds(), 10),
+		"AI_BROWSER_ACTION_TIMEOUT_MS="+strconv.FormatInt(c.cfg.ActionTimeout.Milliseconds(), 10),
+		"AI_BROWSER_SNAPSHOT_TIMEOUT_MS="+strconv.FormatInt(c.cfg.SnapshotTimeout.Milliseconds(), 10),
+	)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("browser worker stdout: %w", err)

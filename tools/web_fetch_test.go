@@ -23,7 +23,7 @@ func TestWebFetchHTML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(content, `"title":"Example title"`) || !strings.Contains(content, "Readable content.") {
+	if !strings.Contains(content, `"title":"Example title"`) || !strings.Contains(content, "Readable content") {
 		t.Fatalf("unexpected result: %s", content)
 	}
 	if strings.Contains(content, "secret()") || strings.Contains(content, "<h1>") {

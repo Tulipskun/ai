@@ -43,6 +43,28 @@ func TestProviderConfigsInferAdapters(t *testing.T) {
 	}
 }
 
+func TestProviderConfigsUseExplicitAdapter(t *testing.T) {
+	config := ProviderFileConfig{Providers: []ProviderFile{
+		{Name: "B.ai", Adapter: "openai", HTTPEndpoint: "https://api.b.ai/v1", APIKeys: []string{"key"}},
+	}}
+	providers, err := config.ProviderConfigs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if providers[0].Adapter != "openai" {
+		t.Fatalf("adapter=%v", providers[0].Adapter)
+	}
+}
+
+func TestProviderConfigsRejectUnknownExplicitAdapter(t *testing.T) {
+	config := ProviderFileConfig{Providers: []ProviderFile{
+		{Name: "custom", Adapter: "unknown", HTTPEndpoint: "https://example.invalid/v1", APIKeys: []string{"key"}},
+	}}
+	if _, err := config.ProviderConfigs(); err == nil {
+		t.Fatal("expected unknown adapter error")
+	}
+}
+
 func TestLoadProviderFileRejectsMissingKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "provider.json")

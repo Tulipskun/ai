@@ -180,12 +180,14 @@ func isRateLimitError(err error) bool {
 }
 
 func retryDelay(err error, attempt int) time.Duration {
-	if retryAfter, ok := err.(RetryAfterError); ok {
-		if d := retryAfter.RetryAfter(); d > 0 {
-			if d > maxRetryCooldown {
-				return maxRetryCooldown
+	if isRateLimitError(err) {
+		if retryAfter, ok := err.(RetryAfterError); ok {
+			if d := retryAfter.RetryAfter(); d > 0 {
+				if d > maxRetryCooldown {
+					return maxRetryCooldown
+				}
+				return d
 			}
-			return d
 		}
 	}
 

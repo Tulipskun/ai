@@ -101,7 +101,7 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 	session.Append(user)
 
 	for iteration := 0; iteration < limit; iteration++ {
-		req.Messages = session.History()
+		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
 		if a.Tools != nil {
 			req.Tools = a.Tools.Definitions()
 		}
@@ -180,10 +180,17 @@ func isRateLimitError(err error) bool {
 }
 
 func retryDelay(err error, attempt int) time.Duration {
-	// Ignore provider Retry-After for the agent retry schedule. Retries use
-	// the deterministic cooldown requested by the SDK: 3s, 6s, 12s, 24s,
-	// 48s, then 96s before the final attempt fails.
-	_ = err
+	if isRateLimitError(err) {
+		if retryAfter, ok := err.(RetryAfterError); ok {
+			if d := retryAfter.RetryAfter(); d > 0 {
+				if d > maxRetryCooldown {
+					return maxRetryCooldown
+				}
+				return d
+			}
+		}
+	}
+
 	if attempt <= 1 {
 		return 3 * time.Second
 	}

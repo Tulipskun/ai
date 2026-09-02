@@ -16,7 +16,16 @@ func (e retryTestError) Error() string { return "rate limited" }
 func (e retryTestError) HTTPStatusCode() int { return e.status }
 func (e retryTestError) RetryAfter() time.Duration { return e.delay }
 
-func TestRetryDelayUsesDeterministicSchedule(t *testing.T) {
+func TestRetryDelayUsesProviderRetryAfter(t *testing.T) {
+	if got := retryDelay(retryTestError{status: 429, delay: 5 * time.Second}, 1); got != 5*time.Second {
+		t.Fatalf("provider Retry-After delay=%s, want 5s", got)
+	}
+	if got := retryDelay(retryTestError{status: 429, delay: 120 * time.Second}, 1); got != 96*time.Second {
+		t.Fatalf("provider Retry-After delay=%s, want 96s cap", got)
+	}
+}
+
+func TestRetryDelayFallsBackToDeterministicSchedule(t *testing.T) {
 	want := []time.Duration{
 		3 * time.Second,
 		6 * time.Second,
@@ -27,7 +36,7 @@ func TestRetryDelayUsesDeterministicSchedule(t *testing.T) {
 		96 * time.Second,
 	}
 	for attempt, expected := range want {
-		if got := retryDelay(retryTestError{status: 429, delay: 1 * time.Second}, attempt+1); got != expected {
+		if got := retryDelay(retryTestError{status: 429}, attempt+1); got != expected {
 			t.Fatalf("attempt %d delay=%s, want %s", attempt+1, got, expected)
 		}
 	}

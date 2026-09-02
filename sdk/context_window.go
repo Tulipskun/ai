@@ -1,7 +1,5 @@
 package sdk
 
-import "strings"
-
 const defaultContextWindowTokens = 40000
 
 // buildContextWindow returns the newest complete interaction groups that fit
@@ -98,8 +96,4 @@ func estimateTurnTokens(turn Turn) int {
 		return 1
 	}
 	return (chars + 3) / 4
-}
-
-func isContextWindowBoundary(turn Turn) bool {
-	return turn.Role == RoleUser || strings.TrimSpace(string(turn.Role)) == ""
 }

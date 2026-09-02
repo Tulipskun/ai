@@ -47,6 +47,49 @@ The user turn is committed first, but the model output is committed only after a
 
 `Session.RepairHistory()` can also repair externally restored/corrupted history by removing orphan tool results, duplicate tool-call IDs, and incomplete tool calls. It never changes the selected API key.
 
+## Input and display architecture
+
+The Harness core is transport-independent. Input sources convert external events into canonical `Input` values, while displays consume canonical `Output` values.
+
+```text
+Discord / Web / Console / ...
+            ↓
+       InputSource
+            ↓
+       HarnessLoop
+            ↓
+         Session
+            ↓
+          AI API
+            ↓
+         Session
+            ↓
+          Output
+       ↙     ↓      ↘
+  Discord   Web    Console
+  Display  Display  Display
+```
+
+The turn ordering is strict:
+
+```text
+input
+  ↓
+save to session
+  ↓
+request AI
+  ↓
+response
+  ↓
+save to session
+  ↓
+display (async)
+```
+
+Display is a best-effort side effect. `HarnessLoop` never waits for a display implementation to finish. Display errors and panics are isolated from the processing loop, and a display timeout bounds the lifetime of its goroutine. This uses Go's context cancellation primitives for the display operation without making display cancellation a dependency of the core turn. citeturn2search0turn2search6
+
+Discord is currently represented by `DiscordInputSource`, `DiscordToInput`, and `DiscordDisplay`. The actual Discord Gateway client stays outside the Harness core and only needs to translate its events into `DiscordInputMessage` and implement `DiscordSender`.
+
 ## Routing and model discovery
 
 Discovered model catalogues are preferred over static routes. The model name does not implicitly choose a logical provider; the provider is part of the session configuration.

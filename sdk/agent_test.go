@@ -38,7 +38,8 @@ func TestAgentToolThenFinal(t *testing.T) {
 }
 
 func TestAgentMaxIterations(t *testing.T) {
-	p:=&agentTestProvider{responses:[]Response{{ToolCalls:[]ToolCall{{ID:"1",Name:"echo",Arguments:"{}"}}},{ToolCalls:[]ToolCall{{ID:"2",Name:"echo",Arguments:"{}"}}}}}; c,s:=newAgentTestSession(p); a:=&Agent{Client:c,Tools:&agentTestTools{definitions:[]Tool{{Name:"echo"}}},MaxIterations:1,MaxRetries:0}; _,err:=a.RunTurn(context.Background(),s,Turn{Role:RoleUser},Request{}); if !errors.Is(err,ErrAgentRetriesExhausted){t.Fatalf("err=%v",err)}; if !errors.Is(err,ErrAgentMaxIterations){t.Fatalf("missing max-iterations cause: %v",err)}; if len(s.History())!=0{t.Fatalf("history was not rolled back: %d",len(s.History()))}
+	loop:=Response{ToolCalls:[]ToolCall{{ID:"echo",Name:"echo",Arguments:"{}"}}}
+	p:=&agentTestProvider{responses:[]Response{loop,loop,loop}}; c,s:=newAgentTestSession(p); a:=&Agent{Client:c,Tools:&agentTestTools{definitions:[]Tool{{Name:"echo"}}},MaxIterations:1,MaxRetries:2}; _,err:=a.RunTurn(context.Background(),s,Turn{Role:RoleUser},Request{}); if !errors.Is(err,ErrAgentRetriesExhausted){t.Fatalf("err=%v",err)}; if !errors.Is(err,ErrAgentMaxIterations){t.Fatalf("missing max-iterations cause: %v",err)}; if len(s.History())!=0{t.Fatalf("history was not rolled back: %d",len(s.History()))}; if p.calls!=3{t.Fatalf("provider calls=%d",p.calls)}
 }
 
 func TestAgentErrorRollsBackAndRetries(t *testing.T) {

@@ -76,9 +76,21 @@ func (h *HarnessLoop) Handle(ctx context.Context, input Input) error {
 		}
 	}
 
+	dispatchTrace := func(traceCtx context.Context, event TraceEvent) {
+		traceCopy := event
+		for _, display := range h.Displays {
+			DispatchDisplay(traceCtx, display, Output{
+				Source:    input.Source,
+				SessionID: input.SessionID,
+				Trace:     &traceCopy,
+				Metadata:  cloneMetadata(input.Metadata),
+			}, h.DisplayTimeout)
+		}
+	}
+
 	var resp Response
 	if h.Agent != nil {
-		resp, err = h.Agent.RunTurn(ctx, session, input.Turn, req)
+		resp, err = h.Agent.RunTurnWithTrace(ctx, session, input.Turn, req, dispatchTrace)
 	} else {
 		resp, err = h.Client.GenerateTurn(ctx, session, input.Turn, req)
 	}

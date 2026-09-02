@@ -14,21 +14,5 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
-      - name: Diagnose module graph
-        run: |
-          go mod tidy
-          echo '=== go.mod diff ==='
-          git diff -- go.mod
-          echo '=== go.sum diff ==='
-          git diff -- go.sum
-      - name: Test
-        run: |
-          set -o pipefail
-          go test -count=1 ./... 2>&1 | tee test.log
-      - name: Upload test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: go-test-log
-          path: test.log
+      - run: go test ./...
       - run: go vet ./...

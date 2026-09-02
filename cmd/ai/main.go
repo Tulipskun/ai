@@ -88,6 +88,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if !transportConfig.DiscordEnabled {
+		log.Printf("no transports enabled; set DISCORD_BOT_TOKEN or add another transport adapter")
+		return nil
+	}
+
 	discord, err := discordtransport.NewGateway(transportConfig.DiscordToken)
 	if err != nil {
 		return err

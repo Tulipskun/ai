@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 var (
@@ -26,6 +27,7 @@ type Agent struct {
 const (
 	defaultAgentMaxIterations = 20
 	defaultAgentMaxRetries    = 2
+	maxRetryCooldown          = 60 * time.Second
 )
 
 func (a *Agent) RunTurn(ctx context.Context, session *Session, user Turn, req Request) (Response, error) {
@@ -66,9 +68,33 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 		if !retryableAgentError(ctx, err) || attempt == retries {
 			break
 		}
+
+		if isRateLimitError(err) {
+			if err := a.rotateKeyIfConfigured(session); err != nil {
+				return Response{}, fmt.Errorf("%w: rotate key: %v", ErrAgentRetriesExhausted, err)
+			}
+		}
+
+		delay := retryDelay(err, attempt+1)
+		traceEvent(ctx, trace, TraceEvent{Stage: TraceRetryWait, Err: err, RetryAfter: delay})
+		if err := waitRetry(ctx, delay); err != nil {
+			return Response{}, err
+		}
 	}
 
 	return Response{}, fmt.Errorf("%w: attempts=%d: %w", ErrAgentRetriesExhausted, retries+1, lastErr)
+}
+
+func (a *Agent) rotateKeyIfConfigured(session *Session) error {
+	provider, err := a.Client.Router.Provider(session.Config().Provider)
+	if err != nil || !provider.RotateKeys {
+		return err
+	}
+	if provider.Keys == nil || provider.Keys.Len() < 2 {
+		return nil
+	}
+	_, err = session.RotateAPIKey()
+	return err
 }
 
 func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, limit int, trace TraceFunc) (Response, error) {
@@ -143,4 +169,47 @@ func retryableAgentError(ctx context.Context, err error) bool {
 		return false
 	}
 	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+func isRateLimitError(err error) bool {
+	statusErr, ok := err.(HTTPStatusError)
+	if !ok {
+		return false
+	}
+	return statusErr.HTTPStatusCode() == 429
+}
+
+func retryDelay(err error, attempt int) time.Duration {
+	if rateLimit, ok := err.(RetryAfterError); ok {
+		if d := rateLimit.RetryAfter(); d > 0 {
+			if d > maxRetryCooldown {
+				return maxRetryCooldown
+			}
+			return d
+		}
+	}
+
+	d := 250 * time.Millisecond
+	for i := 1; i < attempt; i++ {
+		if d >= maxRetryCooldown/2 {
+			d = maxRetryCooldown
+			break
+		}
+		d *= 2
+	}
+	if d > maxRetryCooldown {
+		d = maxRetryCooldown
+	}
+	return d
+}
+
+func waitRetry(ctx context.Context, delay time.Duration) error {
+	t := time.NewTimer(delay)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }

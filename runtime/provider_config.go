@@ -13,9 +13,10 @@ import (
 const DefaultProviderConfigPath = ".config/provider.json"
 
 type ProviderFile struct {
-	Name       string   `json:"name"`
-	HTTPEndpoint string `json:"http_endpoint"`
-	APIKeys    []string `json:"api_keys"`
+	Name         string   `json:"name"`
+	Adapter      string   `json:"adapter,omitempty"`
+	HTTPEndpoint string   `json:"http_endpoint"`
+	APIKeys      []string `json:"api_keys"`
 }
 
 type ProviderFileConfig struct {
@@ -41,6 +42,7 @@ func LoadProviderFile(path string) (ProviderFileConfig, error) {
 	for i := range config.Providers {
 		p := &config.Providers[i]
 		p.Name = strings.TrimSpace(p.Name)
+		p.Adapter = strings.ToLower(strings.TrimSpace(p.Adapter))
 		p.HTTPEndpoint = strings.TrimRight(strings.TrimSpace(p.HTTPEndpoint), "/")
 		if p.Name == "" {
 			return ProviderFileConfig{}, fmt.Errorf("runtime: provider[%d] name is required", i)
@@ -70,7 +72,7 @@ func LoadProviderFile(path string) (ProviderFileConfig, error) {
 func (c ProviderFileConfig) ProviderConfigs() ([]sdk.ProviderConfig, error) {
 	configs := make([]sdk.ProviderConfig, 0, len(c.Providers))
 	for _, p := range c.Providers {
-		adapter, err := adapterForProvider(p.Name)
+		adapter, err := adapterForProvider(p.Name, p.Adapter)
 		if err != nil {
 			return nil, err
 		}
@@ -84,7 +86,20 @@ func (c ProviderFileConfig) ProviderConfigs() ([]sdk.ProviderConfig, error) {
 	return configs, nil
 }
 
-func adapterForProvider(name string) (sdk.AdapterID, error) {
+func adapterForProvider(name, explicit string) (sdk.AdapterID, error) {
+	if explicit != "" {
+		switch strings.ToLower(strings.TrimSpace(explicit)) {
+		case string(sdk.AdapterOpenAI):
+			return sdk.AdapterOpenAI, nil
+		case string(sdk.AdapterAnthropic):
+			return sdk.AdapterAnthropic, nil
+		case string(sdk.AdapterGemini):
+			return sdk.AdapterGemini, nil
+		default:
+			return "", fmt.Errorf("runtime: provider %q has unsupported adapter %q", name, explicit)
+		}
+	}
+
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "openai", "openrouter":
 		return sdk.AdapterOpenAI, nil
@@ -93,6 +108,6 @@ func adapterForProvider(name string) (sdk.AdapterID, error) {
 	case "gemini", "google":
 		return sdk.AdapterGemini, nil
 	default:
-		return "", fmt.Errorf("runtime: cannot infer adapter for provider %q", name)
+		return "", fmt.Errorf("runtime: provider %q requires an explicit adapter", name)
 	}
 }

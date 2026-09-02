@@ -36,6 +36,8 @@ func (r *Router) RegisterProvider(config ProviderConfig) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.providers[config.ID] = config
+	delete(r.catalogs, config.ID)
+	r.catalogReady[config.ID] = false
 }
 
 func (r *Router) Provider(provider ProviderID) (ProviderConfig, error) {
@@ -145,7 +147,7 @@ func (r *Router) Resolve(provider ProviderID, model string) (ModelRoute, error) 
 		return route, nil
 	}
 	if providerOK {
-		return ModelRoute{Provider: provider, Model: model, Adapter: config.Adapter}, nil
+		return ModelRoute{}, fmt.Errorf("sdk: model catalogue for provider=%q has not been refreshed", provider)
 	}
 	return ModelRoute{}, fmt.Errorf("sdk: no route for provider=%q model=%q", provider, model)
 }

@@ -36,6 +36,11 @@ func (c *RouterClient) providerFor(session *Session) (Provider, ModelRoute, erro
 		}
 		p = kp.WithAPIKey(key)
 	}
+	if config, err := c.Router.Provider(route.Provider); err == nil && config.BaseURL != "" {
+		if ep, ok := p.(EndpointProvider); ok {
+			p = ep.WithBaseURL(config.BaseURL)
+		}
+	}
 	return p, route, nil
 }
 
@@ -56,6 +61,13 @@ func (c *RouterClient) Generate(ctx context.Context, session *Session, req Reque
 	}
 	req.Provider = route.Provider
 	req.Model = route.Model
+	if req.ThinkingLevel == "" {
+		req.ThinkingLevel = session.config.ThinkingLevel
+	}
+	if req.Temperature == nil && session.config.Temperature != nil {
+		v := *session.config.Temperature
+		req.Temperature = &v
+	}
 	resp, err := p.Generate(ctx, req)
 	if err == nil {
 		resp.Provider = string(route.Provider)
@@ -71,5 +83,12 @@ func (c *RouterClient) Stream(ctx context.Context, session *Session, req Request
 	}
 	req.Provider = route.Provider
 	req.Model = route.Model
+	if req.ThinkingLevel == "" {
+		req.ThinkingLevel = session.config.ThinkingLevel
+	}
+	if req.Temperature == nil && session.config.Temperature != nil {
+		v := *session.config.Temperature
+		req.Temperature = &v
+	}
 	return p.Stream(ctx, req)
 }

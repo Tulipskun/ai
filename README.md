@@ -58,6 +58,29 @@ The default policy is 3 attempts with exponential backoff, capped at 4 seconds. 
 
 Streaming is retried only when the failure happens before the stream has emitted an event. Once output has started, the stream is never replayed automatically because replaying it could duplicate user-visible output.
 
+## Persistent SQLite sessions
+
+Sessions can be backed by a `.db` file instead of keeping history only in memory:
+
+```go
+session, err := sdk.OpenSession("sessions/user-123.db", config, keys)
+if err != nil { panic(err) }
+defer session.Close()
+```
+
+`OpenSession()` creates the database if needed and reloads the existing canonical history for `config.ID`. `Session.Append()` and `Session.ReplaceHistory()` persist the history, so Agent rollback also persists the rolled-back state. The database uses SQLite WAL mode for concurrent readers and durable transactional updates. SQLite transactions are atomic, and WAL permits readers to proceed while a writer is active. citeturn0search0turn0search1
+
+The database records more than the reconstructed conversation history. It keeps:
+
+- `sessions`: session configuration and timestamps.
+- `turns`: every canonical user/model/tool-call/tool-result turn.
+- `requests`: every model request attempt, including system prompt, full message history, tools, provider, model, temperature, thinking level, max output tokens, and streaming flag.
+- `responses`: every corresponding model response or provider error, including content, tool calls, finish reason, usage, cache metadata, and error text.
+
+Therefore provider retries are visible individually in the database rather than being collapsed into one successful request. The request/response records are append-only; session `turns` represent the current durable conversation state.
+
+The SQLite driver is `modernc.org/sqlite`, a CGo-free pure-Go SQLite implementation. citeturn1search0
+
 ## Session-owned history
 
 A `Session` owns a canonical history and returns defensive copies. Use `GenerateTurn()` or `StreamTurn()` when the Harness should manage a complete user turn transactionally.

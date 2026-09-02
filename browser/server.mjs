@@ -1,5 +1,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
+import dns from 'node:dns/promises';
+import net from 'node:net';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 
@@ -15,17 +17,27 @@ const DEFAULTS = {
   host: '127.0.0.1',
   port: 0,
   headless: true,
+  allowPrivate: false,
   navigationTimeout: 30000,
   actionTimeout: 10000,
   snapshotTimeout: 10000,
   idleTimeout: 30 * 60 * 1000
 };
 
+const blockedNetworks = new net.BlockList();
+for (const [address, prefix, family] of [
+  ['0.0.0.0', 8, 'ipv4'], ['10.0.0.0', 8, 'ipv4'], ['100.64.0.0', 10, 'ipv4'],
+  ['127.0.0.0', 8, 'ipv4'], ['169.254.0.0', 16, 'ipv4'], ['172.16.0.0', 12, 'ipv4'],
+  ['192.0.0.0', 24, 'ipv4'], ['192.168.0.0', 16, 'ipv4'], ['198.18.0.0', 15, 'ipv4'],
+  ['::1', 128, 'ipv6'], ['fc00::', 7, 'ipv6'], ['fe80::', 10, 'ipv6']
+]) blockedNetworks.addSubnet(address, prefix, family);
+
 export async function startWorker(options = {}) {
   const config = { ...DEFAULTS, ...options };
   const token = crypto.randomBytes(32).toString('hex');
   const browser = await chromium.launch({ headless: config.headless });
   const sessions = new Map();
+  let idleTimer;
   const server = http.createServer(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url === '/health') return json(res, 200, { ready: true });
@@ -48,6 +60,8 @@ export async function startWorker(options = {}) {
   });
   const address = server.address();
   const baseURL = `http://${address.address}:${address.port}`;
+  idleTimer = setInterval(() => cleanupIdleSessions(sessions, config.idleTimeout), Math.min(config.idleTimeout, 60000));
+  idleTimer.unref?.();
 
   const worker = {
     server,
@@ -71,11 +85,13 @@ export async function startWorker(options = {}) {
       return body.result;
     }
   };
+  worker.idleTimer = idleTimer;
   return worker;
 }
 
 export async function stopWorker(worker) {
   if (!worker) return;
+  if (worker.idleTimer) clearInterval(worker.idleTimer);
   for (const state of worker.sessions?.values?.() ?? []) await state.context.close().catch(() => {});
   worker.sessions?.clear?.();
   await worker.browser?.close?.().catch(() => {});
@@ -105,6 +121,7 @@ async function open({ session_id }, { browser, sessions, config }) {
   if (!state) {
     const context = await browser.newContext();
     await context.addInitScript({ content: DOM_VERSION_SCRIPT });
+    await context.route('**/*', route => guardRoute(route, config.allowPrivate));
     state = { context, pages: new Map(), current: null, lastUsed: Date.now() };
     sessions.set(session_id, state);
   }
@@ -131,6 +148,7 @@ async function close({ session_id }, { sessions }) {
 async function navigate({ session_id, url }, runtime) {
   const pageState = currentPage(session_id, runtime.sessions);
   if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) throw coded('invalid_url', 'only http/https URLs are allowed');
+  await validateBrowserURL(url, runtime.config.allowPrivate);
   const response = await pageState.page.goto(url, { waitUntil: 'domcontentloaded', timeout: runtime.config.navigationTimeout });
   pageState.snapshot = null;
   touch(runtime.sessions.get(session_id), pageState);
@@ -231,6 +249,41 @@ function touch(state, pageState) {
   if (pageState) pageState.lastUsed = now;
 }
 
+async function cleanupIdleSessions(sessions, idleTimeout) {
+  if (idleTimeout <= 0) return;
+  const cutoff = Date.now() - idleTimeout;
+  for (const [sessionID, state] of sessions) {
+    if (state.lastUsed <= cutoff) {
+      await state.context.close().catch(() => {});
+      sessions.delete(sessionID);
+    }
+  }
+}
+
+async function guardRoute(route, allowPrivate) {
+  const requestURL = route.request().url();
+  if (!/^https?:\/\//i.test(requestURL) || allowPrivate) return route.continue();
+  try {
+    await validateBrowserURL(requestURL, false);
+    return route.continue();
+  } catch {
+    return route.abort('blockedbyclient');
+  }
+}
+
+async function validateBrowserURL(rawURL, allowPrivate) {
+  let parsed;
+  try { parsed = new URL(rawURL); } catch { throw coded('invalid_url', 'invalid URL'); }
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw coded('invalid_url', 'only http/https URLs are allowed');
+  if (allowPrivate) return;
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
+  const addresses = net.isIP(hostname) ? [{ address: hostname }] : await dns.lookup(hostname, { all: true });
+  if (!addresses.length) throw coded('network_blocked', 'hostname did not resolve');
+  if (addresses.some(({ address }) => blockedNetworks.check(address, net.isIP(address) === 6 ? 'ipv6' : 'ipv4'))) {
+    throw coded('network_blocked', 'private or local network destination is blocked');
+  }
+}
+
 function requireSessionID(sessionID) {
   if (typeof sessionID !== 'string' || sessionID.trim() === '') throw coded('invalid_session', 'session_id is required');
 }
@@ -258,6 +311,11 @@ async function readJSON(req) {
   }
 }
 
+function envDuration(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 async function main() {
   const args = new Map(process.argv.slice(2).map(arg => {
     const [key, value = ''] = arg.replace(/^--/, '').split('=');
@@ -266,7 +324,12 @@ async function main() {
   const worker = await startWorker({
     host: process.env.AI_BROWSER_HOST || '127.0.0.1',
     port: Number(process.env.AI_BROWSER_PORT || 0),
-    headless: (args.get('headless') || process.env.AI_BROWSER_HEADLESS || 'true') !== 'false'
+    headless: (args.get('headless') || process.env.AI_BROWSER_HEADLESS || 'true') !== 'false',
+    allowPrivate: process.env.AI_BROWSER_ALLOW_PRIVATE === 'true',
+    idleTimeout: envDuration('AI_BROWSER_IDLE_TIMEOUT_MS', DEFAULTS.idleTimeout),
+    navigationTimeout: envDuration('AI_BROWSER_NAVIGATION_TIMEOUT_MS', DEFAULTS.navigationTimeout),
+    actionTimeout: envDuration('AI_BROWSER_ACTION_TIMEOUT_MS', DEFAULTS.actionTimeout),
+    snapshotTimeout: envDuration('AI_BROWSER_SNAPSHOT_TIMEOUT_MS', DEFAULTS.snapshotTimeout)
   });
   process.stdout.write(JSON.stringify({ ready: true, host: new URL(worker.baseURL).hostname, port: Number(new URL(worker.baseURL).port), token: worker.token }) + '\n');
   const shutdown = async () => { await stopWorker(worker); process.exit(0); };

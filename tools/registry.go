@@ -20,6 +20,10 @@ type Registry struct {
 }
 
 func NewRegistry(workspace string) (*Registry, error) {
+	return NewRegistryWithBrowser(workspace, nil, false)
+}
+
+func NewRegistryWithBrowser(workspace string, browser *BrowserClient, allowPrivate bool) (*Registry, error) {
 	root, err := workspaceRoot(workspace)
 	if err != nil {
 		return nil, err
@@ -35,6 +39,22 @@ func NewRegistry(workspace string) (*Registry, error) {
 	r.register("run_job", `Start a long-running command in the background and return a job ID.`, runJobTool(jobs), map[string]any{"type": "object", "properties": map[string]any{"command": map[string]any{"type": "string"}, "args": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}}, "required": []string{"command"}})
 	r.register("check_job", `Inspect a background job without waiting for it.`, checkJobTool(jobs), map[string]any{"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}}, "required": []string{"job_id"}})
 	r.register("close_job", `Terminate a running background job.`, closeJobTool(jobs), map[string]any{"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}}, "required": []string{"job_id"}})
+
+	policy := NewNetworkPolicy(allowPrivate)
+	r.register("web_fetch", `Fetch readable content from an HTTP/HTTPS webpage or API.`, newWebFetchTool(policy), browserSchema(map[string]any{"url": stringProperty()}, []string{"url"}))
+	if browser != nil {
+		r.register("browser_open", `Open a browser page in the current AI session.`, newBrowserTool(browser, "browser.open", decodeJSON[browserSessionArgs]), browserSchema(map[string]any{"session_id": stringProperty()}, []string{"session_id"}))
+		r.register("browser_close", `Close the browser context for the current AI session.`, newBrowserTool(browser, "browser.close", decodeJSON[browserSessionArgs]), browserSchema(map[string]any{"session_id": stringProperty()}, []string{"session_id"}))
+		r.register("browser_navigate", `Navigate the current browser page to an HTTP/HTTPS URL.`, newBrowserTool(browser, "browser.navigate", decodeJSON[browserNavigateArgs]), browserSchema(map[string]any{"session_id": stringProperty(), "url": stringProperty()}, []string{"session_id", "url"}))
+		r.register("browser_snapshot", `Capture the current browser accessibility snapshot with element references.`, newBrowserTool(browser, "browser.snapshot", decodeJSON[browserSessionArgs]), browserSchema(map[string]any{"session_id": stringProperty()}, []string{"session_id"}))
+		r.register("browser_click", `Click an element identified by a current browser snapshot reference.`, newBrowserTool(browser, "browser.click", decodeJSON[browserRefArgs]), browserSchema(map[string]any{"session_id": stringProperty(), "ref": stringProperty()}, []string{"session_id", "ref"}))
+		r.register("browser_fill", `Fill an input identified by a current browser snapshot reference.`, newBrowserTool(browser, "browser.fill", decodeJSON[browserFillArgs]), browserSchema(map[string]any{"session_id": stringProperty(), "ref": stringProperty(), "text": stringProperty()}, []string{"session_id", "ref", "text"}))
+		r.register("browser_press", `Press a keyboard key on an element identified by a current browser snapshot reference.`, newBrowserTool(browser, "browser.press", decodeJSON[browserPressArgs]), browserSchema(map[string]any{"session_id": stringProperty(), "ref": stringProperty(), "key": stringProperty()}, []string{"session_id", "ref", "key"}))
+		r.register("browser_select", `Select an option on a select element identified by a current browser snapshot reference.`, newBrowserTool(browser, "browser.select", decodeJSON[browserSelectArgs]), browserSchema(map[string]any{"session_id": stringProperty(), "ref": stringProperty(), "value": stringProperty()}, []string{"session_id", "ref", "value"}))
+		r.register("browser_scroll", `Scroll the current browser page.`, newBrowserTool(browser, "browser.scroll", decodeJSON[browserScrollArgs]), browserSchema(map[string]any{"session_id": stringProperty(), "direction": stringProperty(), "amount": intProperty()}, []string{"session_id"}))
+		r.register("browser_get_text", `Extract text from the current browser page or a snapshot-referenced element.`, newBrowserTool(browser, "browser.get_text", decodeJSON[browserTextArgs]), browserSchema(map[string]any{"session_id": stringProperty(), "ref": stringProperty()}, []string{"session_id"}))
+		r.register("browser_screenshot", `Capture a PNG screenshot of the current browser page.`, newBrowserTool(browser, "browser.screenshot", decodeJSON[browserScreenshotArgs]), browserSchema(map[string]any{"session_id": stringProperty(), "full_page": boolProperty()}, []string{"session_id"}))
+	}
 	return r, nil
 }
 

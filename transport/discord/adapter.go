@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Tulipskun/ai/sdk"
 )
@@ -109,6 +110,12 @@ func (d Display) displayTrace(ctx context.Context, channelID string, trace sdk.T
 		text = formatTraceJSON("[AI tool_result]", trace.ToolResult)
 	case sdk.TraceResponse:
 		text = responseContent(trace.Response)
+	case sdk.TraceRetryWait:
+		if trace.Err != nil && trace.RetryAfter > 0 {
+			text = fmt.Sprintf("[AI retry] %s\nกำลังรอ %s ก่อน retry", trace.Err, formatDuration(trace.RetryAfter))
+		} else if trace.Err != nil {
+			text = fmt.Sprintf("[AI retry] %s\nกำลังรอก่อน retry", trace.Err)
+		}
 	default:
 		return nil
 	}
@@ -121,6 +128,13 @@ func (d Display) displayTrace(ctx context.Context, channelID string, trace sdk.T
 		}
 	}
 	return nil
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return d.Round(time.Millisecond).String()
+	}
+	return d.Round(time.Second).String()
 }
 
 func formatTraceJSON(label string, value any) string {

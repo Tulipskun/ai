@@ -11,12 +11,12 @@ import (
 )
 
 type discordMessage struct {
-	ID           string
-	ChannelID    string
-	AuthorID     string
-	AuthorName   string
-	Content      string
-	AuthorIsBot  bool
+	ID          string
+	ChannelID   string
+	AuthorID    string
+	AuthorName  string
+	Content     string
+	AuthorIsBot bool
 }
 
 func normalizeMessage(message discordMessage) (InputMessage, bool) {
@@ -42,6 +42,7 @@ func gatewayIntents() discordgo.Intent {
 type Gateway struct {
 	session  *discordgo.Session
 	messages chan InputMessage
+	done     chan struct{}
 	closeMu  sync.Mutex
 	closed   bool
 }
@@ -54,7 +55,11 @@ func NewGateway(token string) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
-	gateway := &Gateway{session: session, messages: make(chan InputMessage, 64)}
+	gateway := &Gateway{
+		session:  session,
+		messages: make(chan InputMessage, 256),
+		done:     make(chan struct{}),
+	}
 	session.Identify.Intents = gatewayIntents()
 	session.AddHandler(func(_ *discordgo.Session, event *discordgo.MessageCreate) {
 		if event == nil || event.Author == nil {
@@ -71,17 +76,9 @@ func NewGateway(token string) (*Gateway, error) {
 		if !ok {
 			return
 		}
-		gateway.closeMu.Lock()
-		closed := gateway.closed
-		gateway.closeMu.Unlock()
-		if closed {
-			return
-		}
 		select {
 		case gateway.messages <- message:
-		default:
-			// Backpressure belongs to the transport boundary. Dropping a message
-			// here is preferable to blocking Discord's event dispatcher forever.
+		case <-gateway.done:
 		}
 	})
 	return gateway, nil
@@ -138,6 +135,7 @@ func (g *Gateway) Close(_ context.Context) error {
 		return nil
 	}
 	g.closed = true
+	close(g.done)
 	g.closeMu.Unlock()
 	return g.session.Close()
 }

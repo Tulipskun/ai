@@ -8,17 +8,20 @@ import (
 	"github.com/Tulipskun/ai/sdk"
 )
 
-func TestProviderSelectionModalUsesSingleStringSelect(t *testing.T) {
-	data := providerSelectionModal("123", "B.ai", []sdk.ProviderID{"B.ai", "google"})
-	if data.Title != "Model Settings — Step 1" {
-		t.Fatalf("title = %q, want Step 1", data.Title)
-	}
+func TestProviderSelectionComponentUsesSingleStringSelect(t *testing.T) {
+	data := providerSelectionMessage("123", "B.ai", []sdk.ProviderID{"B.ai", "google"})
 	if len(data.Components) != 1 {
 		t.Fatalf("components = %d, want 1", len(data.Components))
 	}
-	label := data.Components[0].(discordgo.Label)
-	selectMenu := label.Component.(discordgo.SelectMenu)
-	if selectMenu.CustomID != "provider" || len(selectMenu.Options) != 2 {
+	row, ok := data.Components[0].(discordgo.ActionsRow)
+	if !ok {
+		t.Fatalf("component = %T, want ActionsRow", data.Components[0])
+	}
+	selectMenu, ok := row.Components[0].(discordgo.SelectMenu)
+	if !ok {
+		t.Fatalf("child = %T, want SelectMenu", row.Components[0])
+	}
+	if selectMenu.CustomID != modelSettingsProviderSelect || len(selectMenu.Options) != 2 {
 		t.Fatalf("unexpected provider select: %+v", selectMenu)
 	}
 	if !selectMenu.Options[0].Default {
@@ -26,16 +29,30 @@ func TestProviderSelectionModalUsesSingleStringSelect(t *testing.T) {
 	}
 }
 
-func TestModelSettingsModalUsesModernComponents(t *testing.T) {
+func TestModelOptionGroupsIncludeEveryModel(t *testing.T) {
+	models := make([]sdk.Model, 0, 76)
+	for index := 1; index <= 76; index++ {
+		models = append(models, sdk.Model{ID: "model-" + strconv.Itoa(index)})
+	}
+	groups := makeModelOptionGroups(models, "model-76")
+	if len(groups) != 4 {
+		t.Fatalf("groups = %d, want 4", len(groups))
+	}
+	wantSizes := []int{25, 25, 25, 1}
+	for index, want := range wantSizes {
+		if len(groups[index]) != want {
+			t.Fatalf("group %d size = %d, want %d", index, len(groups[index]), want)
+		}
+	}
+	if groups[3][0].Value != "model-76" || !groups[3][0].Default {
+		t.Fatalf("last model was not preserved: %+v", groups[3][0])
+	}
+}
+
+func TestModelSettingsModalUsesTemperatureTextInput(t *testing.T) {
 	data := modelSettingsModal("discord:channel:123", "google", "gemini-2.5-flash", "0.7", "medium", "2")
-	if data.Title != "Model Settings — Step 2" {
-		t.Fatalf("title = %q, want Step 2", data.Title)
-	}
-	if data.CustomID != "model:settings:123:google" {
-		t.Fatalf("custom ID = %q, want provider-qualified ID", data.CustomID)
-	}
-	if len(data.Components) != 4 {
-		t.Fatalf("components = %d, want 4", len(data.Components))
+	if len(data.Components) != 5 {
+		t.Fatalf("components = %d, want 5", len(data.Components))
 	}
 
 	payload, err := json.Marshal(data)
@@ -47,19 +64,22 @@ func TestModelSettingsModalUsesModernComponents(t *testing.T) {
 			Type      int `json:"type"`
 			Component struct {
 				Type int `json:"type"`
+				CustomID string `json:"custom_id"`
+				Value string `json:"value"`
 			} `json:"component"`
 		} `json:"components"`
 	}
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		t.Fatalf("decode modal: %v", err)
 	}
-	for index, component := range decoded.Components {
-		if component.Type != 18 {
-			t.Fatalf("component %d type = %d, want Label (18)", index, component.Type)
-		}
-		if component.Component.Type != 3 {
-			t.Fatalf("component %d child type = %d, want String Select (3)", index, component.Component.Type)
-		}
+	if decoded.Components[1].Component.Type != int(discordgo.TextInputComponent) {
+		t.Fatalf("temperature component type = %d, want %d", decoded.Components[1].Component.Type, discordgo.TextInputComponent)
+	}
+	if decoded.Components[1].Component.CustomID != "temperature" {
+		t.Fatalf("temperature custom ID = %q, want temperature", decoded.Components[1].Component.CustomID)
+	}
+	if decoded.Components[1].Component.Value != "0.7" {
+		t.Fatalf("temperature value = %q, want 0.7", decoded.Components[1].Component.Value)
 	}
 }
 
@@ -69,6 +89,16 @@ func TestModelSettingsModalKeepsCurrentValuesSelected(t *testing.T) {
 		label, ok := component.(discordgo.Label)
 		if !ok {
 			t.Fatalf("component is %T, want discordgo.Label", component)
+		}
+		if label.Label == "Temperature" {
+			input, ok := label.Component.(discordgo.TextInput)
+			if !ok {
+				t.Fatalf("temperature child is %T, want discordgo.TextInput", label.Component)
+			}
+			if input.Value != "0.4" {
+				t.Fatalf("temperature value = %q, want 0.4", input.Value)
+			}
+			continue
 		}
 		selectMenu, ok := label.Component.(discordgo.SelectMenu)
 		if !ok {
@@ -90,8 +120,8 @@ func TestModelSettingsModalKeepsCurrentValuesSelected(t *testing.T) {
 func TestModelSettingsModalUsesCatalogModels(t *testing.T) {
 	models := []sdk.Model{{ID: "qwen3.8-flash"}, {ID: "qwen3.5-plus"}}
 	data := modelSettingsModalWithCatalog("discord:channel:123", "B.ai", "qwen3.8-flash", "default", "none", "1", models, 2)
-	if len(data.Components) != 4 {
-		t.Fatalf("components = %d, want 4", len(data.Components))
+	if len(data.Components) != 5 {
+		t.Fatalf("components = %d, want 5", len(data.Components))
 	}
 	modelSelect := data.Components[0].(discordgo.Label).Component.(discordgo.SelectMenu)
 	if len(modelSelect.Options) != 2 {

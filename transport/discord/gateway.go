@@ -14,22 +14,24 @@ type discordMessage struct { ID string; ChannelID string; AuthorID string; Autho
 func normalizeMessage(message discordMessage) (InputMessage, bool) { if message.AuthorIsBot || message.ID == "" || message.ChannelID == "" || message.AuthorID == "" { return InputMessage{}, false }; return InputMessage{SessionID: "discord:channel:" + message.ChannelID, ChannelID: message.ChannelID, MessageID: message.ID, AuthorID: message.AuthorID, AuthorName: message.AuthorName, Content: message.Content}, true }
 func gatewayIntents() discordgo.Intent { return discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent }
 
-type Gateway struct { session *discordgo.Session; messages chan InputMessage; done chan struct{}; closeMu sync.Mutex; closed bool; modelSettings *ModelSettingsHandler; providerSettings *ProviderSettingsHandler; retryStatusMu sync.Mutex; retryStatus map[string]string }
+type Gateway struct { session *discordgo.Session; messages chan InputMessage; done chan struct{}; closeMu sync.Mutex; closed bool; modelSettings *ModelSettingsHandler; providerSettings *ProviderSettingsHandler; stop func(string) bool; retryStatusMu sync.Mutex; retryStatus map[string]string }
 func NewGateway(token string) (*Gateway, error) {
 	if strings.TrimSpace(token) == "" { return nil, errors.New("discord: bot token is required") }
 	session, err := discordgo.New("Bot " + token); if err != nil { return nil, err }
 	gateway := &Gateway{session: session, messages: make(chan InputMessage, 256), done: make(chan struct{}), retryStatus: make(map[string]string)}; session.Identify.Intents = gatewayIntents()
 	session.AddHandler(func(_ *discordgo.Session, event *discordgo.MessageCreate) { if event == nil || event.Author == nil { return }; message, ok := normalizeMessage(discordMessage{ID: event.ID, ChannelID: event.ChannelID, AuthorID: event.Author.ID, AuthorName: event.Author.Username, Content: event.Content, AuthorIsBot: event.Author.Bot}); if !ok { return }; select { case gateway.messages <- message: case <-gateway.done: } })
-	session.AddHandler(func(s *discordgo.Session, event *discordgo.InteractionCreate) { if gateway.modelSettings != nil { _ = gateway.modelSettings.Handle(s, event) }; if gateway.providerSettings != nil { _ = gateway.providerSettings.Handle(s, event) } })
+	session.AddHandler(func(s *discordgo.Session, event *discordgo.InteractionCreate) { if event == nil { return }; if data, ok := event.Interaction.Data.(discordgo.ApplicationCommandInteractionData); ok && data.Name == "stop" && gateway.stop != nil { content := "ไม่มีงานที่กำลังทำอยู่"; if gateway.stop("discord:channel:" + event.ChannelID) { content = "หยุดการทำงานแล้ว" }; _ = s.InteractionRespond(event.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Content: content, Flags: discordgo.MessageFlagsEphemeral}}); return }; if gateway.modelSettings != nil { _ = gateway.modelSettings.Handle(s, event) }; if gateway.providerSettings != nil { _ = gateway.providerSettings.Handle(s, event) } })
 	return gateway, nil
 }
 func (g *Gateway) ConfigureModelSettings(handler *ModelSettingsHandler) { if g != nil { g.modelSettings = handler } }
 func (g *Gateway) ConfigureProviderSettings(handler *ProviderSettingsHandler) { if g != nil { g.providerSettings = handler } }
+func (g *Gateway) ConfigureStop(handler func(string) bool) { if g != nil { g.stop = handler } }
 func (g *Gateway) Start(ctx context.Context) error {
 	if g == nil || g.session == nil { return errors.New("discord: gateway is not initialized") }
 	if err := g.session.Open(); err != nil { return err }
 	if g.modelSettings != nil { if err := g.registerCommand(&discordgo.ApplicationCommand{Name: "model", Description: "Configure the AI model for this session"}); err != nil { return err } }
 	if g.providerSettings != nil { if err := g.registerCommand(&discordgo.ApplicationCommand{Name: "provider", Description: "Add or update an AI provider"}); err != nil { return err } }
+	if g.stop != nil { if err := g.registerCommand(&discordgo.ApplicationCommand{Name: "stop", Description: "Stop the current AI task"}); err != nil { return err } }
 	go func() { <-ctx.Done(); _ = g.Close(context.Background()) }()
 	return nil
 }

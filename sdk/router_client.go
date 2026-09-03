@@ -17,7 +17,7 @@ func (c *RouterClient) providerFor(session *Session, model string) (Provider, Mo
 		provider := session.config.Provider
 		adapterConfig, configErr := c.Router.Provider(provider)
 		if configErr == nil {
-			if adapter, ok := c.Adapters[adapterConfig.Adapter]; ok {
+			if _, ok := c.Adapters[adapterConfig.Adapter]; ok {
 				if refreshErr := c.RefreshModels(context.Background(), provider); refreshErr == nil {
 					route, err = c.Router.Resolve(provider, model)
 				} else {

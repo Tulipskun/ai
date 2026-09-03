@@ -10,7 +10,11 @@ import (
 	"github.com/Tulipskun/ai/sdk"
 )
 
-const modelSettingsPrefix = "model:settings:"
+const (
+	modelSettingsPrefix       = "model:settings:"
+	modelSettingsProviderStep = "model:provider:"
+	modelSettingsContinue     = "model:continue:"
+)
 
 type ModelSettingsHandler struct {
 	ResolveSession func(context.Context, sdk.Input) (*sdk.Session, error)
@@ -27,15 +31,24 @@ func (h *ModelSettingsHandler) Handle(s *discordgo.Session, i *discordgo.Interac
 		if i.ApplicationCommandData().Name != "model" {
 			return nil
 		}
-		return h.respondSettings(s, i, i.ChannelID)
+		return h.respondProviderStep(s, i, i.ChannelID)
 	}
-	if i.Type == discordgo.InteractionModalSubmit && strings.HasPrefix(i.ModalSubmitData().CustomID, modelSettingsPrefix) {
-		return h.handleSettingsSubmit(s, i, i.ModalSubmitData().CustomID)
+	if i.Type == discordgo.InteractionModalSubmit {
+		customID := i.ModalSubmitData().CustomID
+		switch {
+		case strings.HasPrefix(customID, modelSettingsProviderStep):
+			return h.handleProviderSubmit(s, i, customID)
+		case strings.HasPrefix(customID, modelSettingsPrefix):
+			return h.handleSettingsSubmit(s, i, customID)
+		}
+	}
+	if i.Type == discordgo.InteractionMessageComponent && strings.HasPrefix(i.MessageComponentData().CustomID, modelSettingsContinue) {
+		return h.handleContinue(s, i, i.MessageComponentData().CustomID)
 	}
 	return nil
 }
 
-func (h *ModelSettingsHandler) respondSettings(s *discordgo.Session, i *discordgo.InteractionCreate, channelID string) error {
+func (h *ModelSettingsHandler) respondProviderStep(s *discordgo.Session, i *discordgo.InteractionCreate, channelID string) error {
 	if h.ResolveSession == nil {
 		return h.respondError(s, i, "session manager is not configured")
 	}
@@ -46,10 +59,69 @@ func (h *ModelSettingsHandler) respondSettings(s *discordgo.Session, i *discordg
 	if err != nil {
 		return h.respondError(s, i, err.Error())
 	}
-	config := session.Config()
-	provider := config.Provider
-	if provider == "" || !h.hasProvider(provider) {
-		provider = h.Providers[0]
+	provider := string(session.Config().Provider)
+	if provider == "" || !h.hasProvider(sdk.ProviderID(provider)) {
+		provider = string(h.Providers[0])
+	}
+	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseModal,
+		Data: providerSelectionModal(channelID, provider, h.Providers),
+	})
+}
+
+func providerSelectionModal(channelID, current string, providers []sdk.ProviderID) *discordgo.InteractionResponseData {
+	return &discordgo.InteractionResponseData{
+		CustomID: modelSettingsProviderStep + channelID,
+		Title:    "Model Settings — Step 1",
+		Components: []discordgo.MessageComponent{
+			discordgo.Label{Label: "Provider", Description: "Choose the provider first.", Component: discordgo.SelectMenu{CustomID: "provider", MenuType: discordgo.StringSelectMenu, Placeholder: "Select provider", Options: makeProviderOptions(providers, current), Required: boolPtr(true)}},
+		},
+	}
+}
+
+func (h *ModelSettingsHandler) handleProviderSubmit(s *discordgo.Session, i *discordgo.InteractionCreate, customID string) error {
+	channelID := strings.TrimPrefix(customID, modelSettingsProviderStep)
+	if channelID == "" || h.ResolveSession == nil {
+		return h.respondError(s, i, "invalid model settings session")
+	}
+	values := modalSelectValues(i)
+	provider := sdk.ProviderID(strings.TrimSpace(values["provider"]))
+	if provider == "" {
+		return h.respondError(s, i, "provider is required")
+	}
+	if !h.hasProvider(provider) {
+		return h.respondError(s, i, fmt.Sprintf("unknown provider %q", provider))
+	}
+	if h.ProviderKeys[provider] == nil {
+		return h.respondError(s, i, fmt.Sprintf("provider %q has no API key pool", provider))
+	}
+
+	// A modal-submit interaction cannot open another modal directly. The button
+	// below creates the next component interaction, which can then open Step 2.
+	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: fmt.Sprintf("Provider selected: `%s`\nClick **Continue** to load its model catalogue and open Step 2.", provider),
+			Flags:   discordgo.MessageFlagsEphemeral,
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+					discordgo.Button{CustomID: modelSettingsContinue + channelID + ":" + string(provider), Label: "Continue", Style: discordgo.PrimaryButton},
+				}},
+			},
+		},
+	})
+}
+
+func (h *ModelSettingsHandler) handleContinue(s *discordgo.Session, i *discordgo.InteractionCreate, customID string) error {
+	value := strings.TrimPrefix(customID, modelSettingsContinue)
+	parts := strings.SplitN(value, ":", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return h.respondError(s, i, "invalid model settings step")
+	}
+	channelID, providerText := parts[0], parts[1]
+	provider := sdk.ProviderID(providerText)
+	if !h.hasProvider(provider) {
+		return h.respondError(s, i, fmt.Sprintf("unknown provider %q", provider))
 	}
 	if h.Models == nil {
 		return h.respondError(s, i, "model catalogue loader is not configured")
@@ -61,13 +133,21 @@ func (h *ModelSettingsHandler) respondSettings(s *discordgo.Session, i *discordg
 	if len(models) == 0 {
 		return h.respondError(s, i, fmt.Sprintf("provider %q has no models", provider))
 	}
+	if h.ResolveSession == nil {
+		return h.respondError(s, i, "session manager is not configured")
+	}
+	session, err := h.ResolveSession(context.Background(), sdk.Input{SessionID: "discord:channel:" + channelID})
+	if err != nil {
+		return h.respondError(s, i, err.Error())
+	}
+	config := session.Config()
 	keyCount := 1
 	if keys := h.ProviderKeys[provider]; keys != nil && keys.Len() > 0 {
 		keyCount = keys.Len()
 	}
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseModal,
-		Data: modelSettingsModalWithCatalog(session.ID(), string(provider), config.Model, temperatureLabel(config.Temperature), string(config.ThinkingLevel), strconv.Itoa(config.KeyIndex+1), h.Providers, models, keyCount),
+		Data: modelSettingsModalWithCatalog(session.ID(), string(provider), config.Model, temperatureLabel(config.Temperature), string(config.ThinkingLevel), strconv.Itoa(config.KeyIndex+1), models, keyCount),
 	})
 }
 
@@ -80,32 +160,19 @@ func modelSettingsModal(sessionID, provider, model, temperature, thinking, key s
 	if parsed, err := strconv.Atoi(key); err == nil && parsed > keyCount {
 		keyCount = parsed
 	}
-	return modelSettingsModalWithCatalog(sessionID, provider, model, temperature, thinking, key, []sdk.ProviderID{sdk.ProviderID(provider)}, models, keyCount)
+	return modelSettingsModalWithCatalog(sessionID, provider, model, temperature, thinking, key, models, keyCount)
 }
 
-func modelSettingsModalWithCatalog(sessionID, provider, model, temperature, thinking, key string, providers []sdk.ProviderID, models []sdk.Model, keyCount int) *discordgo.InteractionResponseData {
+func modelSettingsModalWithCatalog(sessionID, provider, model, temperature, thinking, key string, models []sdk.Model, keyCount int) *discordgo.InteractionResponseData {
 	channelID := strings.TrimPrefix(sessionID, "discord:channel:")
-	providerOptions := makeProviderOptions(providers, provider)
-	modelOptions := makeModelOptions(models, model)
-	thinkingOptions := []discordgo.SelectMenuOption{
-		{Label: "Default", Value: "default", Default: thinking == ""},
-		{Label: "None", Value: string(sdk.ThinkingNone), Default: thinking == string(sdk.ThinkingNone)},
-		{Label: "Low", Value: string(sdk.ThinkingLow), Default: thinking == string(sdk.ThinkingLow)},
-		{Label: "Medium", Value: string(sdk.ThinkingMedium), Default: thinking == string(sdk.ThinkingMedium)},
-		{Label: "High", Value: string(sdk.ThinkingHigh), Default: thinking == string(sdk.ThinkingHigh)},
-	}
-	temperatureOptions := makeTemperatureOptions(temperature)
-	keyOptions := makeKeyOptions(keyCount, key)
-
 	return &discordgo.InteractionResponseData{
 		CustomID: modelSettingsPrefix + channelID,
-		Title:    "Model Settings",
+		Title:    "Model Settings — Step 2",
 		Components: []discordgo.MessageComponent{
-			discordgo.Label{Label: "Provider", Description: "Choose the AI provider.", Component: discordgo.SelectMenu{CustomID: "provider", MenuType: discordgo.StringSelectMenu, Placeholder: "Select provider", Options: providerOptions, Required: boolPtr(true)}},
-			discordgo.Label{Label: "Model", Description: "Choose a model from the provider catalogue.", Component: discordgo.SelectMenu{CustomID: "model", MenuType: discordgo.StringSelectMenu, Placeholder: "Select model", Options: modelOptions, Required: boolPtr(true)}},
-			discordgo.Label{Label: "Temperature", Component: discordgo.SelectMenu{CustomID: "temperature", MenuType: discordgo.StringSelectMenu, Placeholder: "Select temperature", Options: temperatureOptions, Required: boolPtr(true)}},
-			discordgo.Label{Label: "Thinking", Component: discordgo.SelectMenu{CustomID: "thinking", MenuType: discordgo.StringSelectMenu, Placeholder: "Select thinking level", Options: thinkingOptions, Required: boolPtr(true)}},
-			discordgo.Label{Label: "API Pool", Component: discordgo.SelectMenu{CustomID: "key", MenuType: discordgo.StringSelectMenu, Placeholder: "Select API key pool", Options: keyOptions, Required: boolPtr(true)}},
+			discordgo.Label{Label: "Model", Description: "Choose a model from the provider catalogue.", Component: discordgo.SelectMenu{CustomID: "model", MenuType: discordgo.StringSelectMenu, Placeholder: "Select model", Options: makeModelOptions(models, model), Required: boolPtr(true)}},
+			discordgo.Label{Label: "Temperature", Component: discordgo.SelectMenu{CustomID: "temperature", MenuType: discordgo.StringSelectMenu, Placeholder: "Select temperature", Options: makeTemperatureOptions(temperature), Required: boolPtr(true)}},
+		discordgo.Label{Label: "Thinking", Component: discordgo.SelectMenu{CustomID: "thinking", MenuType: discordgo.StringSelectMenu, Placeholder: "Select thinking level", Options: makeThinkingOptions(thinking), Required: boolPtr(true)}},
+		discordgo.Label{Label: "API Pool", Component: discordgo.SelectMenu{CustomID: "key", MenuType: discordgo.StringSelectMenu, Placeholder: "Select API key pool", Options: makeKeyOptions(keyCount, key), Required: boolPtr(true)}},
 		},
 	}
 }
@@ -156,6 +223,19 @@ func makeTemperatureOptions(current string) []discordgo.SelectMenuOption {
 	return options
 }
 
+func makeThinkingOptions(current string) []discordgo.SelectMenuOption {
+	values := []string{"default", string(sdk.ThinkingNone), string(sdk.ThinkingLow), string(sdk.ThinkingMedium), string(sdk.ThinkingHigh)}
+	options := make([]discordgo.SelectMenuOption, 0, len(values))
+	for _, value := range values {
+		label := value
+		if value == "default" {
+			label = "Default"
+		}
+		options = append(options, discordgo.SelectMenuOption{Label: label, Value: value, Default: value == current || (current == "" && value == "default")})
+	}
+	return options
+}
+
 func makeKeyOptions(count int, current string) []discordgo.SelectMenuOption {
 	if count < 1 {
 		count = 1
@@ -186,17 +266,14 @@ func (h *ModelSettingsHandler) handleSettingsSubmit(s *discordgo.Session, i *dis
 	}
 
 	values := modalSelectValues(i)
-	provider := sdk.ProviderID(strings.TrimSpace(values["provider"]))
+	provider := session.Config().Provider
 	model := strings.TrimSpace(values["model"])
 	thinking := strings.TrimSpace(strings.ToLower(values["thinking"]))
 	temperatureText := strings.TrimSpace(values["temperature"])
 	keyText := strings.TrimSpace(values["key"])
 
-	if provider == "" {
-		return h.respondError(s, i, "provider is required")
-	}
-	if !h.hasProvider(provider) {
-		return h.respondError(s, i, fmt.Sprintf("unknown provider %q", provider))
+	if provider == "" || !h.hasProvider(provider) {
+		return h.respondError(s, i, fmt.Sprintf("provider %q is not configured for this session", provider))
 	}
 	keys := h.ProviderKeys[provider]
 	if keys == nil {
@@ -214,11 +291,9 @@ func (h *ModelSettingsHandler) handleSettingsSubmit(s *discordgo.Session, i *dis
 		}
 		temperature = &value
 	}
-
 	if thinking != "" && thinking != "default" && !validDiscordThinkingLevel(thinking) {
 		return h.respondError(s, i, fmt.Sprintf("invalid thinking level %q", thinking))
 	}
-
 	keyIndex, parseErr := strconv.Atoi(keyText)
 	if parseErr != nil || keyIndex < 1 {
 		return h.respondError(s, i, "API Pool must be a positive number")
@@ -228,9 +303,6 @@ func (h *ModelSettingsHandler) handleSettingsSubmit(s *discordgo.Session, i *dis
 		return h.respondError(s, i, err.Error())
 	}
 
-	if err := session.SetProvider(provider, keys); err != nil {
-		return h.respondError(s, i, err.Error())
-	}
 	if err := session.SetModel(model); err != nil {
 		return h.respondError(s, i, err.Error())
 	}
@@ -254,10 +326,7 @@ func (h *ModelSettingsHandler) handleSettingsSubmit(s *discordgo.Session, i *dis
 
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: h.summary(session),
-			Flags:   discordgo.MessageFlagsEphemeral,
-		},
+		Data: &discordgo.InteractionResponseData{Content: h.summary(session), Flags: discordgo.MessageFlagsEphemeral},
 	})
 }
 

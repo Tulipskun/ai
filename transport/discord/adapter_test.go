@@ -78,6 +78,16 @@ func TestDisplayUpdatesRetryStatusInOneMessage(t *testing.T) {
 	if sender.lastContent != "[AI retry] test\nกำลังรอ 12s ก่อน retry" {
 		t.Fatalf("unexpected final status: %q", sender.lastContent)
 	}
+
+	if err := display.Display(context.Background(), sdk.Output{
+		Metadata: map[string]string{"channel_id": channelID},
+		Trace:    &sdk.TraceEvent{Stage: sdk.TraceResponse, Response: &sdk.Response{Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "done"}}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if sender.deleted != 1 {
+		t.Fatalf("expected retry status cleanup, deleted=%d", sender.deleted)
+	}
 }
 
 type recordingSender struct{ channelID, content string }
@@ -91,22 +101,42 @@ func (s *recordingSender) SendMessage(_ context.Context, channelID, content stri
 type statusRecordingSender struct {
 	sent        int
 	edited      int
+	deleted     int
 	lastContent string
+	statusID    string
 }
 
 func (s *statusRecordingSender) SendMessage(_ context.Context, _, _ string) error { return nil }
 func (s *statusRecordingSender) SendStatusMessage(_ context.Context, _, content string) (string, error) {
 	s.sent++
 	s.lastContent = content
-	return "status-1", nil
+	s.statusID = "status-1"
+	return s.statusID, nil
 }
 func (s *statusRecordingSender) EditMessage(_ context.Context, _, _, content string) error {
 	s.edited++
 	s.lastContent = content
 	return nil
 }
-
-func (s *statusRecordingSender) DeleteMessage(_ context.Context, _, _ string) error { return nil }
+func (s *statusRecordingSender) DeleteMessage(_ context.Context, _, _ string) error {
+	s.deleted++
+	return nil
+}
+func (s *statusRecordingSender) updateRetryStatus(ctx context.Context, channelID, content string) error {
+	if s.statusID == "" {
+		id, err := s.SendStatusMessage(ctx, channelID, content)
+		if err != nil { return err }
+		s.statusID = id
+		return nil
+	}
+	return s.EditMessage(ctx, channelID, s.statusID, content)
+}
+func (s *statusRecordingSender) clearRetryStatus(ctx context.Context, channelID string) error {
+	if s.statusID == "" { return nil }
+	if err := s.DeleteMessage(ctx, channelID, s.statusID); err != nil { return err }
+	s.statusID = ""
+	return nil
+}
 
 type testHTTPStatusError struct{ code int }
 func (e testHTTPStatusError) Error() string { return "test" }

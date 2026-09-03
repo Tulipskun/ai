@@ -38,11 +38,12 @@ func run() error {
 	modelSettings := &discordtransport.ModelSettingsHandler{ResolveSession: sessions.Resolve, Providers: rt.Providers, ProviderKeys: providerKeys, Models: func(ctx context.Context, provider sdk.ProviderID) ([]sdk.Model, error) { models := rt.Router.Models(provider); if len(models) == 0 { if err := rt.RefreshProvider(ctx, provider); err != nil { return nil, err }; models = rt.Router.Models(provider) }; return models, nil }}
 	discord.ConfigureModelSettings(modelSettings)
 	discord.ConfigureProviderSettings(&discordtransport.ProviderSettingsHandler{Adapters: providerManager.Adapters(), Upsert: func(ctx context.Context, name, adapter, endpoint, apiKey string) error { if err := providerManager.Upsert(ctx, name, adapter, endpoint, apiKey); err != nil { return err }; config, err := rt.Router.Provider(sdk.ProviderID(name)); if err != nil { return err }; sessions.RegisterProvider(config.ID, config.Keys); providerKeys[config.ID] = config.Keys; modelSettings.Providers = providerManager.Providers(); modelSettings.ProviderKeys = providerKeys; return nil }})
-	if err := discord.Start(ctx); err != nil { return err }
 	workspace := envOr("AI_WORKSPACE", "."); agent, err := newAgent(rt.Client, workspace, rt.Browser, browserConfig.AllowPrivate); if err != nil { return err }
+	discord.ConfigureStop(agent.Interrupt)
+	if err := discord.Start(ctx); err != nil { return err }
 	loop := &sdk.HarnessLoop{Agent: agent, Source: discord, ResolveSession: sessions.Resolve, BuildRequest: func(context.Context, sdk.Input, *sdk.Session) (sdk.Request, error) { return sdk.Request{SystemPrompt: os.Getenv("AI_SYSTEM_PROMPT"), MaxOutputTokens: maxOutputTokens}, nil }, Displays: []sdk.Display{discord}, DisplayTimeout: 10 * time.Second, OnTurnError: func(input sdk.Input, err error) { log.Printf("turn failed source=%s session=%s: %v", input.Source, input.SessionID, err) }}
 	return loop.Run(ctx)
 }
-func newAgent(client *sdk.RouterClient, workspace string, browser *tools.BrowserClient, allowPrivate bool) (*sdk.Agent, error) { registry, err := tools.NewRegistryWithBrowser(workspace, browser, allowPrivate); if err != nil { return nil, err }; return &sdk.Agent{Client: client, Tools: registry, MaxIterations: 20}, nil }
+func newAgent(client *sdk.RouterClient, workspace string, browser *tools.BrowserClient, allowPrivate bool) (*sdk.Agent, error) { registry, err := tools.NewRegistryWithBrowser(workspace, browser, allowPrivate); if err != nil { return nil, err }; return &sdk.Agent{Client: client, Tools: registry}, nil }
 func envOr(name, fallback string) string { if value := strings.TrimSpace(os.Getenv(name)); value != "" { return value }; return fallback }
 func envInt(name string) (int, error) { value := strings.TrimSpace(os.Getenv(name)); if value == "" { return 0, nil }; parsed, err := strconv.Atoi(value); if err != nil { return 0, fmt.Errorf("%s: %w", name, err) }; return parsed, nil }

@@ -71,6 +71,12 @@ type Sender interface {
 	SendMessage(context.Context, string, string) error
 }
 
+type RetryStatusSender interface {
+	SendStatusMessage(context.Context, string, string) (string, error)
+	EditMessage(context.Context, string, string, string) error
+	DeleteMessage(context.Context, string, string) error
+}
+
 type Display struct {
 	Sender Sender
 }
@@ -110,11 +116,19 @@ func (d Display) displayTrace(ctx context.Context, channelID string, trace sdk.T
 		text = formatTraceJSON("[AI tool_result]", trace.ToolResult)
 	case sdk.TraceResponse:
 		text = responseContent(trace.Response)
+		if status, ok := d.Sender.(RetryStatusSender); ok {
+			if err := status.clearRetryStatus(ctx, channelID); err != nil {
+				return err
+			}
+		}
 	case sdk.TraceRetryWait:
 		if trace.Err != nil && trace.RetryAfter > 0 {
 			text = fmt.Sprintf("[AI retry] %s\nกำลังรอ %s ก่อน retry", trace.Err, formatDuration(trace.RetryAfter))
 		} else if trace.Err != nil {
 			text = fmt.Sprintf("[AI retry] %s\nกำลังรอก่อน retry", trace.Err)
+		}
+		if status, ok := d.Sender.(RetryStatusSender); ok {
+			return status.updateRetryStatus(ctx, channelID, text)
 		}
 	default:
 		return nil

@@ -12,6 +12,7 @@ func (f *fakeAdapter) Name() string { return f.name }
 func (f *fakeAdapter) WithAPIKey(key string) Provider { return &fakeAdapter{name:f.name+":"+key} }
 func (f *fakeAdapter) Generate(_ context.Context, req Request) (Response,error) { return Response{Provider:string(req.Provider),Model:req.Model},nil }
 func (f *fakeAdapter) Stream(_ context.Context, req Request) (<-chan Event,error) { ch:=make(chan Event,1); ch<-Event{Type:EventDone,Response:&Response{Provider:string(req.Provider),Model:req.Model}};close(ch);return ch,nil }
+func (f *fakeAdapter) ListModels(_ context.Context, _ string) ([]Model,error) { return []Model{{ID:"discovered-model"}},nil }
 
 type retryStatusError struct { status int }
 func (e retryStatusError) Error() string { return "provider error" }
@@ -39,6 +40,20 @@ func TestRouterClientDispatchesRequestedRoutes(t *testing.T) {
 	pool:=NewKeyPool("or-1","or-2","oc-1")
 	cases:=[]SessionConfig{{ID:"s1",Provider:ProviderOpenRouter,Model:"gpt-5",KeyIndex:0},{ID:"s2",Provider:ProviderOpenRouter,Model:"gemini-3.5",KeyIndex:1},{ID:"s3",Provider:ProviderOpenCode,Model:"opus",KeyIndex:2}}
 	for _,cfg:=range cases { resp,err:=c.Generate(context.Background(),NewSession(cfg,pool),Request{});if err!=nil{t.Fatal(err)};if resp.Provider!=string(cfg.Provider)||resp.Model!=cfg.Model{t.Fatalf("got %+v",resp)} }
+}
+
+func TestRouterClientRefreshesStaleCatalogue(t *testing.T) {
+	r := NewRouter()
+	pool := NewKeyPool("key")
+	r.RegisterProvider(ProviderConfig{ID: ProviderOpenRouter, Adapter: AdapterOpenAI, Keys: pool})
+	c := NewRouterClient(r)
+	adapter := &fakeAdapter{name: "openai"}
+	c.RegisterAdapter(AdapterOpenAI, adapter)
+	session := NewSession(SessionConfig{ID: "catalogue-refresh", Provider: ProviderOpenRouter, Model: "discovered-model"}, pool)
+	resp, err := c.Generate(context.Background(), session, Request{})
+	if err != nil { t.Fatalf("Generate() error = %v", err) }
+	if resp.Model != "discovered-model" { t.Fatalf("model=%q, want discovered-model", resp.Model) }
+	if got := r.Models(ProviderOpenRouter); len(got) != 1 || got[0].ID != "discovered-model" { t.Fatalf("catalogue=%v, want discovered-model", got) }
 }
 
 func TestRouterClientRetriesHTTP400WithCooldown(t *testing.T) {

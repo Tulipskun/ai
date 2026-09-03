@@ -50,10 +50,31 @@ func TestModelOptionGroupsIncludeEveryModel(t *testing.T) {
 	}
 }
 
+func TestModelSelectionComponentsUseUniquePagedMenus(t *testing.T) {
+	groups := [][]discordgo.SelectMenuOption{
+		{{Label: "m1", Value: "m1"}},
+		{{Label: "m26", Value: "m26"}},
+		{{Label: "m51", Value: "m51"}},
+	}
+	components := makeModelSelectionComponents("123", "google", groups, 0)
+	if len(components) != 3 {
+		t.Fatalf("components = %d, want 3", len(components))
+	}
+	seen := map[string]bool{}
+	for _, component := range components {
+		row := component.(discordgo.ActionsRow)
+		menu := row.Components[0].(discordgo.SelectMenu)
+		if seen[menu.CustomID] {
+			t.Fatalf("duplicate custom ID %q", menu.CustomID)
+		}
+		seen[menu.CustomID] = true
+	}
+}
+
 func TestModelSettingsModalUsesTemperatureTextInput(t *testing.T) {
 	data := modelSettingsModal("discord:channel:123", "google", "gemini-2.5-flash", "0.7", "medium", "2")
-	if len(data.Components) != 5 {
-		t.Fatalf("components = %d, want 5", len(data.Components))
+	if len(data.Components) != 4 {
+		t.Fatalf("components = %d, want 4", len(data.Components))
 	}
 
 	payload, err := json.Marshal(data)
@@ -91,6 +112,13 @@ func TestModelSettingsModalKeepsCurrentValuesSelected(t *testing.T) {
 		if !ok {
 			t.Fatalf("component is %T, want discordgo.Label", component)
 		}
+		if label.Label == "Model" {
+			input, ok := label.Component.(discordgo.TextInput)
+			if !ok || input.Value != "gpt-5" {
+				t.Fatalf("model child/value = %T/%q, want TextInput/gpt-5", label.Component, input.Value)
+			}
+			continue
+		}
 		if label.Label == "Temperature" {
 			input, ok := label.Component.(discordgo.TextInput)
 			if !ok {
@@ -121,14 +149,11 @@ func TestModelSettingsModalKeepsCurrentValuesSelected(t *testing.T) {
 func TestModelSettingsModalUsesCatalogModels(t *testing.T) {
 	models := []sdk.Model{{ID: "qwen3.8-flash"}, {ID: "qwen3.5-plus"}}
 	data := modelSettingsModalWithCatalog("discord:channel:123", "B.ai", "qwen3.8-flash", "default", "none", "1", models, 2)
-	if len(data.Components) != 5 {
-		t.Fatalf("components = %d, want 5", len(data.Components))
+	if len(data.Components) != 4 {
+		t.Fatalf("components = %d, want 4", len(data.Components))
 	}
-	modelSelect := data.Components[0].(discordgo.Label).Component.(discordgo.SelectMenu)
-	if len(modelSelect.Options) != 2 {
-		t.Fatalf("model options = %d, want 2", len(modelSelect.Options))
-	}
-	if modelSelect.Options[0].Value != "qwen3.8-flash" || !modelSelect.Options[0].Default {
-		t.Fatalf("unexpected first model option: %+v", modelSelect.Options[0])
+	modelInput := data.Components[0].(discordgo.Label).Component.(discordgo.TextInput)
+	if modelInput.Value != "qwen3.8-flash" {
+		t.Fatalf("model value = %q, want qwen3.8-flash", modelInput.Value)
 	}
 }

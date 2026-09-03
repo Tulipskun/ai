@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	modelSettingsPrefix       = "model:settings:"
+	modelSettingsPrefix = "model:settings:"
 	modelSettingsProviderStep = "model:provider:"
 	modelSettingsProviderSelect = "model:provider:select"
 	modelSettingsModelSelectPrefix = "model:select:"
@@ -70,22 +70,14 @@ func (h *ModelSettingsHandler) respondProviderStep(s *discordgo.Session, i *disc
 	}
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: "Select a provider:",
-			Flags: discordgo.MessageFlagsEphemeral,
-			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-					discordgo.SelectMenu{CustomID: modelSettingsProviderSelect, MenuType: discordgo.StringSelectMenu, Placeholder: "Select provider", Options: makeProviderOptions(h.Providers, provider), MinValues: intPtr(1), MaxValues: 1},
-				}},
-			},
-		},
+		Data: providerSelectionMessage(channelID, provider, h.Providers),
 	})
 }
 
 func providerSelectionModal(channelID, current string, providers []sdk.ProviderID) *discordgo.InteractionResponseData {
 	return &discordgo.InteractionResponseData{
 		CustomID: modelSettingsProviderStep + channelID,
-		Title:    "Model Settings — Step 1",
+		Title: "Model Settings — Step 1",
 		Components: []discordgo.MessageComponent{
 			discordgo.Label{Label: "Provider", Description: "Choose the provider first.", Component: discordgo.SelectMenu{CustomID: "provider", MenuType: discordgo.StringSelectMenu, Placeholder: "Select provider", Options: makeProviderOptions(providers, current), Required: boolPtr(true)}},
 	},
@@ -95,6 +87,8 @@ func providerSelectionModal(channelID, current string, providers []sdk.ProviderI
 func providerSelectionMessage(channelID, current string, providers []sdk.ProviderID) *discordgo.InteractionResponseData {
 	return &discordgo.InteractionResponseData{
 		CustomID: modelSettingsProviderStep + channelID,
+		Content: "Select a provider:",
+		Flags: discordgo.MessageFlagsEphemeral,
 		Components: []discordgo.MessageComponent{
 			discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 				discordgo.SelectMenu{CustomID: modelSettingsProviderSelect, MenuType: discordgo.StringSelectMenu, Placeholder: "Select provider", Options: makeProviderOptions(providers, current), MinValues: intPtr(1), MaxValues: 1},
@@ -129,13 +123,10 @@ func (h *ModelSettingsHandler) handleProviderSelect(s *discordgo.Session, i *dis
 	if len(groups) == 0 {
 		return h.respondError(s, i, fmt.Sprintf("provider %q has no usable models", provider))
 	}
-	components := makeModelSelectionComponents(i.ChannelID, string(provider), groups)
-	if len(components) > 5 {
-		components = components[:5]
-	}
+	firstEnd := minInt(5, len(groups))
 	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Content: fmt.Sprintf("Select a model for `%s`:", provider), Flags: discordgo.MessageFlagsEphemeral, Components: components},
+		Data: &discordgo.InteractionResponseData{Content: fmt.Sprintf("Select a model for `%s`:", provider), Flags: discordgo.MessageFlagsEphemeral, Components: makeModelSelectionComponents(i.ChannelID, string(provider), groups[:firstEnd], 0)},
 	}); err != nil {
 		return err
 	}
@@ -147,7 +138,7 @@ func (h *ModelSettingsHandler) handleProviderSelect(s *discordgo.Session, i *dis
 		_, err := s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
 			Content: "More models:",
 			Flags: discordgo.MessageFlagsEphemeral,
-			Components: makeModelSelectionComponents(i.ChannelID, string(provider), groups[start:end]),
+			Components: makeModelSelectionComponents(i.ChannelID, string(provider), groups[start:end], start),
 		})
 		if err != nil {
 			return err
@@ -204,12 +195,12 @@ func modelSettingsModal(sessionID, provider, model, temperature, thinking, key s
 	channelID := strings.TrimPrefix(sessionID, "discord:channel:")
 	return &discordgo.InteractionResponseData{
 		CustomID: modelSettingsPrefix + channelID + ":" + provider,
-		Title:    "Model Settings — Step 2",
+		Title: "Model Settings — Step 2",
 		Components: []discordgo.MessageComponent{
-			discordgo.Label{Label: "Model", Description: "Selected model: " + model, Component: discordgo.TextInput{CustomID: "model", Style: discordgo.TextInputShort, Value: model, Required: boolPtr(true), MaxLength: 100}},
-			discordgo.Label{Label: "Temperature", Description: "Enter a number from 0.0 to 1.0.", Component: discordgo.TextInput{CustomID: "temperature", Style: discordgo.TextInputShort, Value: normalizeTemperatureInput(temperature), Placeholder: "0.0 - 1.0 (blank = default)", Required: boolPtr(false), MaxLength: 20}},
-		discordgo.Label{Label: "Thinking", Component: discordgo.SelectMenu{CustomID: "thinking", MenuType: discordgo.StringSelectMenu, Placeholder: "Select thinking level", Options: makeThinkingOptions(thinking), Required: boolPtr(true)}},
-		discordgo.Label{Label: "API Pool", Component: discordgo.SelectMenu{CustomID: "key", MenuType: discordgo.StringSelectMenu, Placeholder: "Select API key pool", Options: makeKeyOptions(resolvedKeyCount, key), Required: boolPtr(true)}},
+			discordgo.Label{Label: "Model", Description: "Selected model", Component: discordgo.TextInput{CustomID: "model", Style: discordgo.TextInputShort, Value: model, Required: boolPtr(true), MaxLength: 100}},
+			discordgo.Label{Label: "Temperature", Description: "Enter a number from 0.0 to 1.0. Leave blank for default.", Component: discordgo.TextInput{CustomID: "temperature", Style: discordgo.TextInputShort, Value: normalizeTemperatureInput(temperature), Placeholder: "0.0 - 1.0", Required: boolPtr(false), MaxLength: 20}},
+			discordgo.Label{Label: "Thinking", Component: discordgo.SelectMenu{CustomID: "thinking", MenuType: discordgo.StringSelectMenu, Placeholder: "Select thinking level", Options: makeThinkingOptions(thinking), Required: boolPtr(true)}},
+			discordgo.Label{Label: "API Pool", Component: discordgo.SelectMenu{CustomID: "key", MenuType: discordgo.StringSelectMenu, Placeholder: "Select API key pool", Options: makeKeyOptions(resolvedKeyCount, key), Required: boolPtr(true)}},
 		},
 	}
 }
@@ -259,12 +250,13 @@ func makeModelOptionGroups(models []sdk.Model, current string) [][]discordgo.Sel
 	return groups
 }
 
-func makeModelSelectionComponents(channelID, provider string, groups [][]discordgo.SelectMenuOption) []discordgo.MessageComponent {
+func makeModelSelectionComponents(channelID, provider string, groups [][]discordgo.SelectMenuOption, groupOffset int) []discordgo.MessageComponent {
 	components := make([]discordgo.MessageComponent, 0, minInt(len(groups), 5))
 	for index, options := range groups {
-		start := index*25 + 1
+		groupIndex := groupOffset + index
+		start := groupIndex*25 + 1
 		end := start + len(options) - 1
-		customID := modelSettingsModelSelectPrefix + channelID + ":" + provider
+		customID := fmt.Sprintf("%s%s:%s:%d", modelSettingsModelSelectPrefix, channelID, provider, groupIndex)
 		label := fmt.Sprintf("Models %d-%d", start, end)
 		components = append(components, discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			discordgo.SelectMenu{CustomID: customID, MenuType: discordgo.StringSelectMenu, Placeholder: label, Options: options, MinValues: intPtr(1), MaxValues: 1},

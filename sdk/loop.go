@@ -76,7 +76,11 @@ func (h *HarnessLoop) Handle(ctx context.Context, input Input) error {
 		}
 	}
 
+	var responseTraced bool
 	dispatchTrace := func(traceCtx context.Context, event TraceEvent) {
+		if event.Stage == TraceResponse {
+			responseTraced = true
+		}
 		traceCopy := event
 		for _, display := range h.Displays {
 			DispatchDisplay(traceCtx, display, Output{
@@ -96,6 +100,12 @@ func (h *HarnessLoop) Handle(ctx context.Context, input Input) error {
 	}
 	if err != nil {
 		return err
+	}
+
+	// Agent responses are already displayed through TraceResponse. Sending the
+	// final output as well would duplicate the same assistant message.
+	if responseTraced {
+		return nil
 	}
 
 	output := Output{

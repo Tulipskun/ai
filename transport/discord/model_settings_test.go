@@ -1,6 +1,7 @@
 package discord
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/bwmarrin/discordgo"
@@ -68,5 +69,39 @@ func TestModelSettingsModalUsesSafeDefaults(t *testing.T) {
 	}
 	if values["temperature"] != "" {
 		t.Fatalf("temperature default = %q, want empty", values["temperature"])
+	}
+}
+
+func TestModelSettingsModalUsesModernComponents(t *testing.T) {
+	data := modelSettingsModal("discord:channel:123", "google", "gemini-2.5-flash", "0.7", "medium", "2")
+	payload, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshal modal: %v", err)
+	}
+	var decoded struct {
+		Components []struct {
+			Type      int `json:"type"`
+			Component struct {
+				Type int `json:"type"`
+			} `json:"component"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode modal: %v", err)
+	}
+	if len(decoded.Components) != 5 {
+		t.Fatalf("components = %d, want 5", len(decoded.Components))
+	}
+	for index, component := range decoded.Components {
+		if component.Type != 18 {
+			t.Fatalf("component %d type = %d, want Label (18)", index, component.Type)
+		}
+		wantType := 3
+		if index == 2 || index == 3 || index == 4 {
+			wantType = 3
+		}
+		if component.Component.Type != wantType {
+			t.Fatalf("component %d child type = %d, want String Select (3)", index, component.Component.Type)
+		}
 	}
 }

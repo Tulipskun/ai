@@ -56,10 +56,11 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 		retries = defaultAgentMaxRetries
 	}
 
+	backoff := retryBackoff{}
 	var lastErr error
 	for attempt := 0; attempt <= retries; attempt++ {
 		session.ReplaceHistory(before)
-		resp, err := a.runAttempt(ctx, session, user, req, limit, trace)
+		resp, err := a.runAttempt(ctx, session, user, req, limit, trace, &backoff)
 		if err == nil {
 			return resp, nil
 		}
@@ -75,7 +76,7 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 			}
 		}
 
-		delay := retryDelay(err, attempt+1)
+		delay := backoff.Delay(err)
 		traceEvent(ctx, trace, TraceEvent{Stage: TraceRetryWait, Err: err, RetryAfter: delay})
 		if err := waitRetry(ctx, delay); err != nil {
 			return Response{}, err
@@ -97,7 +98,7 @@ func (a *Agent) rotateKeyIfConfigured(session *Session) error {
 	return err
 }
 
-func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, limit int, trace TraceFunc) (Response, error) {
+func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, limit int, trace TraceFunc, backoff *retryBackoff) (Response, error) {
 	session.Append(user)
 
 	for iteration := 0; iteration < limit; iteration++ {
@@ -109,6 +110,9 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		resp, err := a.Client.Generate(ctx, session, req)
 		if err != nil {
 			return Response{}, err
+		}
+		if backoff != nil {
+			backoff.Reset()
 		}
 		commitResponse(session, resp)
 
@@ -177,6 +181,19 @@ func isRateLimitError(err error) bool {
 		return false
 	}
 	return statusErr.HTTPStatusCode() == 429
+}
+
+type retryBackoff struct {
+	consecutive int
+}
+
+func (b *retryBackoff) Reset() {
+	b.consecutive = 0
+}
+
+func (b *retryBackoff) Delay(err error) time.Duration {
+	b.consecutive++
+	return retryDelay(err, b.consecutive)
 }
 
 func retryDelay(err error, attempt int) time.Duration {

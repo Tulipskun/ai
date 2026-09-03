@@ -42,6 +42,20 @@ func TestRetryDelayFallsBackToDeterministicSchedule(t *testing.T) {
 	}
 }
 
+func TestRetryBackoffResetsAfterSuccessfulRequest(t *testing.T) {
+	backoff := retryBackoff{}
+	if got := backoff.Delay(retryTestError{status: 429}); got != 3*time.Second {
+		t.Fatalf("first retry delay=%s, want 3s", got)
+	}
+	if got := backoff.Delay(retryTestError{status: 429}); got != 6*time.Second {
+		t.Fatalf("second retry delay=%s, want 6s", got)
+	}
+	backoff.Reset()
+	if got := backoff.Delay(retryTestError{status: 429}); got != 3*time.Second {
+		t.Fatalf("retry delay after success=%s, want 3s", got)
+	}
+}
+
 func TestRateLimitDetection(t *testing.T) {
 	if !isRateLimitError(retryTestError{status: 429}) {
 		t.Fatal("429 was not detected")

@@ -8,16 +8,34 @@ import (
 	"github.com/Tulipskun/ai/sdk"
 )
 
+func TestProviderSelectionModalUsesSingleStringSelect(t *testing.T) {
+	data := providerSelectionModal("123", "B.ai", []sdk.ProviderID{"B.ai", "google"})
+	if data.Title != "Model Settings — Step 1" {
+		t.Fatalf("title = %q, want Step 1", data.Title)
+	}
+	if len(data.Components) != 1 {
+		t.Fatalf("components = %d, want 1", len(data.Components))
+	}
+	label := data.Components[0].(discordgo.Label)
+	selectMenu := label.Component.(discordgo.SelectMenu)
+	if selectMenu.CustomID != "provider" || len(selectMenu.Options) != 2 {
+		t.Fatalf("unexpected provider select: %+v", selectMenu)
+	}
+	if !selectMenu.Options[0].Default {
+		t.Fatal("current provider is not selected by default")
+	}
+}
+
 func TestModelSettingsModalUsesModernComponents(t *testing.T) {
 	data := modelSettingsModal("discord:channel:123", "google", "gemini-2.5-flash", "0.7", "medium", "2")
-	if data.Title != "Model Settings" {
-		t.Fatalf("title = %q, want Model Settings", data.Title)
+	if data.Title != "Model Settings — Step 2" {
+		t.Fatalf("title = %q, want Step 2", data.Title)
 	}
-	if data.CustomID != "model:settings:123" {
-		t.Fatalf("custom ID = %q, want model:settings:123", data.CustomID)
+	if data.CustomID != "model:settings:123:google" {
+		t.Fatalf("custom ID = %q, want provider-qualified ID", data.CustomID)
 	}
-	if len(data.Components) != 5 {
-		t.Fatalf("components = %d, want 5", len(data.Components))
+	if len(data.Components) != 4 {
+		t.Fatalf("components = %d, want 4", len(data.Components))
 	}
 
 	payload, err := json.Marshal(data)
@@ -70,16 +88,12 @@ func TestModelSettingsModalKeepsCurrentValuesSelected(t *testing.T) {
 }
 
 func TestModelSettingsModalUsesCatalogModels(t *testing.T) {
-	models := []sdk.Model{
-		{ID: "qwen3.8-flash"},
-		{ID: "qwen3.5-plus"},
+	models := []sdk.Model{{ID: "qwen3.8-flash"}, {ID: "qwen3.5-plus"}}
+	data := modelSettingsModalWithCatalog("discord:channel:123", "B.ai", "qwen3.8-flash", "default", "none", "1", models, 2)
+	if len(data.Components) != 4 {
+		t.Fatalf("components = %d, want 4", len(data.Components))
 	}
-	data := modelSettingsModalWithCatalog("discord:channel:123", "B.ai", "qwen3.8-flash", "default", "none", "1", []sdk.ProviderID{"B.ai", "google"}, models, 2)
-	if len(data.Components) != 5 {
-		t.Fatalf("components = %d, want 5", len(data.Components))
-	}
-
-	modelSelect := data.Components[1].(discordgo.Label).Component.(discordgo.SelectMenu)
+	modelSelect := data.Components[0].(discordgo.Label).Component.(discordgo.SelectMenu)
 	if len(modelSelect.Options) != 2 {
 		t.Fatalf("model options = %d, want 2", len(modelSelect.Options))
 	}

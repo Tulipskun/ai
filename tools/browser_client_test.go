@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -77,9 +78,9 @@ func TestBrowserClientReportsWorkerStderrOnStartupFailure(t *testing.T) {
 	}
 
 	client := NewBrowserClient(BrowserClientConfig{
-		NodeCommand:   "/bin/sh",
-		WorkerPath:   worker,
-		WorkerDir:     dir,
+		NodeCommand:    "/bin/sh",
+		WorkerPath:     worker,
+		WorkerDir:      dir,
 		StartupTimeout: time.Second,
 	})
 	err := client.Start(context.Background())

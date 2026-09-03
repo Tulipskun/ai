@@ -2,6 +2,7 @@ package discord
 
 import (
 	"encoding/json"
+	"strconv"
 	"testing"
 
 	"github.com/bwmarrin/discordgo"
@@ -63,9 +64,9 @@ func TestModelSettingsModalUsesTemperatureTextInput(t *testing.T) {
 		Components []struct {
 			Type      int `json:"type"`
 			Component struct {
-				Type int `json:"type"`
+				Type     int    `json:"type"`
 				CustomID string `json:"custom_id"`
-				Value string `json:"value"`
+				Value    string `json:"value"`
 			} `json:"component"`
 		} `json:"components"`
 	}

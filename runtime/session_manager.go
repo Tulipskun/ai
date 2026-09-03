@@ -16,6 +16,12 @@ func NewSessionManagerWithProviders(path string, base sdk.SessionConfig, provide
 	if base.Provider != "" && providerKeys[base.Provider] != nil { fallback = providerKeys[base.Provider] }
 	return &SessionManager{path: path, base: base, keys: fallback, providerKeys: providerKeys, sessions: make(map[string]*sdk.Session)}
 }
+func (m *SessionManager) RegisterProvider(provider sdk.ProviderID, keys *sdk.KeyPool) {
+	if m == nil || provider == "" || keys == nil { return }
+	m.mu.Lock()
+	m.providerKeys[provider] = keys
+	m.mu.Unlock()
+}
 func (m *SessionManager) Resolve(ctx context.Context, input sdk.Input) (*sdk.Session, error) {
 	if m == nil { return nil, errors.New("runtime: session manager is nil") }; if err := ctx.Err(); err != nil { return nil, err }; if input.SessionID == "" { return nil, errors.New("runtime: input SessionID is required") }
 	m.mu.Lock(); defer m.mu.Unlock(); if session, ok := m.sessions[input.SessionID]; ok { return session, nil }

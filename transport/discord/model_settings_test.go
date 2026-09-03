@@ -1,12 +1,14 @@
 package discord
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/Tulipskun/ai/sdk"
 )
 
-func TestModelSettingsModalHasFiveTextInputs(t *testing.T) {
+func TestModelSettingsModalUsesModernComponents(t *testing.T) {
 	data := modelSettingsModal("discord:channel:123", "google", "gemini-2.5-flash", "0.7", "medium", "2")
 	if data.Title != "Model Settings" {
 		t.Fatalf("title = %q, want Model Settings", data.Title)
@@ -15,58 +17,73 @@ func TestModelSettingsModalHasFiveTextInputs(t *testing.T) {
 		t.Fatalf("custom ID = %q, want model:settings:123", data.CustomID)
 	}
 	if len(data.Components) != 5 {
-		t.Fatalf("modal rows = %d, want 5", len(data.Components))
+		t.Fatalf("components = %d, want 5", len(data.Components))
 	}
 
-	want := []string{"provider", "model", "temperature", "thinking", "key"}
-	for index, row := range data.Components {
-		actionRow, ok := row.(discordgo.ActionsRow)
-		if !ok || len(actionRow.Components) != 1 {
-			t.Fatalf("row %d is not a single-component action row", index)
+	payload, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshal modal: %v", err)
+	}
+	var decoded struct {
+		Components []struct {
+			Type      int `json:"type"`
+			Component struct {
+				Type int `json:"type"`
+			} `json:"component"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode modal: %v", err)
+	}
+	for index, component := range decoded.Components {
+		if component.Type != 18 {
+			t.Fatalf("component %d type = %d, want Label (18)", index, component.Type)
 		}
-		input, ok := actionRow.Components[0].(discordgo.TextInput)
-		if !ok {
-			t.Fatalf("row %d component is %T, want TextInput", index, actionRow.Components[0])
-		}
-		if input.CustomID != want[index] {
-			t.Fatalf("row %d custom ID = %q, want %q", index, input.CustomID, want[index])
+		if component.Component.Type != 3 {
+			t.Fatalf("component %d child type = %d, want String Select (3)", index, component.Component.Type)
 		}
 	}
 }
 
-func TestModelSettingsModalKeepsCurrentValues(t *testing.T) {
+func TestModelSettingsModalKeepsCurrentValuesSelected(t *testing.T) {
 	data := modelSettingsModal("discord:channel:123", "openai", "gpt-5", "0.4", "high", "3")
-	want := map[string]string{
-		"provider": "openai",
-		"model": "gpt-5",
-		"temperature": "0.4",
-		"thinking": "high",
-		"key": "3",
-	}
-	for _, row := range data.Components {
-		actionRow := row.(discordgo.ActionsRow)
-		input := actionRow.Components[0].(discordgo.TextInput)
-		if input.Value != want[input.CustomID] {
-			t.Fatalf("%s value = %q, want %q", input.CustomID, input.Value, want[input.CustomID])
+	for _, component := range data.Components {
+		label, ok := component.(discordgo.Label)
+		if !ok {
+			t.Fatalf("component is %T, want discordgo.Label", component)
+		}
+		selectMenu, ok := label.Component.(discordgo.SelectMenu)
+		if !ok {
+			t.Fatalf("label child is %T, want discordgo.SelectMenu", label.Component)
+		}
+		found := false
+		for _, option := range selectMenu.Options {
+			if option.Default {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("%s has no default option", label.Label)
 		}
 	}
 }
 
-func TestModelSettingsModalUsesSafeDefaults(t *testing.T) {
-	data := modelSettingsModal("discord:channel:123", "", "", "default", "", "0")
-	values := make(map[string]string)
-	for _, row := range data.Components {
-		actionRow := row.(discordgo.ActionsRow)
-		input := actionRow.Components[0].(discordgo.TextInput)
-		values[input.CustomID] = input.Value
+func TestModelSettingsModalUsesCatalogModels(t *testing.T) {
+	models := []sdk.Model{
+		{ID: "qwen3.8-flash"},
+		{ID: "qwen3.5-plus"},
 	}
-	if values["thinking"] != "" {
-		t.Fatalf("thinking default = %q, want empty", values["thinking"])
+	data := modelSettingsModalWithCatalog("discord:channel:123", "B.ai", "qwen3.8-flash", "default", "none", "1", []sdk.ProviderID{"B.ai", "google"}, models, 2)
+	if len(data.Components) != 5 {
+		t.Fatalf("components = %d, want 5", len(data.Components))
 	}
-	if values["key"] != "1" {
-		t.Fatalf("key default = %q, want 1", values["key"])
+
+	modelSelect := data.Components[1].(discordgo.Label).Component.(discordgo.SelectMenu)
+	if len(modelSelect.Options) != 2 {
+		t.Fatalf("model options = %d, want 2", len(modelSelect.Options))
 	}
-	if values["temperature"] != "" {
-		t.Fatalf("temperature default = %q, want empty", values["temperature"])
+	if modelSelect.Options[0].Value != "qwen3.8-flash" || !modelSelect.Options[0].Default {
+		t.Fatalf("unexpected first model option: %+v", modelSelect.Options[0])
 	}
 }

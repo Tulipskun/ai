@@ -3,14 +3,36 @@ package sdk
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
 type KeyedProvider interface { Provider; WithAPIKey(string) Provider }
 type RouterClient struct { Router *Router; Adapters map[AdapterID]Provider; Retry RetryPolicy }
-func NewRouterClient(router *Router) *RouterClient { return &RouterClient{Router: router, Adapters: make(map[AdapterID]Provider), Retry: DefaultRetryPolicy()} }
+func NewRouterClient(router *Router) *RouterClient { return &RouterClient{Router: router, Adapters: make(map[AdapterID]Provider), Retry: DefaultRetryPolicy() } }
 func (c *RouterClient) RegisterAdapter(id AdapterID, p Provider) { c.Adapters[id] = p }
-func (c *RouterClient) providerFor(session *Session, model string) (Provider, ModelRoute, error) { route, err := c.Router.Resolve(session.config.Provider, model); if err != nil { return nil, ModelRoute{}, err }; p, ok := c.Adapters[route.Adapter]; if !ok { return nil, ModelRoute{}, &RouteError{Provider: route.Provider, Model: route.Model, Adapter: route.Adapter} }; if kp, ok := p.(KeyedProvider); ok { key, err := session.APIKey(); if err != nil { return nil, ModelRoute{}, err }; p = kp.WithAPIKey(key) }; if config, err := c.Router.Provider(route.Provider); err == nil && config.BaseURL != "" { if ep, ok := p.(EndpointProvider); ok { p = ep.WithBaseURL(config.BaseURL) } }; return p, route, nil }
+func (c *RouterClient) providerFor(session *Session, model string) (Provider, ModelRoute, error) {
+	route, err := c.Router.Resolve(session.config.Provider, model)
+	if err != nil && strings.Contains(err.Error(), "model catalogue for provider=") {
+		provider := session.config.Provider
+		adapterConfig, configErr := c.Router.Provider(provider)
+		if configErr == nil {
+			if adapter, ok := c.Adapters[adapterConfig.Adapter]; ok {
+				if refreshErr := c.RefreshModels(context.Background(), provider); refreshErr == nil {
+					route, err = c.Router.Resolve(provider, model)
+				} else {
+					err = refreshErr
+				}
+			}
+		}
+	}
+	if err != nil { return nil, ModelRoute{}, err }
+	p, ok := c.Adapters[route.Adapter]
+	if !ok { return nil, ModelRoute{}, &RouteError{Provider: route.Provider, Model: route.Model, Adapter: route.Adapter} }
+	if kp, ok := p.(KeyedProvider); ok { key, err := session.APIKey(); if err != nil { return nil, ModelRoute{}, err }; p = kp.WithAPIKey(key) }
+	if config, err := c.Router.Provider(route.Provider); err == nil && config.BaseURL != "" { if ep, ok := p.(EndpointProvider); ok { p = ep.WithBaseURL(config.BaseURL) } }
+	return p, route, nil
+}
 type RouteError struct { Provider ProviderID; Model string; Adapter AdapterID }
 func (e *RouteError) Error() string { return "sdk: adapter not registered for provider=" + string(e.Provider) + " model=" + e.Model + " adapter=" + string(e.Adapter) }
 func (c *RouterClient) RefreshModels(ctx context.Context, provider ProviderID) error { config, err := c.Router.Provider(provider); if err != nil { return err }; adapter, ok := c.Adapters[config.Adapter]; if !ok { return &RouteError{Provider: provider, Adapter: config.Adapter} }; policy := c.Retry; if policy.MaxAttempts <= 0 { policy.MaxAttempts = 1 }; var last error; for attempt := 1; attempt <= policy.MaxAttempts; attempt++ { err = c.Router.RefreshModels(ctx, provider, adapter); if err == nil { return nil }; last = err; if attempt == policy.MaxAttempts || !retryable(err) { break }; if err := sleepBackoff(ctx, policy, attempt); err != nil { return err } }; return last }

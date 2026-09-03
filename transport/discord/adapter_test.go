@@ -2,6 +2,7 @@ package discord
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +49,53 @@ func TestDisplaySendsOnlyDiscordOutput(t *testing.T) {
 	}
 	if sender.channelID != "channel-1" || sender.content != "hello" {
 		t.Fatalf("unexpected send: channel=%q content=%q", sender.channelID, sender.content)
+	}
+}
+
+func TestDisplayFormatsToolTracesAsOneLineEach(t *testing.T) {
+	sender := &recordingMessagesSender{}
+	display := Display{Sender: sender}
+	metadata := map[string]string{"channel_id": "channel-1"}
+
+	if err := display.Display(context.Background(), sdk.Output{
+		Metadata: metadata,
+		Trace: &sdk.TraceEvent{
+			Stage: sdk.TraceToolCall,
+			ToolCall: &sdk.ToolCall{
+				ID:        "call-1",
+				Name:      "search_memory",
+				Arguments: "{\n  \"query\": \"hello\",\n  \"limit\": 8\n}",
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := display.Display(context.Background(), sdk.Output{
+		Metadata: metadata,
+		Trace: &sdk.TraceEvent{
+			Stage: sdk.TraceToolResult,
+			ToolResult: &sdk.ToolResult{
+				ID:      "call-1",
+				Content: "line one\nline two\n{\"matches\":3}",
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(sender.messages) != 2 {
+		t.Fatalf("expected one message per trace event, got=%d", len(sender.messages))
+	}
+	for i, message := range sender.messages {
+		if strings.ContainsAny(message, "\r\n") {
+			t.Fatalf("trace message %d contains a newline: %q", i, message)
+		}
+	}
+	if sender.messages[0] != "[AI tool_call] search_memory {\"limit\":8,\"query\":\"hello\"}" {
+		t.Fatalf("unexpected tool call message: %q", sender.messages[0])
+	}
+	if sender.messages[1] != "[AI tool_result] line one line two {\"matches\":3}" {
+		t.Fatalf("unexpected tool result message: %q", sender.messages[1])
 	}
 }
 
@@ -98,6 +146,13 @@ func (s *recordingSender) SendMessage(_ context.Context, channelID, content stri
 	return nil
 }
 
+type recordingMessagesSender struct{ messages []string }
+
+func (s *recordingMessagesSender) SendMessage(_ context.Context, _, content string) error {
+	s.messages = append(s.messages, content)
+	return nil
+}
+
 type statusRecordingSender struct {
 	sent        int
 	edited      int
@@ -125,15 +180,21 @@ func (s *statusRecordingSender) DeleteMessage(_ context.Context, _, _ string) er
 func (s *statusRecordingSender) updateRetryStatus(ctx context.Context, channelID, content string) error {
 	if s.statusID == "" {
 		id, err := s.SendStatusMessage(ctx, channelID, content)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		s.statusID = id
 		return nil
 	}
 	return s.EditMessage(ctx, channelID, s.statusID, content)
 }
 func (s *statusRecordingSender) clearRetryStatus(ctx context.Context, channelID string) error {
-	if s.statusID == "" { return nil }
-	if err := s.DeleteMessage(ctx, channelID, s.statusID); err != nil { return err }
+	if s.statusID == "" {
+		return nil
+	}
+	if err := s.DeleteMessage(ctx, channelID, s.statusID); err != nil {
+		return err
+	}
 	s.statusID = ""
 	return nil
 }

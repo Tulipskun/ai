@@ -91,7 +91,7 @@ func TestDisplayFormatsToolTracesAsOneLineEach(t *testing.T) {
 			t.Fatalf("trace message %d contains a newline: %q", i, message)
 		}
 	}
-	if sender.messages[0] != "[AI tool_call] search_memory {\"query\": \"hello\", \"limit\": 8}" {
+	if sender.messages[0] != "[AI tool_call] search_memory {\"limit\":8,\"query\":\"hello\"}" {
 		t.Fatalf("unexpected tool call message: %q", sender.messages[0])
 	}
 	if sender.messages[1] != "[AI tool_result] line one line two {\"matches\":3}" {

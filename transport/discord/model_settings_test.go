@@ -9,7 +9,7 @@ import (
 	"github.com/Tulipskun/ai/sdk"
 )
 
-func TestProviderSelectionComponentUsesSingleStringSelect(t *testing.T) {
+func TestProviderSelectionComponentDoesNotPreselectCurrentProvider(t *testing.T) {
 	data := providerSelectionMessage("123", "B.ai", []sdk.ProviderID{"B.ai", "google"})
 	if len(data.Components) != 1 {
 		t.Fatalf("components = %d, want 1", len(data.Components))
@@ -25,8 +25,10 @@ func TestProviderSelectionComponentUsesSingleStringSelect(t *testing.T) {
 	if selectMenu.CustomID != modelSettingsProviderSelect || len(selectMenu.Options) != 2 {
 		t.Fatalf("unexpected provider select: %+v", selectMenu)
 	}
-	if !selectMenu.Options[0].Default {
-		t.Fatal("current provider is not selected by default")
+	for _, option := range selectMenu.Options {
+		if option.Default {
+			t.Fatalf("provider %q is preselected; provider must remain selectable", option.Value)
+		}
 	}
 }
 

@@ -14,6 +14,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
+      - name: Prepare dependencies
+        run: |
+          set -e
+          go get github.com/bwmarrin/discordgo@v0.29.1-0.20260214123928-f43dd94faaac
       - name: Test
         run: |
           set +e

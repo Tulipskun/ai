@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	modelSettingsPrefix             = "model:settings:"
-	modelSettingsProviderStep       = "model:provider:"
-	modelSettingsProviderSelect     = "model:provider:select"
-	modelSettingsModelSelectPrefix  = "model:select:"
+	modelSettingsPrefix            = "model:settings:"
+	modelSettingsProviderStep      = "model:provider:"
+	modelSettingsProviderSelect    = "model:provider:select"
+	modelSettingsModelSelectPrefix = "model:select:"
 )
 
 type ModelSettingsHandler struct {
@@ -197,9 +197,9 @@ func modelSettingsModal(sessionID, provider, model, temperature, thinking, key s
 		Title: "Model Settings — Step 2",
 		Components: []discordgo.MessageComponent{
 			discordgo.Label{Label: "Model", Description: "Selected model", Component: discordgo.TextInput{CustomID: "model", Style: discordgo.TextInputShort, Value: model, Required: boolPtr(true), MaxLength: 100}},
-			discordgo.Label{Label: "Temperature", Description: "Enter a number from 0.0 to 1.0. Leave blank for default.", Component: discordgo.TextInput{CustomID: "temperature", Style: discordgo.TextInputShort, Value: normalizeTemperatureInput(temperature), Placeholder: "0.0 - 1.0", Required: boolPtr(false), MaxLength: 20}},
-			discordgo.Label{Label: "Thinking", Component: discordgo.SelectMenu{CustomID: "thinking", MenuType: discordgo.StringSelectMenu, Placeholder: "Select thinking level", Options: makeThinkingOptions(thinking), Required: boolPtr(true)}},
-			discordgo.Label{Label: "API Pool", Component: discordgo.SelectMenu{CustomID: "key", MenuType: discordgo.StringSelectMenu, Placeholder: "Select API key pool", Options: makeKeyOptions(resolvedKeyCount, key), Required: boolPtr(true)}},
+		discordgo.Label{Label: "Temperature", Description: "Enter a number from 0.0 to 1.0. Leave blank for default.", Component: discordgo.TextInput{CustomID: "temperature", Style: discordgo.TextInputShort, Value: normalizeTemperatureInput(temperature), Placeholder: "0.0 - 1.0", Required: boolPtr(false), MaxLength: 20}},
+		discordgo.Label{Label: "Thinking", Component: discordgo.SelectMenu{CustomID: "thinking", MenuType: discordgo.StringSelectMenu, Placeholder: "Select thinking level", Options: makeThinkingOptions(thinking), Required: boolPtr(true)}},
+		discordgo.Label{Label: "API Pool", Component: discordgo.SelectMenu{CustomID: "key", MenuType: discordgo.StringSelectMenu, Placeholder: "Select API key pool", Options: makeKeyOptions(resolvedKeyCount, key), Required: boolPtr(true)}},
 		},
 	}
 }
@@ -215,7 +215,7 @@ func makeProviderOptions(providers []sdk.ProviderID, current string) []discordgo
 		if value == "" || len(options) >= 25 {
 			continue
 		}
-		options = append(options, discordgo.SelectMenuOption{Label: value, Value: value, Default: value == current})
+		options = append(options, discordgo.SelectMenuOption{Label: value, Value: value, Default: false})
 	}
 	return options
 }

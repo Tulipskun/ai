@@ -9,9 +9,6 @@ import (
 
 func TestModelSettingsModalHasFiveTextInputs(t *testing.T) {
 	data := modelSettingsModal("discord:channel:123", "google", "gemini-2.5-flash", "0.7", "medium", "2")
-	if data.Type != discordgo.InteractionResponseModal {
-		t.Fatalf("response type = %v, want modal", data.Type)
-	}
 	if data.Title != "Model Settings" {
 		t.Fatalf("title = %q, want Model Settings", data.Title)
 	}

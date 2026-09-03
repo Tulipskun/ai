@@ -57,13 +57,78 @@ func TestLoopCommitsSessionBeforeDisplay(t *testing.T) {
 	}
 }
 
+func TestLoopDoesNotDuplicateTracedResponse(t *testing.T) {
+	session := NewSession(SessionConfig{ID: "s1", Provider: "test", Model: "model", KeyIndex: 0}, NewKeyPool("test-key"))
+	provider := &tracedLoopTestProvider{}
+	router := NewRouter()
+	router.Register(ModelRoute{Provider: "test", Model: "model", Adapter: AdapterOpenAI})
+	client := NewRouterClient(router)
+	client.RegisterAdapter(AdapterOpenAI, provider)
+
+	type displayEvent struct {
+		trace bool
+		text  string
+	}
+	events := make(chan displayEvent, 2)
+	display := DisplayFunc(func(_ context.Context, output Output) error {
+		event := displayEvent{trace: output.Trace != nil}
+		if output.Trace != nil && output.Trace.Response != nil && len(output.Trace.Response.Content) > 0 {
+			event.text = output.Trace.Response.Content[0].Text
+		} else if len(output.Content) > 0 {
+			event.text = output.Content[0].Text
+		}
+		events <- event
+		return nil
+	})
+
+	loop := &HarnessLoop{
+		Client:          client,
+		Agent:           &Agent{Client: client, MaxIterations: 2, MaxRetries: 0},
+		ResolveSession:  func(context.Context, Input) (*Session, error) { return session, nil },
+		Displays:        []Display{display},
+		DisplayTimeout:  time.Second,
+	}
+	if err := loop.Handle(context.Background(), Input{Source: "discord", SessionID: "s1", Turn: Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: "input"}}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case first := <-events:
+		if !first.trace || first.text != "response" {
+			t.Fatalf("unexpected traced response event: %+v", first)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("traced response was not dispatched")
+	}
+
+	select {
+	case extra := <-events:
+		t.Fatalf("duplicate final display: %+v", extra)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+type tracedLoopTestProvider struct{}
+
+func (tracedLoopTestProvider) Name() string { return "test" }
+func (tracedLoopTestProvider) Generate(context.Context, Request) (Response, error) {
+	return Response{Content: []ContentPart{{Type: ContentText, Text: "response"}}}, nil
+}
+func (tracedLoopTestProvider) Stream(context.Context, Request) (<-chan Event, error) {
+	ch := make(chan Event, 1)
+	ch <- Event{Type: EventDone}
+	close(ch)
+	return ch, nil
+}
+func (tracedLoopTestProvider) WithAPIKey(string) Provider { return tracedLoopTestProvider{} }
+
 func TestLoopContinuesWhenDisplayFails(t *testing.T) {
 	keys := NewKeyPool("test-key")
 	session := NewSession(SessionConfig{ID: "s1", Provider: ProviderOpenRouter, Model: "model", KeyIndex: 0}, keys)
 	loop := &HarnessLoop{
 		Client: newLoopTestClient(),
 		ResolveSession: func(context.Context, Input) (*Session, error) { return session, nil },
-		Displays: []Display{DisplayFunc(func(context.Context, Output) error { return context.Canceled })},
+		Displays:       []Display{DisplayFunc(func(context.Context, Output) error { return context.Canceled })},
 		DisplayTimeout: time.Second,
 	}
 

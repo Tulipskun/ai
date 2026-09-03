@@ -1,3 +1,4 @@
+.env
 .config/provider.json
 .config/transport.env
 .data/

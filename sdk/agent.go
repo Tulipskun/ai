@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -22,12 +23,14 @@ type Agent struct {
 	Tools         ToolExecutor
 	MaxIterations int
 	MaxRetries    int
+
+	interruptMu sync.Mutex
+	interrupts  map[string]context.CancelFunc
 }
 
 const (
-	defaultAgentMaxIterations = 20
-	defaultAgentMaxRetries    = 6
-	maxRetryCooldown          = 96 * time.Second
+	defaultAgentMaxRetries = 6
+	maxRetryCooldown        = 96 * time.Second
 )
 
 func (a *Agent) RunTurn(ctx context.Context, session *Session, user Turn, req Request) (Response, error) {
@@ -38,16 +41,49 @@ func (a *Agent) RunTurnWithTrace(ctx context.Context, session *Session, user Tur
 	return a.runTurn(ctx, session, user, req, trace)
 }
 
+func (a *Agent) Interrupt(sessionID string) bool {
+	if a == nil || sessionID == "" {
+		return false
+	}
+	a.interruptMu.Lock()
+	cancel, ok := a.interrupts[sessionID]
+	a.interruptMu.Unlock()
+	if !ok {
+		return false
+	}
+	cancel()
+	return true
+}
+
+func (a *Agent) beginInterrupt(ctx context.Context, sessionID string) (context.Context, func()) {
+	turnCtx, cancel := context.WithCancel(ctx)
+	if sessionID == "" {
+		return turnCtx, cancel
+	}
+	a.interruptMu.Lock()
+	if a.interrupts == nil {
+		a.interrupts = make(map[string]context.CancelFunc)
+	}
+	a.interrupts[sessionID] = cancel
+	a.interruptMu.Unlock()
+	return turnCtx, func() {
+		a.interruptMu.Lock()
+		if current, ok := a.interrupts[sessionID]; ok && fmt.Sprintf("%p", current) == fmt.Sprintf("%p", cancel) {
+			delete(a.interrupts, sessionID)
+		}
+		a.interruptMu.Unlock()
+		cancel()
+	}
+}
+
 func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Request, trace TraceFunc) (Response, error) {
 	if a == nil || a.Client == nil || session == nil {
 		return Response{}, errors.New("sdk: incomplete agent configuration")
 	}
+	ctx, cleanup := a.beginInterrupt(ctx, session.ID())
+	defer cleanup()
 
 	before := session.History()
-	limit := a.MaxIterations
-	if limit <= 0 {
-		limit = defaultAgentMaxIterations
-	}
 	retries := a.MaxRetries
 	if retries < 0 {
 		retries = 0
@@ -60,7 +96,7 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 	var lastErr error
 	for attempt := 0; attempt <= retries; attempt++ {
 		session.ReplaceHistory(before)
-		resp, err := a.runAttempt(ctx, session, user, req, limit, trace, &backoff)
+		resp, err := a.runAttempt(ctx, session, user, req, trace, &backoff)
 		if err == nil {
 			return resp, nil
 		}
@@ -83,6 +119,9 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 		}
 	}
 
+	if errors.Is(lastErr, context.Canceled) {
+		return Response{}, context.Canceled
+	}
 	return Response{}, fmt.Errorf("%w: attempts=%d: %w", ErrAgentRetriesExhausted, retries+1, lastErr)
 }
 
@@ -98,10 +137,13 @@ func (a *Agent) rotateKeyIfConfigured(session *Session) error {
 	return err
 }
 
-func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, limit int, trace TraceFunc, backoff *retryBackoff) (Response, error) {
+func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, trace TraceFunc, backoff *retryBackoff) (Response, error) {
 	session.Append(user)
 
-	for iteration := 0; iteration < limit; iteration++ {
+	for {
+		if err := ctx.Err(); err != nil {
+			return Response{}, err
+		}
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
 		if a.Tools != nil {
 			req.Tools = a.Tools.Definitions()
@@ -109,6 +151,9 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 
 		resp, err := a.Client.Generate(ctx, session, req)
 		if err != nil {
+			return Response{}, err
+		}
+		if err := ctx.Err(); err != nil {
 			return Response{}, err
 		}
 		if backoff != nil {
@@ -125,6 +170,9 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		}
 		if a.Tools == nil {
 			for _, call := range resp.ToolCalls {
+				if err := ctx.Err(); err != nil {
+					return Response{}, err
+				}
 				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolCall, ToolCall: cloneToolCall(call)})
 				result := ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
 				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolResult, ToolResult: cloneToolResult(result)})
@@ -133,8 +181,14 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 			continue
 		}
 		for _, call := range resp.ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return Response{}, err
+			}
 			traceEvent(ctx, trace, TraceEvent{Stage: TraceToolCall, ToolCall: cloneToolCall(call)})
 			result := a.Tools.Execute(ctx, call)
+			if err := ctx.Err(); err != nil {
+				return Response{}, err
+			}
 			if result.ID == "" {
 				result.ID = call.ID
 			}
@@ -143,8 +197,6 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 			session.Append(Turn{Role: RoleToolResult, ToolResult: &resultCopy})
 		}
 	}
-
-	return Response{}, fmt.Errorf("%w: limit=%d", ErrAgentMaxIterations, limit)
 }
 
 func traceEvent(ctx context.Context, trace TraceFunc, event TraceEvent) {

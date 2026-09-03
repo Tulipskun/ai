@@ -7,6 +7,25 @@ import (
 	"strings"
 )
 
+func (s *Session) SetProvider(provider ProviderID, keys *KeyPool) error {
+	provider = ProviderID(strings.TrimSpace(string(provider)))
+	if provider == "" {
+		return errors.New("sdk: provider is required")
+	}
+	if keys == nil {
+		return errors.New("sdk: provider has no key pool")
+	}
+	if _, err := keys.At(0); err != nil {
+		return err
+	}
+	return s.updateConfig(func(config *SessionConfig) error {
+		config.Provider = provider
+		config.KeyIndex = 0
+		s.keys = keys
+		return nil
+	})
+}
+
 func (s *Session) SetModel(model string) error {
 	model = strings.TrimSpace(model)
 	if model == "" {

@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/Tulipskun/ai/sdk"
 )
 
 func TestModelSettingsModalHasFiveTextInputs(t *testing.T) {
@@ -61,8 +60,8 @@ func TestModelSettingsModalUsesSafeDefaults(t *testing.T) {
 		input := actionRow.Components[0].(discordgo.TextInput)
 		values[input.CustomID] = input.Value
 	}
-	if values["thinking"] != string(sdk.ThinkingMedium) {
-		t.Fatalf("thinking default = %q, want medium", values["thinking"])
+	if values["thinking"] != "" {
+		t.Fatalf("thinking default = %q, want empty", values["thinking"])
 	}
 	if values["key"] != "1" {
 		t.Fatalf("key default = %q, want 1", values["key"])

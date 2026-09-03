@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	modelSettingsPrefix = "model:settings:"
-	modelSettingsProviderStep = "model:provider:"
-	modelSettingsProviderSelect = "model:provider:select"
-	modelSettingsModelSelectPrefix = "model:select:"
+	modelSettingsPrefix             = "model:settings:"
+	modelSettingsProviderStep       = "model:provider:"
+	modelSettingsProviderSelect     = "model:provider:select"
+	modelSettingsModelSelectPrefix  = "model:select:"
 )
 
 type ModelSettingsHandler struct {
@@ -86,7 +86,6 @@ func providerSelectionModal(channelID, current string, providers []sdk.ProviderI
 
 func providerSelectionMessage(channelID, current string, providers []sdk.ProviderID) *discordgo.InteractionResponseData {
 	return &discordgo.InteractionResponseData{
-		CustomID: modelSettingsProviderStep + channelID,
 		Content: "Select a provider:",
 		Flags: discordgo.MessageFlagsEphemeral,
 		Components: []discordgo.MessageComponent{
@@ -149,8 +148,8 @@ func (h *ModelSettingsHandler) handleProviderSelect(s *discordgo.Session, i *dis
 
 func (h *ModelSettingsHandler) handleModelSelect(s *discordgo.Session, i *discordgo.InteractionCreate, customID string) error {
 	value := strings.TrimPrefix(customID, modelSettingsModelSelectPrefix)
-	parts := strings.SplitN(value, ":", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	parts := strings.SplitN(value, ":", 3)
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 		return h.respondError(s, i, "invalid model selection")
 	}
 	channelID, providerText := parts[0], parts[1]

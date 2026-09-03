@@ -115,37 +115,48 @@ func (h *ModelSettingsHandler) handleSettingsSubmit(s *discordgo.Session, i *dis
 		return h.respondError(s, i, "model is required")
 	}
 
+	var temperature *float64
+	if temperatureText != "" {
+		value, parseErr := strconv.ParseFloat(temperatureText, 64)
+		if parseErr != nil || value < 0 || value > 1 {
+			return h.respondError(s, i, "temperature must be a number from 0.0 to 1.0")
+		}
+		temperature = &value
+	}
+
+	if thinking == "" {
+		thinking = string(sdk.ThinkingMedium)
+	}
+	if !validDiscordThinkingLevel(thinking) {
+		return h.respondError(s, i, fmt.Sprintf("invalid thinking level %q", thinking))
+	}
+
+	keyIndex, parseErr := strconv.Atoi(keyText)
+	if parseErr != nil || keyIndex < 1 {
+		return h.respondError(s, i, "API Pool must be a positive number")
+	}
+	keyIndex--
+	if _, err := keys.At(keyIndex); err != nil {
+		return h.respondError(s, i, err.Error())
+	}
+
 	if err := session.SetProvider(provider, keys); err != nil {
 		return h.respondError(s, i, err.Error())
 	}
 	if err := session.SetModel(model); err != nil {
 		return h.respondError(s, i, err.Error())
 	}
-
-	if temperatureText != "" {
-		value, err := strconv.ParseFloat(temperatureText, 64)
-		if err != nil || value < 0 || value > 1 {
-			return h.respondError(s, i, "temperature must be a number from 0.0 to 1.0")
-		}
-		if err := session.SetTemperature(value); err != nil {
+	if temperature == nil {
+		if err := session.ClearTemperature(); err != nil {
 			return h.respondError(s, i, err.Error())
 		}
-	} else if err := session.ClearTemperature(); err != nil {
+	} else if err := session.SetTemperature(*temperature); err != nil {
 		return h.respondError(s, i, err.Error())
-	}
-
-	if thinking == "" {
-		thinking = string(sdk.ThinkingMedium)
 	}
 	if err := session.SetThinkingLevel(sdk.ThinkingLevel(thinking)); err != nil {
 		return h.respondError(s, i, err.Error())
 	}
-
-	keyIndex, err := strconv.Atoi(keyText)
-	if err != nil || keyIndex < 1 {
-		return h.respondError(s, i, "API Pool must be a positive number")
-	}
-	if err := session.SetKeyIndex(keyIndex - 1); err != nil {
+	if err := session.SetKeyIndex(keyIndex); err != nil {
 		return h.respondError(s, i, err.Error())
 	}
 
@@ -173,6 +184,15 @@ func modalTextValues(i *discordgo.InteractionCreate) map[string]string {
 		}
 	}
 	return values
+}
+
+func validDiscordThinkingLevel(level string) bool {
+	switch sdk.ThinkingLevel(level) {
+	case sdk.ThinkingNone, sdk.ThinkingLow, sdk.ThinkingMedium, sdk.ThinkingHigh:
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *ModelSettingsHandler) hasProvider(provider sdk.ProviderID) bool {

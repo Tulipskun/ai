@@ -8,13 +8,11 @@ import (
 	"github.com/Tulipskun/ai/sdk"
 )
 
-// SessionManager owns transport-independent session identity and durable
-// session instances. The transport decides the SessionID; the manager does not
-// interpret Discord, Telegram, Web, or other source-specific identifiers.
 type SessionManager struct {
 	path string
 	base sdk.SessionConfig
 	keys *sdk.KeyPool
+	providerKeys map[sdk.ProviderID]*sdk.KeyPool
 
 	mu       sync.Mutex
 	sessions map[string]*sdk.Session
@@ -22,6 +20,26 @@ type SessionManager struct {
 
 func NewSessionManager(path string, base sdk.SessionConfig, keys *sdk.KeyPool) *SessionManager {
 	return &SessionManager{path: path, base: base, keys: keys, sessions: make(map[string]*sdk.Session)}
+}
+
+func NewSessionManagerWithProviders(path string, base sdk.SessionConfig, providers []sdk.ProviderConfig) *SessionManager {
+	providerKeys := make(map[sdk.ProviderID]*sdk.KeyPool, len(providers))
+	var fallback *sdk.KeyPool
+	for _, provider := range providers {
+		if provider.Keys == nil {
+			continue
+		}
+		providerKeys[provider.ID] = provider.Keys
+		if fallback == nil {
+			fallback = provider.Keys
+		}
+	}
+	if base.Provider != "" {
+		if keys := providerKeys[base.Provider]; keys != nil {
+			fallback = keys
+		}
+	}
+	return &SessionManager{path: path, base: base, keys: fallback, providerKeys: providerKeys, sessions: make(map[string]*sdk.Session)}
 }
 
 func (m *SessionManager) Resolve(ctx context.Context, input sdk.Input) (*sdk.Session, error) {
@@ -43,7 +61,11 @@ func (m *SessionManager) Resolve(ctx context.Context, input sdk.Input) (*sdk.Ses
 
 	config := m.base
 	config.ID = input.SessionID
-	session, err := sdk.OpenSession(m.path, config, m.keys)
+	keys := m.keys
+	if providerKeys := m.providerKeys[config.Provider]; providerKeys != nil {
+		keys = providerKeys
+	}
+	session, err := sdk.OpenSession(m.path, config, keys)
 	if err != nil {
 		return nil, err
 	}

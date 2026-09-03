@@ -46,7 +46,7 @@ func (h *ModelSettingsHandler) respondSettings(s *discordgo.Session, i *discordg
 	config := session.Config()
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseModal,
-		Data: modelSettingsModal(session.ID(), config.Provider, config.Model, temperatureLabel(config.Temperature), string(config.ThinkingLevel), strconv.Itoa(config.KeyIndex+1)),
+		Data: modelSettingsModal(session.ID(), string(config.Provider), config.Model, temperatureLabel(config.Temperature), string(config.ThinkingLevel), strconv.Itoa(config.KeyIndex+1)),
 	})
 }
 

@@ -55,9 +55,6 @@ func modelSettingsModal(sessionID, provider, model, temperature, thinking, key s
 	if temperature == "default" {
 		temperature = ""
 	}
-	if thinking == "" {
-		thinking = string(sdk.ThinkingMedium)
-	}
 	if key == "0" || key == "" {
 		key = "1"
 	}
@@ -124,10 +121,7 @@ func (h *ModelSettingsHandler) handleSettingsSubmit(s *discordgo.Session, i *dis
 		temperature = &value
 	}
 
-	if thinking == "" {
-		thinking = string(sdk.ThinkingMedium)
-	}
-	if !validDiscordThinkingLevel(thinking) {
+	if thinking != "" && !validDiscordThinkingLevel(thinking) {
 		return h.respondError(s, i, fmt.Sprintf("invalid thinking level %q", thinking))
 	}
 
@@ -153,7 +147,11 @@ func (h *ModelSettingsHandler) handleSettingsSubmit(s *discordgo.Session, i *dis
 	} else if err := session.SetTemperature(*temperature); err != nil {
 		return h.respondError(s, i, err.Error())
 	}
-	if err := session.SetThinkingLevel(sdk.ThinkingLevel(thinking)); err != nil {
+	if thinking == "" {
+		if err := session.ClearThinkingLevel(); err != nil {
+			return h.respondError(s, i, err.Error())
+		}
+	} else if err := session.SetThinkingLevel(sdk.ThinkingLevel(thinking)); err != nil {
 		return h.respondError(s, i, err.Error())
 	}
 	if err := session.SetKeyIndex(keyIndex); err != nil {

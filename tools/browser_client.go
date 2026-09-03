@@ -121,7 +121,16 @@ func (c *BrowserClient) Start(ctx context.Context) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start browser worker: %w", err)
 	}
-	go io.Copy(io.Discard, stderr)
+
+	stderrCh := make(chan string, 1)
+	go func() {
+		data, err := io.ReadAll(stderr)
+		if err != nil {
+			stderrCh <- fmt.Sprintf("read stderr: %v", err)
+			return
+		}
+		stderrCh <- strings.TrimSpace(string(data))
+	}()
 
 	lineCh := make(chan struct {
 		line string
@@ -158,7 +167,7 @@ func (c *BrowserClient) Start(ctx context.Context) error {
 		if item.err != nil {
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
-			return fmt.Errorf("browser worker startup: %w", item.err)
+			return fmt.Errorf("browser worker startup: %w", startupWorkerError(item.err, stderrCh))
 		}
 		var ready struct {
 			Ready bool   `json:"ready"`
@@ -186,6 +195,14 @@ func (c *BrowserClient) Start(ctx context.Context) error {
 		go c.watchProcess(cmd, done)
 		return nil
 	}
+}
+
+func startupWorkerError(fallback error, stderrCh <-chan string) error {
+	stderr := <-stderrCh
+	if stderr != "" {
+		return errors.New(stderr)
+	}
+	return fallback
 }
 
 func (c *BrowserClient) watchProcess(cmd *exec.Cmd, done chan struct{}) {

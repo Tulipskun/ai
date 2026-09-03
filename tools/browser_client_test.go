@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -66,5 +67,24 @@ func TestBrowserClientHonorsContextTimeout(t *testing.T) {
 	defer cancel()
 	if err := client.Call(ctx, "browser.snapshot", nil, nil); err == nil {
 		t.Fatal("expected context timeout")
+	}
+}
+
+func TestBrowserClientReportsWorkerStderrOnStartupFailure(t *testing.T) {
+	dir := t.TempDir()
+	worker := dir + "/worker.sh"
+	if err := os.WriteFile(worker, []byte("#!/bin/sh\necho 'worker failed: chromium unavailable' >&2\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	client := NewBrowserClient(BrowserClientConfig{
+		NodeCommand:    "/bin/sh",
+		WorkerPath:     worker,
+		WorkerDir:      dir,
+		StartupTimeout: time.Second,
+	})
+	err := client.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "worker failed: chromium unavailable") {
+		t.Fatalf("error = %v", err)
 	}
 }

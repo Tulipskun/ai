@@ -83,7 +83,7 @@ func TestLoopDoesNotDuplicateTracedResponse(t *testing.T) {
 
 	loop := &HarnessLoop{
 		Client:          client,
-		Agent:           &Agent{Client: client, MaxIterations: 2, MaxRetries: 0},
+		Agent:           &Agent{Client: client, MaxRetries: 0},
 		ResolveSession:  func(context.Context, Input) (*Session, error) { return session, nil },
 		Displays:        []Display{display},
 		DisplayTimeout:  time.Second,

@@ -117,9 +117,15 @@ func (d Display) displayTrace(ctx context.Context, channelID string, trace sdk.T
 	var text string
 	switch trace.Stage {
 	case sdk.TraceToolCall:
-		text = formatTraceJSON("[AI tool_call]", trace.ToolCall)
+		if trace.ToolCall == nil {
+			return nil
+		}
+		text = formatToolCall(trace.ToolCall)
 	case sdk.TraceToolResult:
-		text = formatTraceJSON("[AI tool_result]", trace.ToolResult)
+		if trace.ToolResult == nil {
+			return nil
+		}
+		text = formatToolResult(trace.ToolResult)
 	case sdk.TraceResponse:
 		text = responseContent(trace.Response)
 		if status, ok := d.Sender.(retryStatusManager); ok {
@@ -150,19 +156,56 @@ func (d Display) displayTrace(ctx context.Context, channelID string, trace sdk.T
 	return nil
 }
 
+const maxToolTraceLength = 500
+
+func formatToolCall(call *sdk.ToolCall) string {
+	args := compactToolArguments(call.Arguments)
+	if args == "" {
+		return truncateOneLine(fmt.Sprintf("[AI tool_call] %s", call.Name), maxToolTraceLength)
+	}
+	return truncateOneLine(fmt.Sprintf("[AI tool_call] %s %s", call.Name, args), maxToolTraceLength)
+}
+
+func formatToolResult(result *sdk.ToolResult) string {
+	label := "[AI tool_result]"
+	if result.IsError {
+		label = "[AI tool_result error]"
+	}
+	return truncateOneLine(fmt.Sprintf("%s %s", label, result.Content), maxToolTraceLength)
+}
+
+func compactToolArguments(arguments string) string {
+	arguments = strings.TrimSpace(arguments)
+	if arguments == "" {
+		return ""
+	}
+	var value any
+	if json.Unmarshal([]byte(arguments), &value) == nil {
+		if data, err := json.Marshal(value); err == nil {
+			return string(data)
+		}
+	}
+	return oneLine(arguments)
+}
+
+func truncateOneLine(text string, max int) string {
+	text = oneLine(text)
+	if max <= 0 || len([]rune(text)) <= max {
+		return text
+	}
+	runes := []rune(text)
+	return string(runes[:max-1]) + "…"
+}
+
+func oneLine(text string) string {
+	return strings.Join(strings.Fields(text), " ")
+}
+
 func formatDuration(d time.Duration) string {
 	if d < time.Second {
 		return d.Round(time.Millisecond).String()
 	}
 	return d.Round(time.Second).String()
-}
-
-func formatTraceJSON(label string, value any) string {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return ""
-	}
-	return fmt.Sprintf("%s\n```json\n%s\n```", label, data)
 }
 
 func responseContent(response *sdk.Response) string {

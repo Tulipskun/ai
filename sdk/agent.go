@@ -19,10 +19,9 @@ type ToolExecutor interface {
 }
 
 type Agent struct {
-	Client        *RouterClient
-	Tools         ToolExecutor
-	MaxIterations int
-	MaxRetries    int
+	Client     *RouterClient
+	Tools      ToolExecutor
+	MaxRetries int
 
 	interruptMu sync.Mutex
 	interrupts  map[string]context.CancelFunc
@@ -68,9 +67,7 @@ func (a *Agent) beginInterrupt(ctx context.Context, sessionID string) (context.C
 	a.interruptMu.Unlock()
 	return turnCtx, func() {
 		a.interruptMu.Lock()
-		if current, ok := a.interrupts[sessionID]; ok && fmt.Sprintf("%p", current) == fmt.Sprintf("%p", cancel) {
-			delete(a.interrupts, sessionID)
-		}
+		delete(a.interrupts, sessionID)
 		a.interruptMu.Unlock()
 		cancel()
 	}
@@ -119,8 +116,8 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 		}
 	}
 
-	if errors.Is(lastErr, context.Canceled) {
-		return Response{}, context.Canceled
+	if errors.Is(lastErr, context.Canceled) || errors.Is(lastErr, context.DeadlineExceeded) {
+		return Response{}, lastErr
 	}
 	return Response{}, fmt.Errorf("%w: attempts=%d: %w", ErrAgentRetriesExhausted, retries+1, lastErr)
 }

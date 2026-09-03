@@ -14,24 +14,5 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
-      - name: Prepare dependencies
-        run: |
-          set -e
-          go get github.com/bwmarrin/discordgo@v0.29.1-0.20260214123928-f43dd94faaac
-      - name: Test
-        run: |
-          set +e
-          go test ./... -timeout 2m 2>&1 | tee test.log
-          status=${PIPESTATUS[0]}
-          go vet ./... 2>&1 | tee vet.log
-          vet_status=${PIPESTATUS[0]}
-          exit $((status != 0 ? status : vet_status))
-      - name: Upload diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: go-diagnostics
-          path: |
-            test.log
-            vet.log
-            go.sum
+      - run: go test ./... -timeout 2m
+      - run: go vet ./...

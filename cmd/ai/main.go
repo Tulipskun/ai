@@ -39,6 +39,8 @@ func run() error {
 	if browserConfig.Enabled { if err := rt.StartBrowser(ctx, browserConfig); err != nil { return fmt.Errorf("start browser: %w", err) }; defer rt.CloseBrowser() }
 	transportConfig, err := transport.LoadConfig(); if err != nil { return err }
 	if !transportConfig.DiscordEnabled && !transportConfig.CLIEnabled { log.Printf("no transports enabled; set DISCORD_BOT_TOKEN or AI_CLI_ENABLED=true"); return nil }
+	workspace := envOr("AI_WORKSPACE", ".")
+	agent, err := newAgent(rt.Client, workspace, rt.Browser, browserConfig.AllowPrivate); if err != nil { return err }
 	providerKeys := make(map[sdk.ProviderID]*sdk.KeyPool, len(rt.ProviderConfigs)); for _, provider := range rt.ProviderConfigs { providerKeys[provider.ID] = provider.Keys }
 	var sources []sdk.InputSource
 	var displays []sdk.Display
@@ -47,14 +49,11 @@ func run() error {
 		modelSettings := &discordtransport.ModelSettingsHandler{ResolveSession: sessions.Resolve, Providers: rt.Providers, ProviderKeys: providerKeys, Models: func(ctx context.Context, provider sdk.ProviderID) ([]sdk.Model, error) { models := rt.Router.Models(provider); if len(models) == 0 { if err := rt.RefreshProvider(ctx, provider); err != nil { return nil, err }; models = rt.Router.Models(provider) }; return models, nil }}
 		discord.ConfigureModelSettings(modelSettings)
 		discord.ConfigureProviderSettings(&discordtransport.ProviderSettingsHandler{Adapters: providerManager.Adapters(), Upsert: func(ctx context.Context, name, adapter, endpoint, apiKey string) error { if err := providerManager.Upsert(ctx, name, adapter, endpoint, apiKey); err != nil { return err }; config, err := rt.Router.Provider(sdk.ProviderID(name)); if err != nil { return err }; sessions.RegisterProvider(config.ID, config.Keys); providerKeys[config.ID] = config.Keys; modelSettings.Providers = providerManager.Providers(); modelSettings.ProviderKeys = providerKeys; return nil }})
-		workspace := envOr("AI_WORKSPACE", "."); agent, err := newAgent(rt.Client, workspace, rt.Browser, browserConfig.AllowPrivate); if err != nil { return err }
 		discord.ConfigureStop(agent.Interrupt)
 		if err := discord.Start(ctx); err != nil { return err }
 		sources = append(sources, discord)
 		displays = append(displays, discord)
 	}
-	workspace := envOr("AI_WORKSPACE", ".")
-	agent, err := newAgent(rt.Client, workspace, rt.Browser, browserConfig.AllowPrivate); if err != nil { return err }
 	if transportConfig.CLIEnabled {
 		if providerID == "" || modelID == "" { return errors.New("cli: AI_PROVIDER and AI_MODEL are required (AI_PROVIDER may be omitted when exactly one provider is configured)") }
 		cli := clitransport.New(os.Stdin, os.Stdout)

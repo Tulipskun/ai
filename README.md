@@ -4,6 +4,33 @@ Prototype canonical Go SDK for an AI Harness.
 
 The SDK keeps conversation history in a provider-neutral format and translates it at the provider boundary. It separates the **logical provider** used by a session from the **adapter** used to speak a provider API.
 
+## CLI
+
+The application entry point is `cmd/ai`. Build it as the `ai` command and start the Harness with:
+
+```bash
+go build -o ai ./cmd/ai
+./ai start
+```
+
+For development, the same command can be run with:
+
+```bash
+go run ./cmd/ai start
+```
+
+The command accepts `start` explicitly. Running `ai` with no subcommand remains equivalent to `ai start` for backwards compatibility. `ai --help` shows the available commands.
+
+To use the terminal as an input transport, enable it in `.config/transport.example.env` or the runtime environment:
+
+```text
+AI_CLI_ENABLED=true
+AI_MODEL=your-model
+AI_PROVIDER=your-provider
+```
+
+Then type one message per line. The CLI transport uses the `cli:default` session. Discord and CLI can be enabled at the same time and share the same Harness/Agent runtime.
+
 ## Harness selection flow
 
 ```text

@@ -16,7 +16,6 @@ const (
 
 type ContentType string
 const ContentText ContentType = "text"
-
 type ContentPart struct { Type ContentType `json:"type"`; Text string `json:"text,omitempty"` }
 type Message struct { Role Role `json:"role"`; Content []ContentPart `json:"content,omitempty"` }
 type Tool struct { Name string `json:"name"`; Description string `json:"description,omitempty"`; InputSchema any `json:"input_schema,omitempty"` }
@@ -52,10 +51,11 @@ type EventType string
 const (
 	EventText EventType = "text"
 	EventToolCall EventType = "tool_call"
+	EventReasoning EventType = "reasoning"
 	EventDone EventType = "done"
 	EventError EventType = "error"
 )
-type Event struct { Type EventType `json:"type"`; Text string `json:"text,omitempty"`; ToolCall *ToolCall `json:"tool_call,omitempty"`; Response *Response `json:"response,omitempty"`; Err error `json:"-"` }
+type Event struct { Type EventType `json:"type"`; Text string `json:"text,omitempty"`; ToolCall *ToolCall `json:"tool_call,omitempty"`; Reasoning *ReasoningState `json:"reasoning,omitempty"`; Response *Response `json:"response,omitempty"`; Err error `json:"-"` }
 
 type Provider interface { Name() string; Generate(context.Context, Request) (Response, error); Stream(context.Context, Request) (<-chan Event, error) }
 type ProviderID string
@@ -74,7 +74,7 @@ type ModelRoute struct { Provider ProviderID `json:"provider"`; Model string `js
 type SessionConfig struct { ID string `json:"id"`; Provider ProviderID `json:"provider"`; Model string `json:"model"`; KeyIndex int `json:"key_index"`; ThinkingLevel ThinkingLevel `json:"thinking_level,omitempty"`; Temperature *float64 `json:"temperature,omitempty"` }
 
 type RetryPolicy struct { MaxAttempts int; InitialBackoff time.Duration; MaxBackoff time.Duration }
-func DefaultRetryPolicy() RetryPolicy { return RetryPolicy{MaxAttempts: 1, InitialBackoff: 250 * time.Millisecond, MaxBackoff: 60 * time.Second} }
+func DefaultRetryPolicy() RetryPolicy { return RetryPolicy{MaxAttempts: 3, InitialBackoff: 250 * time.Millisecond, MaxBackoff: 4 * time.Second} }
 type HTTPStatusError interface { error; HTTPStatusCode() int }
 type RetryAfterError interface { error; RetryAfter() time.Duration }
 func (r Request) RequestProvider() ProviderID { return ProviderID(r.Provider) }

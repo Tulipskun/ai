@@ -54,7 +54,7 @@ The runtime config contains only provider name, HTTP endpoint, and API key array
 
 Retries are deliberately separate from key rotation. The selected session key never changes during a retry.
 
-The default policy is 3 attempts with exponential backoff, capped at 4 seconds. HTTP 429, 500, 502, 503, and 504 are retryable. 400/401/403/404 and context cancellation are not retried. Model discovery uses the same policy.
+The default policy is 3 attempts with exponential backoff, capped at 4 seconds. HTTP 404 is the only explicitly non-retryable HTTP status; provider-specific 400 responses are retryable. Context cancellation and deadline errors are not retried. Model discovery uses the same policy.
 
 Streaming is retried only when the failure happens before the stream has emitted an event. Once output has started, the stream is never replayed automatically because replaying it could duplicate user-visible output.
 
@@ -126,9 +126,9 @@ The coding registry exposes:
 - `browser_get_text`
 - `browser_screenshot`
 
-File operations are restricted to the configured workspace root. `edit_file` requires exactly one match for `old_text`, preventing an ambiguous edit from silently modifying multiple locations.
+File operations are restricted to the configured workspace root, including symlink-aware path validation. `edit_file` requires exactly one match for `old_text`, preventing an ambiguous edit from silently modifying multiple locations.
 
-`run_command` is synchronous. For long-running work, `run_job` starts the command asynchronously and returns a job ID. The agent can call `check_job` later to inspect state/output, or `close_job` to terminate a running job. Job state is process-local and in-memory in this first implementation, and captured output is bounded.
+`run_command` is synchronous. For long-running work, `run_job` starts the command asynchronously and returns a job ID. The agent can call `check_job` later to inspect state/output, or `close_job` to terminate a running job. Job metadata is persisted under `.ai/jobs/jobs.json`; jobs that were running when the process stopped are restored as failed because their OS process cannot be safely resumed. Captured output is bounded.
 
 The agent intentionally has no `time` tool. Timestamp information can be attached to each request by the host/application layer.
 
@@ -173,7 +173,7 @@ AI_BROWSER_HEADLESS=true
 
 See `.config/transport.example.env` for all browser settings.
 
-Web access has SSRF protection by default. Loopback, private, link-local, IPv6 local/private, and metadata-style destinations are blocked. Set `AI_BROWSER_ALLOW_PRIVATE=true` only when access to private network services is intentionally required.
+Web access has SSRF protection by default. Loopback, private, link-local, IPv6 local/private, and metadata-style destinations are blocked consistently by the Go and browser-worker policies. Set `AI_BROWSER_ALLOW_PRIVATE=true` only when access to private network services is intentionally required.
 
 Webpage content is untrusted external data. It must not be treated as system or tool instructions.
 
@@ -237,10 +237,11 @@ Required environment variables:
 
 ```text
 DISCORD_BOT_TOKEN=...
+DISCORD_OWNER_ID=...
 AI_MODEL=...
 ```
 
-`AI_PROVIDER` is required when `.config/provider.json` contains more than one provider. If exactly one provider is configured, it can be omitted. Optional variables include `AI_SYSTEM_PROMPT`, `AI_THINKING_LEVEL`, `AI_TEMPERATURE`, `AI_MAX_OUTPUT_TOKENS`, `AI_SESSION_DB`, and `AI_PROVIDER_CONFIG`.
+`DISCORD_OWNER_ID` is the single Discord user ID authorized to use the bot's interactions. `AI_PROVIDER` is required when `.config/provider.json` contains more than one provider. If exactly one provider is configured, it can be omitted. Optional variables include `AI_SYSTEM_PROMPT`, `AI_THINKING_LEVEL`, `AI_TEMPERATURE`, `AI_MAX_OUTPUT_TOKENS`, `AI_SESSION_DB`, and `AI_PROVIDER_CONFIG`.
 
 The example is `.config/transport.example.env`. Runtime session databases are stored under `.data/` by default and are ignored by Git.
 
@@ -275,6 +276,7 @@ API keys are scoped to a logical provider and a session pins one key by index. T
 - tool definitions
 - normalized usage and cache metadata
 - explicit logical provider
+- provider-native reasoning state
 
 Provider-specific request/response shapes do not leak into the Harness layer.
 
@@ -285,3 +287,5 @@ The prototype contains OpenAI, Anthropic, and Gemini wire adapters. Each adapter
 Provider keys for direct adapter construction are read from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `GEMINI_API_KEY` when not passed explicitly.
 
 Key rotation is intentionally **not** implemented yet. Retries reuse the same selected key.
+
+Streaming preserves provider-native reasoning/tool state through the canonical `EventReasoning` and `EventToolCall` events. Anthropic accumulates partial tool JSON per content block; OpenAI reasoning-summary deltas and Gemini thought parts are surfaced as reasoning events.

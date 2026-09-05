@@ -28,7 +28,7 @@ type Agent struct {
 }
 
 const (
-	defaultAgentMaxRetries = 6
+	defaultAgentMaxRetries = 2
 	maxRetryCooldown        = 96 * time.Second
 )
 
@@ -103,12 +103,6 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 			break
 		}
 
-		if isRateLimitError(err) {
-			if err := a.rotateKeyIfConfigured(session); err != nil {
-				return Response{}, fmt.Errorf("%w: rotate key: %v", ErrAgentRetriesExhausted, err)
-			}
-		}
-
 		delay := backoff.Delay(err)
 		traceEvent(ctx, trace, TraceEvent{Stage: TraceRetryWait, Err: err, RetryAfter: delay})
 		if err := waitRetry(ctx, delay); err != nil {
@@ -120,18 +114,6 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 		return Response{}, lastErr
 	}
 	return Response{}, fmt.Errorf("%w: attempts=%d: %w", ErrAgentRetriesExhausted, retries+1, lastErr)
-}
-
-func (a *Agent) rotateKeyIfConfigured(session *Session) error {
-	provider, err := a.Client.Router.Provider(session.Config().Provider)
-	if err != nil || !provider.RotateKeys {
-		return err
-	}
-	if provider.Keys == nil || provider.Keys.Len() < 2 {
-		return nil
-	}
-	_, err = session.RotateAPIKey()
-	return err
 }
 
 func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, trace TraceFunc, backoff *retryBackoff) (Response, error) {

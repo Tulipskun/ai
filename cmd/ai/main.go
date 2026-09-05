@@ -11,14 +11,12 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
 	"github.com/Tulipskun/ai/runtime"
 	"github.com/Tulipskun/ai/sdk"
 	"github.com/Tulipskun/ai/tools"
 	"github.com/Tulipskun/ai/transport"
 	discordtransport "github.com/Tulipskun/ai/transport/discord"
 )
-
 func main() { if err := run(); err != nil && !errors.Is(err, context.Canceled) { log.Fatal(err) } }
 func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM); defer stop()
@@ -33,7 +31,7 @@ func run() error {
 	if browserConfig.Enabled { if err := rt.StartBrowser(ctx, browserConfig); err != nil { return fmt.Errorf("start browser: %w", err) }; defer rt.CloseBrowser() }
 	transportConfig, err := transport.LoadConfig(); if err != nil { return err }
 	if !transportConfig.DiscordEnabled { log.Printf("no transports enabled; set DISCORD_BOT_TOKEN or add another transport adapter"); return nil }
-	discord, err := discordtransport.NewGateway(transportConfig.DiscordToken); if err != nil { return err }; defer discord.Close(context.Background())
+	discord, err := discordtransport.NewGateway(transportConfig.DiscordToken); if err != nil { return err }; defer discord.Close(context.Background()); discord.ConfigureAuthorizedUser(transportConfig.DiscordOwnerID)
 	providerKeys := make(map[sdk.ProviderID]*sdk.KeyPool, len(rt.ProviderConfigs)); for _, provider := range rt.ProviderConfigs { providerKeys[provider.ID] = provider.Keys }
 	modelSettings := &discordtransport.ModelSettingsHandler{ResolveSession: sessions.Resolve, Providers: rt.Providers, ProviderKeys: providerKeys, Models: func(ctx context.Context, provider sdk.ProviderID) ([]sdk.Model, error) { models := rt.Router.Models(provider); if len(models) == 0 { if err := rt.RefreshProvider(ctx, provider); err != nil { return nil, err }; models = rt.Router.Models(provider) }; return models, nil }}
 	discord.ConfigureModelSettings(modelSettings)

@@ -7,9 +7,10 @@ import (
 )
 
 type Config struct {
-	DiscordToken     string
-	DiscordOwnerID   string
-	DiscordEnabled   bool
+	DiscordToken   string
+	DiscordOwnerID string
+	DiscordEnabled bool
+	CLIEnabled     bool
 }
 
 func LoadConfig() (Config, error) {
@@ -18,5 +19,6 @@ func LoadConfig() (Config, error) {
 	if token != "" && ownerID == "" {
 		return Config{}, errors.New("transport: DISCORD_OWNER_ID is required when Discord is enabled")
 	}
-	return Config{DiscordToken: token, DiscordOwnerID: ownerID, DiscordEnabled: token != ""}, nil
+	cliEnabled := strings.EqualFold(strings.TrimSpace(os.Getenv("AI_CLI_ENABLED")), "true")
+	return Config{DiscordToken: token, DiscordOwnerID: ownerID, DiscordEnabled: token != "", CLIEnabled: cliEnabled}, nil
 }

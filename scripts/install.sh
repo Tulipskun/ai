@@ -25,19 +25,17 @@ case "$OS" in
   *) die "unsupported operating system: $OS" ;;
 esac
 
-# Prefer a directory already on PATH so `ai` works immediately after the
-# installer exits. Fall back to ~/.local/bin when no PATH directory is writable.
+# Prefer standard executable directories. Do not select arbitrary PATH entries
+# such as package-manager directories (for example ~/.bun/bin) just because
+# they happen to be writable.
 if [[ -n "${AI_BIN_DIR:-}" ]]; then
   BIN_DIR="$AI_BIN_DIR"
+elif [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
+  BIN_DIR="/usr/local/bin"
+elif [[ -d "${HOME}/.local/bin" && -w "${HOME}/.local/bin" ]]; then
+  BIN_DIR="${HOME}/.local/bin"
 else
-  BIN_DIR=""
-  IFS=: read -r -a PATH_DIRS <<< "${PATH:-}"
-  for dir in "${PATH_DIRS[@]}"; do
-    [[ -n "$dir" && -d "$dir" && -w "$dir" ]] || continue
-    BIN_DIR="$dir"
-    break
-  done
-  BIN_DIR="${BIN_DIR:-${HOME}/.local/bin}"
+  BIN_DIR="${HOME}/.local/bin"
 fi
 
 mkdir -p "$INSTALL_ROOT" "$BIN_DIR"

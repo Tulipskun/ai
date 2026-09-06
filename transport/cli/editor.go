@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 var (
@@ -22,7 +23,6 @@ type LineEditor struct {
 	Prompt      func() string
 
 	history []string
-	cursor  int
 }
 
 func NewLineEditor(in *os.File, out io.Writer) *LineEditor {
@@ -81,7 +81,6 @@ func (e *LineEditor) trimHistory() {
 	if len(e.history) > maxEntries {
 		e.history = e.history[len(e.history)-maxEntries:]
 	}
-	e.cursor = len(e.history)
 }
 
 func (e *LineEditor) ReadLine(ctxDone <-chan struct{}) (string, error) {
@@ -114,7 +113,7 @@ func (e *LineEditor) ReadLine(ctxDone <-chan struct{}) (string, error) {
 	for {
 		select {
 		case <-ctxDone:
-			return "", contextDoneError()
+			return "", errors.New("cli: context canceled")
 		default:
 		}
 		key, err := readKey(e.In)
@@ -203,7 +202,7 @@ func (e *LineEditor) readFallback(prompt string, ctxDone <-chan struct{}) (strin
 	for {
 		select {
 		case <-ctxDone:
-			return "", contextDoneError()
+			return "", errors.New("cli: context canceled")
 		default:
 		}
 		line, err := reader.ReadString('\n')
@@ -221,8 +220,6 @@ func (e *LineEditor) readFallback(prompt string, ctxDone <-chan struct{}) (strin
 		fmt.Fprint(e.Out, prompt)
 	}
 }
-
-func contextDoneError() error { return errors.New("cli: context canceled") }
 
 type keyKind int
 
@@ -249,11 +246,11 @@ type key struct {
 }
 
 func readKey(in *os.File) (key, error) {
-	var one [1]byte
-	if _, err := in.Read(one[:]); err != nil {
+	var first [1]byte
+	if _, err := in.Read(first[:]); err != nil {
 		return key{}, err
 	}
-	switch one[0] {
+	switch first[0] {
 	case 3:
 		return key{kind: keyInterrupt}, nil
 	case 4:
@@ -270,8 +267,36 @@ func readKey(in *os.File) (key, error) {
 		return key{kind: keyCtrlK}, nil
 	case 27:
 		return readEscape(in)
+	}
+
+	if first[0] < utf8.RuneSelf {
+		return key{kind: keyText, r: rune(first[0])}, nil
+	}
+	size := utf8RuneSize(first[0])
+	buf := make([]byte, size)
+	buf[0] = first[0]
+	for i := 1; i < size; i++ {
+		if _, err := in.Read(buf[i : i+1]); err != nil {
+			return key{}, err
+		}
+	}
+	r, decoded := utf8.DecodeRune(buf)
+	if r == utf8.RuneError && decoded == 1 {
+		return key{kind: keyText, r: rune(first[0])}, nil
+	}
+	return key{kind: keyText, r: r}, nil
+}
+
+func utf8RuneSize(b byte) int {
+	switch {
+	case b < 0xC0:
+		return 1
+	case b < 0xE0:
+		return 2
+	case b < 0xF0:
+		return 3
 	default:
-		return key{kind: keyText, r: rune(one[0])}, nil
+		return 4
 	}
 }
 

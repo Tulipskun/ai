@@ -62,13 +62,22 @@ func runBackground() error {
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil { _ = logFile.Close(); return err }
-	_ = logFile.Close()
-	_ = cmd.Process.Release()
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0o644); err != nil {
-		_ = syscall.Kill(cmd.Process.Pid, syscall.SIGTERM)
+	pid := cmd.Process.Pid
+	if pid <= 0 {
+		_ = logFile.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Process.Release()
+		return fmt.Errorf("failed to start ai daemon: invalid pid %d", pid)
+	}
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
+		_ = cmd.Process.Kill()
+		_ = logFile.Close()
+		_ = cmd.Process.Release()
 		return err
 	}
-	fmt.Printf("[ai] started (pid %d)\n", cmd.Process.Pid)
+	_ = logFile.Close()
+	_ = cmd.Process.Release()
+	fmt.Printf("[ai] started (pid %d)\n", pid)
 	return nil
 }
 

@@ -118,6 +118,9 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 
 func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, trace TraceFunc, backoff *retryBackoff) (Response, error) {
 	session.Append(user)
+	if req.Stream {
+		return a.runStreamAttempt(ctx, session, req, trace, backoff)
+	}
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -178,6 +181,117 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 	}
 }
 
+func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Request, trace TraceFunc, backoff *retryBackoff) (Response, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return Response{}, err
+		}
+		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
+		if a.Tools != nil {
+			req.Tools = a.Tools.Definitions()
+		}
+
+		events, err := a.Client.Stream(ctx, session, req)
+		if err != nil {
+			return Response{}, err
+		}
+
+		var resp Response
+		var text []ContentPart
+		var calls []ToolCall
+		var reasoning *ReasoningState
+		var streamErr error
+		for event := range events {
+			switch event.Type {
+			case EventText:
+				if event.Text != "" {
+					text = append(text, ContentPart{Type: ContentText, Text: event.Text})
+					traceEvent(ctx, trace, TraceEvent{Stage: TraceResponseText, Text: event.Text})
+				}
+			case EventReasoning:
+				if event.Reasoning != nil {
+					r := *event.Reasoning
+					if reasoning == nil {
+						reasoning = &ReasoningState{}
+					}
+					if r.ID != "" {
+						reasoning.ID = r.ID
+					}
+					reasoning.Text += r.Text
+				}
+			case EventToolCall:
+				if event.ToolCall != nil {
+					call := *event.ToolCall
+					calls = append(calls, call)
+					traceEvent(ctx, trace, TraceEvent{Stage: TraceToolCall, ToolCall: cloneToolCall(call)})
+				}
+			case EventDone:
+				if event.Response != nil {
+					resp = *event.Response
+				}
+			case EventError:
+				streamErr = event.Err
+			}
+			if event.Type == EventError {
+				break
+			}
+		}
+		if streamErr != nil {
+			return Response{}, streamErr
+		}
+		if resp.Provider == "" {
+			resp.Provider = string(session.Config().Provider)
+		}
+		if resp.Model == "" {
+			resp.Model = session.Config().Model
+		}
+		if len(resp.Content) == 0 {
+			resp.Content = text
+		}
+		if len(resp.ToolCalls) == 0 {
+			resp.ToolCalls = calls
+		}
+		if resp.Reasoning == nil {
+			resp.Reasoning = reasoning
+		}
+		if backoff != nil {
+			backoff.Reset()
+		}
+
+		commitResponse(session, resp)
+		if len(resp.Content) == 0 && len(resp.ToolCalls) == 0 {
+			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
+		}
+		if len(resp.ToolCalls) == 0 {
+			return resp, nil
+		}
+		if a.Tools == nil {
+			for _, call := range resp.ToolCalls {
+				result := ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
+				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolResult, ToolResult: cloneToolResult(result)})
+				resultCopy := result
+				session.Append(Turn{Role: RoleToolResult, ToolResult: &resultCopy})
+			}
+			continue
+		}
+		for _, call := range resp.ToolCalls {
+			if err := ctx.Err(); err != nil {
+				return Response{}, err
+			}
+			result := a.Tools.Execute(ctx, call)
+			if err := ctx.Err(); err != nil {
+				return Response{}, err
+			}
+			if result.ID == "" {
+				result.ID = call.ID
+			}
+			traceEvent(ctx, trace, TraceEvent{Stage: TraceToolResult, ToolResult: cloneToolResult(result)})
+			resultCopy := result
+			session.Append(Turn{Role: RoleToolResult, ToolResult: &resultCopy})
+		}
+	}
+}
+
 func traceEvent(ctx context.Context, trace TraceFunc, event TraceEvent) {
 	if trace != nil {
 		trace(ctx, event)
@@ -185,7 +299,7 @@ func traceEvent(ctx context.Context, trace TraceFunc, event TraceEvent) {
 }
 
 func cloneResponseContent(in Response) *Response {
-	out := Response{Content: append([]ContentPart(nil), in.Content...)}
+	out := Response{Provider: in.Provider, Model: in.Model, Content: append([]ContentPart(nil), in.Content...), Reasoning: in.Reasoning}
 	return &out
 }
 

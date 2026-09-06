@@ -64,12 +64,39 @@ func runUpdate() error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+
+	// Download and verify first. Only stop the current daemon after the new
+	// binary is known to be valid, so a failed update leaves the old daemon up.
+	wasRunning := false
+	pidPath := filepath.Join(filepath.Dir(app), ".ai", "ai.pid")
+	if data, readErr := os.ReadFile(pidPath); readErr == nil {
+		wasRunning = processAlive(parsePID(string(data)))
+	}
+	if wasRunning {
+		if err := stopDaemon(app); err != nil {
+			return fmt.Errorf("stop daemon for update: %w", err)
+		}
+	}
 	if err := os.Rename(tmpPath, app); err != nil {
+		if wasRunning {
+			_ = startDaemon(app)
+		}
 		return fmt.Errorf("replace binary: %w", err)
 	}
 
 	fmt.Printf("[ai] updated %s\n", app)
+	if err := startDaemon(app); err != nil {
+		return fmt.Errorf("restart daemon: %w", err)
+	}
 	return nil
+}
+
+func parsePID(value string) int {
+	var pid int
+	if _, err := fmt.Sscanf(strings.TrimSpace(value), "%d", &pid); err != nil {
+		return 0
+	}
+	return pid
 }
 
 func installedBinary() (string, error) {

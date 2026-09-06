@@ -29,6 +29,9 @@ func LoadProviderFile(path string) (ProviderFileConfig, error) {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ProviderFileConfig{}, nil
+		}
 		return ProviderFileConfig{}, fmt.Errorf("runtime: read provider config %q: %w", path, err)
 	}
 	var config ProviderFileConfig

@@ -77,6 +77,11 @@ type RetryStatusSender interface {
 	DeleteMessage(context.Context, string, string) error
 }
 
+type toolTraceSender interface {
+	startToolTrace(context.Context, string, string) error
+	finishToolTrace(context.Context, string, string) error
+}
+
 type retryStatusManager interface {
 	RetryStatusSender
 	updateRetryStatus(context.Context, string, string) error
@@ -117,15 +122,13 @@ func (d Display) displayTrace(ctx context.Context, channelID string, trace sdk.T
 	var text string
 	switch trace.Stage {
 	case sdk.TraceToolCall:
-		if trace.ToolCall == nil {
-			return nil
-		}
+		if trace.ToolCall == nil { return nil }
 		text = formatToolCall(trace.ToolCall)
+		if sender, ok := d.Sender.(toolTraceSender); ok { return sender.startToolTrace(ctx, channelID, text) }
 	case sdk.TraceToolResult:
-		if trace.ToolResult == nil {
-			return nil
-		}
+		if trace.ToolResult == nil { return nil }
 		text = formatToolResult(trace.ToolResult)
+		if sender, ok := d.Sender.(toolTraceSender); ok { return sender.finishToolTrace(ctx, channelID, text) }
 	case sdk.TraceResponse:
 		text = responseContent(trace.Response)
 		if status, ok := d.Sender.(retryStatusManager); ok {

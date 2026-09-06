@@ -5,10 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"syscall"
-	"time"
 )
 
 func runUpdate() error {
@@ -32,13 +29,7 @@ func runUpdate() error {
 
 	supervisor := filepath.Join(root, "scripts", "supervisor.sh")
 	if _, err := os.Stat(supervisor); err != nil { return fmt.Errorf("supervisor: %w", err) }
-
-	stateDir := filepath.Join(root, ".ai")
-	supervisorPIDFile := filepath.Join(stateDir, "supervisor.pid")
-	aiPIDFile := filepath.Join(stateDir, "ai.pid")
-
-	stopPIDFile(aiPIDFile)
-	stopPIDFile(supervisorPIDFile)
+	if err := runCommand(root, "bash", supervisor, "stop"); err != nil { return err }
 
 	cmd := exec.Command("bash", supervisor, "run")
 	cmd.Dir = root
@@ -46,8 +37,7 @@ func runUpdate() error {
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 	if err := cmd.Start(); err != nil { return err }
-	_ = cmd.Process.Release()
-	return nil
+	return cmd.Process.Release()
 }
 
 func gitOutput(dir string, args ...string) (string, error) {
@@ -64,19 +54,4 @@ func runCommand(dir, name string, args ...string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
-}
-
-func stopPIDFile(path string) {
-	data, err := os.ReadFile(path)
-	if err != nil { return }
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid <= 0 || pid == os.Getpid() { return }
-	_ = syscall.Kill(pid, syscall.SIGTERM)
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); err != nil { break }
-		time.Sleep(100 * time.Millisecond)
-	}
-	_ = syscall.Kill(pid, syscall.SIGKILL)
-	_ = os.Remove(path)
 }

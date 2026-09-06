@@ -21,7 +21,9 @@ func runUpdate() error {
 
 	app := filepath.Join(root, "ai")
 	tmp := app + ".update"
-	if err := runCommand(root, "go", "build", "-trimpath", "-ldflags", "-s -w", "-o", tmp, "./cmd/ai"); err != nil { _ = os.Remove(tmp); return err }
+	goBin := filepath.Join(root, ".toolchain", "go", "bin", "go")
+	if _, err := os.Stat(goBin); err != nil { goBin = "go" }
+	if err := runCommand(root, goBin, "build", "-trimpath", "-ldflags", "-s -w", "-o", tmp, "./cmd/ai"); err != nil { _ = os.Remove(tmp); return err }
 	if err := os.Chmod(tmp, 0o755); err != nil { _ = os.Remove(tmp); return err }
 	if err := os.Rename(tmp, app); err != nil { _ = os.Remove(tmp); return err }
 

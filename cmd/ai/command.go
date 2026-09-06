@@ -12,6 +12,7 @@ const (
 	commandStart command = iota
 	commandCLI
 	commandUpdate
+	commandDaemon
 )
 
 func parseCommand(args []string) (command, error) {
@@ -26,6 +27,10 @@ func parseCommand(args []string) (command, error) {
 	if args[0] == "update" {
 		if len(args) > 1 { return commandUpdate, fmt.Errorf("update: unexpected argument %q", args[1]) }
 		return commandUpdate, nil
+	}
+	if args[0] == "daemon" {
+		if len(args) > 1 { return commandDaemon, fmt.Errorf("daemon: unexpected argument %q", args[1]) }
+		return commandDaemon, nil
 	}
 	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		return commandStart, errHelp

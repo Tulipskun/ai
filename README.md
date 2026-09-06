@@ -4,7 +4,7 @@ Prototype canonical Go SDK for an AI Harness.
 
 ## Install
 
-Install the `ai` command on Linux or macOS with one command. The installer downloads only the prebuilt release binary for the current OS and CPU architecture; it does not require Git or Go. Runtime state is kept under `~/.local/share/ai` by default.
+Install the `ai` command on Linux or macOS with one command. The installer downloads only the prebuilt binary committed under `bin/`; it does not require Git or Go. Runtime state is kept under `~/.local/share/ai` by default.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Tulipskun/ai/main/scripts/install.sh | bash
@@ -16,13 +16,13 @@ Then start it with:
 ai start
 ```
 
-The installer is repeatable and preserves `.env`, `.config`, `.data`, and `.ai` state. Updates download the matching prebuilt release binary:
+GitHub Actions builds Linux amd64/arm64 and macOS amd64/arm64 binaries and commits them to `bin/` after source changes. Updates download the matching binary from the repository:
 
 ```bash
 ai update
 ```
 
-The installer verifies the downloaded binary against the SHA-256 checksum published with the release. `AI_VERSION` can be set to a release tag when a pinned version is required.
+The installer and updater verify the downloaded binary against `bin/checksums.txt`. `AI_VERSION` can be set to a branch, tag, or commit ref when a pinned repository version is required.
 
 If `~/.local/bin` is not already on `PATH`, add it to the shell profile:
 
@@ -80,9 +80,19 @@ bash scripts/supervisor.sh stop
 
 Normal software updates should use `ai update` rather than calling the supervisor update mode directly.
 
-## Release builds
+## Binary build pipeline
 
-Pushing a tag such as `v0.1.0` runs the release workflow and publishes Linux amd64/arm64 and macOS amd64/arm64 binaries plus SHA-256 checksums. The normal installer consumes these release binaries directly, so end users do not need Go or the source repository.
+Every push to `main` that changes source/configuration triggers GitHub Actions. It runs the Go test suite, cross-compiles four CGO-free binaries, computes SHA-256 checksums, and commits the resulting files to `bin/`:
+
+```text
+bin/ai-linux-amd64
+bin/ai-linux-arm64
+bin/ai-darwin-amd64
+bin/ai-darwin-arm64
+bin/checksums.txt
+```
+
+The workflow ignores `bin/**` changes when triggering, so its own binary commit does not recursively rebuild.
 
 ## Harness selection flow
 

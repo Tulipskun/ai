@@ -31,4 +31,11 @@ func (m *SessionManager) Resolve(ctx context.Context, input sdk.Input) (*sdk.Ses
 	if providerKeys := m.providerKeys[loadedProvider]; providerKeys != nil { if err := session.SetKeyPool(providerKeys); err != nil { _ = session.Close(); return nil, err } }
 	m.sessions[input.SessionID] = session; return session, nil
 }
+func (m *SessionManager) ListSessions(limit int) ([]sdk.SessionInfo, error) {
+	if m == nil { return nil, errors.New("runtime: session manager is nil") }
+	db, err := sdk.OpenSessionDB(m.path)
+	if err != nil { return nil, err }
+	defer db.Close()
+	return db.ListSessions(limit)
+}
 func (m *SessionManager) Close() error { if m == nil { return nil }; m.mu.Lock(); defer m.mu.Unlock(); var firstErr error; for id, session := range m.sessions { if err := session.Close(); err != nil && firstErr == nil { firstErr = err }; delete(m.sessions, id) }; return firstErr }

@@ -2,7 +2,33 @@
 
 Prototype canonical Go SDK for an AI Harness.
 
-The SDK keeps conversation history in a provider-neutral format and translates it at the provider boundary. It separates the **logical provider** used by a session from the **adapter** used to speak a provider API.
+## Install
+
+Install the `ai` command on Linux or macOS with one command. The installer clones the runtime into `~/.local/share/ai`, bootstraps the required Go toolchain when needed, builds the binary, and places `ai` in `~/.local/bin`.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Tulipskun/ai/main/scripts/install.sh | bash
+```
+
+Then start it with:
+
+```bash
+ai start
+```
+
+The installer is repeatable and preserves `.env`, `.config`, `.data`, and `.ai` state. Updates use the same installed checkout, so:
+
+```bash
+ai update
+```
+
+performs the pull, rebuild, and supervised restart without requiring the user to know the installation directory.
+
+If `~/.local/bin` is not already on `PATH`, add it to the shell profile:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
 
 ## CLI
 
@@ -19,13 +45,9 @@ For development, the same command can be run with:
 go run ./cmd/ai start
 ```
 
-The command accepts `start` explicitly. Running `ai` with no subcommand remains equivalent to `ai start` for backwards compatibility. `ai --help` shows the available commands.
+Running `ai` with no subcommand remains equivalent to `ai start` for backwards compatibility. `ai --help` shows the available commands.
 
-Use `ai update` as the single update command. It pulls the latest code, builds a replacement binary before stopping the current service, then restarts the supervisor with the new binary. The supervisor script remains an implementation detail.
-
-```bash
-ai update
-```
+Use `ai update` as the single update command. The supervisor script remains an implementation detail.
 
 To use the terminal as an input transport, enable it with `AI_CLI_ENABLED=true`. Provider and model selection can be configured at runtime instead of requiring them before startup.
 
@@ -57,6 +79,10 @@ bash scripts/supervisor.sh stop
 ```
 
 Normal software updates should use `ai update` rather than calling the supervisor update mode directly.
+
+## Release builds
+
+Pushing a tag such as `v0.1.0` runs the release workflow and publishes Linux amd64/arm64 and macOS amd64/arm64 binaries. The source installer remains the canonical bootstrap path because it also guarantees that `ai update` has a local Git checkout to update.
 
 ## Harness selection flow
 
@@ -98,14 +124,7 @@ defer session.Close()
 
 `OpenSession()` creates the database if needed and reloads the existing canonical history for `config.ID`. `Session.Append()` and `Session.ReplaceHistory()` persist the history, so Agent rollback also persists the rolled-back state. The database uses SQLite WAL mode for concurrent readers and transactional updates.
 
-The database records more than the reconstructed conversation history. It keeps:
-
-- `sessions`: session configuration and timestamps.
-- `turns`: every canonical user/model/tool-call/tool-result turn.
-- `requests`: every model request attempt, including system prompt, full message history, tools, provider, model, temperature, thinking level, max output tokens, and streaming flag.
-- `responses`: every corresponding model response or provider error, including content, tool calls, finish reason, usage, cache metadata, and error text.
-
-Therefore provider retries are visible individually in the database rather than being collapsed into one successful request. The request/response records are append-only; session `turns` represent the current durable conversation state.
+The database records more than the reconstructed conversation history. It keeps sessions, turns, requests, and responses, including individual provider retry attempts.
 
 The SQLite driver is `modernc.org/sqlite`, a CGo-free pure-Go SQLite implementation.
 

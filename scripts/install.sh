@@ -2,8 +2,8 @@
 set -euo pipefail
 
 REPO="${AI_REPO:-Tulipskun/ai}"
+REF="${AI_VERSION:-main}"
 INSTALL_ROOT="${AI_INSTALL_ROOT:-${HOME}/.local/share/ai}"
-VERSION="${AI_VERSION:-latest}"
 
 log() { printf '[ai] %s\n' "$*"; }
 die() { printf '[ai] error: %s\n' "$*" >&2; exit 1; }
@@ -33,11 +33,7 @@ fi
 
 mkdir -p "$INSTALL_ROOT" "$BIN_DIR"
 ASSET="ai-${OS}-${ARCH}"
-if [[ "$VERSION" == "latest" ]]; then
-  BASE_URL="https://github.com/${REPO}/releases/latest/download"
-else
-  BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
-fi
+BASE_URL="https://raw.githubusercontent.com/${REPO}/${REF}/bin"
 
 TMP="$(mktemp)"
 CHECKSUMS="$(mktemp)"

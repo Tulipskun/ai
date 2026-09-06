@@ -41,7 +41,8 @@ func main() {
 func runBackground() error {
 	app, err := installedBinary()
 	if err != nil { return err }
-	stateDir := filepath.Join(filepath.Dir(app), ".ai")
+	root := filepath.Dir(app)
+	stateDir := filepath.Join(root, ".ai")
 	if err := os.MkdirAll(stateDir, 0o755); err != nil { return err }
 	pidPath := filepath.Join(stateDir, "ai.pid")
 	if data, err := os.ReadFile(pidPath); err == nil {
@@ -54,6 +55,7 @@ func runBackground() error {
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil { return err }
 	cmd := exec.Command(app, "daemon")
+	cmd.Dir = root
 	cmd.Env = os.Environ()
 	cmd.Stdin = nil
 	cmd.Stdout = logFile
@@ -74,6 +76,8 @@ func runDaemon() error {
 }
 
 func runCLI() error {
+	app, err := installedBinary()
+	if err == nil { _ = os.Chdir(filepath.Dir(app)) }
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM); defer stop()
 	return run(ctx, true)
 }

@@ -131,9 +131,6 @@ func run() error {
 		displays = append(displays, discord)
 	}
 	if transportConfig.CLIEnabled {
-		if providerID == "" || modelID == "" {
-			return errors.New("cli: AI_PROVIDER and AI_MODEL are required (AI_PROVIDER may be omitted when exactly one provider is configured)")
-		}
 		cli := clitransport.New(os.Stdin, os.Stdout)
 		sources = append(sources, cli)
 		displays = append(displays, clitransport.NewDisplay(os.Stdout))

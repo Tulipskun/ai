@@ -13,6 +13,7 @@ func TestParseCommand(t *testing.T) {
 		err  error
 	}{
 		{name: "start", args: []string{"start"}, want: commandStart},
+		{name: "update", args: []string{"update"}, want: commandUpdate},
 		{name: "no args keeps backwards compatibility", args: nil, want: commandStart},
 		{name: "help", args: []string{"help"}, want: commandStart, err: errHelp},
 		{name: "short help", args: []string{"-h"}, want: commandStart, err: errHelp},
@@ -23,18 +24,10 @@ func TestParseCommand(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := parseCommand(tt.args)
-			if got != tt.want {
-				t.Fatalf("command = %v, want %v", got, tt.want)
-			}
-			if tt.err != nil && err == nil {
-				t.Fatal("expected an error")
-			}
-			if tt.err == nil && err != nil {
-				t.Fatalf("error = %v, want nil", err)
-			}
-			if errors.Is(tt.err, errHelp) && !errors.Is(err, errHelp) {
-				t.Fatalf("error = %v, want errHelp", err)
-			}
+			if got != tt.want { t.Fatalf("command = %v, want %v", got, tt.want) }
+			if tt.err != nil && err == nil { t.Fatal("expected an error") }
+			if tt.err == nil && err != nil { t.Fatalf("error = %v, want nil", err) }
+			if errors.Is(tt.err, errHelp) && !errors.Is(err, errHelp) { t.Fatalf("error = %v, want errHelp", err) }
 		})
 	}
 }

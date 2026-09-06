@@ -13,6 +13,7 @@ func TestParseCommand(t *testing.T) {
 		err  error
 	}{
 		{name: "start", args: []string{"start"}, want: commandStart},
+		{name: "cli", args: []string{"cli"}, want: commandCLI},
 		{name: "update", args: []string{"update"}, want: commandUpdate},
 		{name: "no args keeps backwards compatibility", args: nil, want: commandStart},
 		{name: "help", args: []string{"help"}, want: commandStart, err: errHelp},

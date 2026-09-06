@@ -74,6 +74,23 @@ go build -trimpath -ldflags "-s -w" -o "$INSTALL_ROOT/ai" ./cmd/ai
 chmod 0755 "$INSTALL_ROOT/ai"
 
 ln -sfn "$INSTALL_ROOT/ai" "$BIN_DIR/ai"
+
+# Migrate links left behind by older installers. Only remove symlinks that
+# point exactly at this installation's binary; never remove real files or
+# unrelated ai executables from package-manager directories.
+if [[ -n "${PATH:-}" ]]; then
+  IFS=: read -r -a PATH_DIRS <<< "$PATH"
+  for dir in "${PATH_DIRS[@]}"; do
+    [[ -n "$dir" ]] || continue
+    candidate="$dir/ai"
+    [[ "$candidate" != "$BIN_DIR/ai" ]] || continue
+    [[ -L "$candidate" ]] || continue
+    [[ "$(readlink "$candidate")" == "$INSTALL_ROOT/ai" ]] || continue
+    rm -f "$candidate"
+    log "removed stale link: $candidate"
+  done
+fi
+
 mkdir -p "$INSTALL_ROOT/.config" "$INSTALL_ROOT/.data" "$INSTALL_ROOT/.ai"
 if [[ ! -f "$INSTALL_ROOT/.env" ]]; then
   cat > "$INSTALL_ROOT/.env" <<'EOF'
@@ -90,3 +107,4 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
 fi
 log "run: ai start"
 log "update: ai update"
+log "if your shell previously cached another ai path, run: hash -r"

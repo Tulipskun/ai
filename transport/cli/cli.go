@@ -17,6 +17,7 @@ type InputSource struct {
 	In        io.Reader
 	Out       io.Writer
 	SessionID string
+	Command func(context.Context, []string) (string, error)
 }
 
 func New(in io.Reader, out io.Writer) *InputSource {
@@ -45,6 +46,15 @@ func (s *InputSource) Receive(ctx context.Context) (<-chan sdk.Input, error) {
 			text := strings.TrimSpace(scanner.Text())
 			if text == "" {
 				continue
+			}
+			if strings.HasPrefix(text, "/") && s.Command != nil {
+				parts := strings.Fields(strings.TrimPrefix(text, "/"))
+				if len(parts) > 0 && parts[0] == "provider" {
+					message, err := s.Command(ctx, parts[1:])
+					if err != nil { message = "provider error: " + err.Error() }
+					if s.Out != nil { _, _ = fmt.Fprintln(s.Out, message) }
+					continue
+				}
 			}
 			select {
 			case out <- sdk.Input{Source: Source, SessionID: id, Turn: sdk.Turn{Role: sdk.RoleUser, Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: text}}}}:

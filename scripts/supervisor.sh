@@ -34,9 +34,7 @@ update_self() {
   git pull --ff-only
   go build -o "$APP" ./cmd/ai
   stop_app
-  start_app
   nohup "$SUPERVISOR" run >>"$LOGFILE" 2>&1 &
-  rm -f "$PIDFILE"
   exit 0
 }
 

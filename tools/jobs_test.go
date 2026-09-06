@@ -23,4 +23,6 @@ func TestCloseBackgroundJob(t *testing.T) {
 
 func TestRegistryJobTools(t *testing.T) {
 	root:=t.TempDir(); r,_:=NewRegistry(root); res:=r.Execute(context.Background(),sdkCall("run_job",map[string]any{"command":"sh","args":[]string{"-c","printf ok"}}));if res.IsError{t.Fatal(res.Content)};var payload map[string]string;if err:=json.Unmarshal([]byte(res.Content),&payload);err!=nil{t.Fatal(err)};if payload["job_id"]==""{t.Fatal("missing job id")}
+	for i:=0;i<50;i++{j,_:=r.jobs.Get(payload["job_id"]);if j!=nil && snapshotJob(j).State!=JobRunning{return};time.Sleep(10*time.Millisecond)}
+	j,_:=r.jobs.Get(payload["job_id"]);if j!=nil && snapshotJob(j).State==JobRunning{t.Fatal("job still running")}
 }

@@ -60,10 +60,12 @@ func runBackground() error {
 	cmd.Stdin = nil
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil { _ = logFile.Close(); return err }
 	_ = logFile.Close()
+	_ = cmd.Process.Release()
 	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0o644); err != nil {
-		_ = cmd.Process.Kill()
+		_ = syscall.Kill(cmd.Process.Pid, syscall.SIGTERM)
 		return err
 	}
 	fmt.Printf("[ai] started (pid %d)\n", cmd.Process.Pid)
@@ -97,7 +99,7 @@ func run(ctx context.Context, cliOnly bool) error {
 	transportConfig, err := transport.LoadConfig(); if err != nil { return err }
 	if !cliOnly && !transportConfig.DiscordEnabled { log.Printf("no Discord transport enabled; set DISCORD_BOT_TOKEN") }
 	workspace := envOr("AI_WORKSPACE", ".")
-	agent, err := newAgent(rt.Client,workspace,rt.Browser,browserConfig.AllowPrivate); if err != nil{return err}
+	agent, err := newAgent(rt.Client,workspace,rt.Browser,browserConfig.AllowPrivate); if err!=nil{return err}
 	providerKeys := make(map[sdk.ProviderID]*sdk.KeyPool,len(rt.ProviderConfigs)); for _, provider := range rt.ProviderConfigs { providerKeys[provider.ID]=provider.Keys }
 	var sources []sdk.InputSource; var displays []sdk.Display
 	if !cliOnly && transportConfig.DiscordEnabled {

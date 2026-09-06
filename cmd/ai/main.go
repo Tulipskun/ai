@@ -41,6 +41,10 @@ func main() {
 func runBackground() error {
 	app, err := installedBinary()
 	if err != nil { return err }
+	return startDaemon(app)
+}
+
+func startDaemon(app string) error {
 	root := filepath.Dir(app)
 	stateDir := filepath.Join(root, ".ai")
 	if err := os.MkdirAll(stateDir, 0o755); err != nil { return err }
@@ -78,6 +82,34 @@ func runBackground() error {
 	_ = logFile.Close()
 	_ = cmd.Process.Release()
 	fmt.Printf("[ai] started (pid %d)\n", pid)
+	return nil
+}
+
+func stopDaemon(app string) error {
+	root := filepath.Dir(app)
+	pidPath := filepath.Join(root, ".ai", "ai.pid")
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		if os.IsNotExist(err) { return nil }
+		return err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		_ = os.Remove(pidPath)
+		return nil
+	}
+	if !processAlive(pid) {
+		_ = os.Remove(pidPath)
+		return nil
+	}
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) { return err }
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processAlive(pid) { _ = os.Remove(pidPath); return nil }
+		time.Sleep(100 * time.Millisecond)
+	}
+	if processAlive(pid) { _ = syscall.Kill(pid, syscall.SIGKILL) }
+	_ = os.Remove(pidPath)
 	return nil
 }
 

@@ -78,7 +78,7 @@ func (h *HarnessLoop) Handle(ctx context.Context, input Input) error {
 
 	var responseTraced bool
 	dispatchTrace := func(traceCtx context.Context, event TraceEvent) {
-		if event.Stage == TraceResponse {
+		if event.Stage == TraceResponse || event.Stage == TraceResponseText {
 			responseTraced = true
 		}
 		traceCopy := event
@@ -102,8 +102,8 @@ func (h *HarnessLoop) Handle(ctx context.Context, input Input) error {
 		return err
 	}
 
-	// Agent responses are already displayed through TraceResponse. Sending the
-	// final output as well would duplicate the same assistant message.
+	// Agent responses are already displayed through TraceResponse or streamed
+	// TraceResponseText events. Sending the final output as well would duplicate it.
 	if responseTraced {
 		return nil
 	}

@@ -3,7 +3,6 @@ set -euo pipefail
 
 REPO="${AI_REPO:-Tulipskun/ai}"
 INSTALL_ROOT="${AI_INSTALL_ROOT:-${HOME}/.local/share/ai}"
-BIN_DIR="${AI_BIN_DIR:-${HOME}/.local/bin}"
 VERSION="${AI_VERSION:-main}"
 GO_VERSION="1.25.0"
 
@@ -25,6 +24,21 @@ case "$OS" in
   linux|darwin) ;;
   *) die "unsupported operating system: $OS" ;;
 esac
+
+# Prefer a directory already on PATH so `ai` works immediately after the
+# installer exits. Fall back to ~/.local/bin when no PATH directory is writable.
+if [[ -n "${AI_BIN_DIR:-}" ]]; then
+  BIN_DIR="$AI_BIN_DIR"
+else
+  BIN_DIR=""
+  IFS=: read -r -a PATH_DIRS <<< "${PATH:-}"
+  for dir in "${PATH_DIRS[@]}"; do
+    [[ -n "$dir" && -d "$dir" && -w "$dir" ]] || continue
+    BIN_DIR="$dir"
+    break
+  done
+  BIN_DIR="${BIN_DIR:-${HOME}/.local/bin}"
+fi
 
 mkdir -p "$INSTALL_ROOT" "$BIN_DIR"
 

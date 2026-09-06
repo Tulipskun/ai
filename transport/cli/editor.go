@@ -22,7 +22,8 @@ type LineEditor struct {
 	HistoryPath string
 	Prompt      func() string
 
-	history []string
+	history        []string
+	fallbackReader *bufio.Reader
 }
 
 func NewLineEditor(in *os.File, out io.Writer) *LineEditor {
@@ -198,14 +199,16 @@ func (e *LineEditor) ReadLine(ctxDone <-chan struct{}) (string, error) {
 }
 
 func (e *LineEditor) readFallback(prompt string, ctxDone <-chan struct{}) (string, error) {
-	reader := bufio.NewReader(e.In)
+	if e.fallbackReader == nil {
+		e.fallbackReader = bufio.NewReader(e.In)
+	}
 	for {
 		select {
 		case <-ctxDone:
 			return "", errors.New("cli: context canceled")
 		default:
 		}
-		line, err := reader.ReadString('\n')
+		line, err := e.fallbackReader.ReadString('\n')
 		line = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"))
 		if line != "" {
 			_ = e.AppendHistory(line)

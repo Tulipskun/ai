@@ -51,7 +51,6 @@ if ! command -v go >/dev/null 2>&1 || [[ "$(go env GOVERSION 2>/dev/null || true
     curl -fsSL "https://go.dev/dl/go${GO_VERSION}.${OS}-${GO_ARCH}.tar.gz" -o "$GO_TARBALL"
     rm -rf "$GO_ROOT"
     tar -xzf "$GO_TARBALL" -C "$INSTALL_ROOT/.toolchain"
-    mv "$INSTALL_ROOT/.toolchain/go" "$GO_ROOT"
     rm -f "$GO_TARBALL"
   fi
   export PATH="$GO_ROOT/bin:$PATH"

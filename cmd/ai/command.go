@@ -10,6 +10,7 @@ type command int
 
 const (
 	commandStart command = iota
+	commandCLI
 	commandUpdate
 )
 
@@ -17,6 +18,10 @@ func parseCommand(args []string) (command, error) {
 	if len(args) == 0 || args[0] == "start" {
 		if len(args) > 1 { return commandStart, fmt.Errorf("start: unexpected argument %q", args[1]) }
 		return commandStart, nil
+	}
+	if args[0] == "cli" {
+		if len(args) > 1 { return commandCLI, fmt.Errorf("cli: unexpected argument %q", args[1]) }
+		return commandCLI, nil
 	}
 	if args[0] == "update" {
 		if len(args) > 1 { return commandUpdate, fmt.Errorf("update: unexpected argument %q", args[1]) }
@@ -34,6 +39,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: ai <command>")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
-	fmt.Fprintln(w, "  start    Start the AI Harness")
-	fmt.Fprintln(w, "  update   Pull, build, restart, and replace the running AI")
+	fmt.Fprintln(w, "  start    Start the AI Harness in the background and return")
+	fmt.Fprintln(w, "  cli      Open an interactive AI Harness CLI session")
+	fmt.Fprintln(w, "  update   Download and replace the installed AI binary")
 }

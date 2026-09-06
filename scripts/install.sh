@@ -3,21 +3,19 @@ set -euo pipefail
 
 REPO="${AI_REPO:-Tulipskun/ai}"
 INSTALL_ROOT="${AI_INSTALL_ROOT:-${HOME}/.local/share/ai}"
-VERSION="${AI_VERSION:-main}"
-GO_VERSION="1.25.0"
+VERSION="${AI_VERSION:-latest}"
 
 log() { printf '[ai] %s\n' "$*"; }
 die() { printf '[ai] error: %s\n' "$*" >&2; exit 1; }
 
 command -v curl >/dev/null 2>&1 || die "curl is required"
-command -v git >/dev/null 2>&1 || die "git is required"
-command -v tar >/dev/null 2>&1 || die "tar is required"
+command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 || die "shasum or sha256sum is required"
 
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 case "$ARCH" in
-  x86_64|amd64) GO_ARCH="amd64" ;;
-  aarch64|arm64) GO_ARCH="arm64" ;;
+  x86_64|amd64) ARCH="amd64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
   *) die "unsupported architecture: $ARCH" ;;
 esac
 case "$OS" in
@@ -25,59 +23,43 @@ case "$OS" in
   *) die "unsupported operating system: $OS" ;;
 esac
 
-# Prefer standard executable directories. Do not select arbitrary PATH entries
-# such as package-manager directories (for example ~/.bun/bin) just because
-# they happen to be writable.
 if [[ -n "${AI_BIN_DIR:-}" ]]; then
   BIN_DIR="$AI_BIN_DIR"
 elif [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
   BIN_DIR="/usr/local/bin"
-elif [[ -d "${HOME}/.local/bin" && -w "${HOME}/.local/bin" ]]; then
-  BIN_DIR="${HOME}/.local/bin"
 else
   BIN_DIR="${HOME}/.local/bin"
 fi
 
 mkdir -p "$INSTALL_ROOT" "$BIN_DIR"
-
-if [[ ! -d "$INSTALL_ROOT/.git" ]]; then
-  if [[ -n "${AI_GIT_URL:-}" ]]; then
-    git clone "$AI_GIT_URL" "$INSTALL_ROOT"
-  else
-    git clone "https://github.com/${REPO}.git" "$INSTALL_ROOT"
-  fi
+ASSET="ai-${OS}-${ARCH}"
+if [[ "$VERSION" == "latest" ]]; then
+  BASE_URL="https://github.com/${REPO}/releases/latest/download"
 else
-  git -C "$INSTALL_ROOT" fetch --tags origin
+  BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
 fi
 
-git -C "$INSTALL_ROOT" checkout --quiet "$VERSION" 2>/dev/null || git -C "$INSTALL_ROOT" checkout --quiet -B "$VERSION" "origin/$VERSION"
-git -C "$INSTALL_ROOT" reset --hard --quiet "origin/$VERSION" 2>/dev/null || true
+TMP="$(mktemp)"
+CHECKSUMS="$(mktemp)"
+cleanup() { rm -f "$TMP" "$CHECKSUMS"; }
+trap cleanup EXIT
 
-if ! command -v go >/dev/null 2>&1 || [[ "$(go env GOVERSION 2>/dev/null || true)" != go${GO_VERSION}* ]]; then
-  GO_ROOT="$INSTALL_ROOT/.toolchain/go"
-  GO_BIN="$GO_ROOT/bin/go"
-  if [[ ! -x "$GO_BIN" ]]; then
-    mkdir -p "$INSTALL_ROOT/.toolchain"
-    GO_TARBALL="$INSTALL_ROOT/.toolchain/go.tar.gz"
-    log "installing Go ${GO_VERSION} toolchain"
-    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.${OS}-${GO_ARCH}.tar.gz" -o "$GO_TARBALL"
-    rm -rf "$GO_ROOT"
-    tar -xzf "$GO_TARBALL" -C "$INSTALL_ROOT/.toolchain"
-    rm -f "$GO_TARBALL"
-  fi
-  export PATH="$GO_ROOT/bin:$PATH"
+log "downloading ${ASSET}"
+curl -fsSL "${BASE_URL}/${ASSET}" -o "$TMP"
+curl -fsSL "${BASE_URL}/checksums.txt" -o "$CHECKSUMS"
+EXPECTED="$(awk -v name="$ASSET" '$2 == name { print $1; exit }' "$CHECKSUMS")"
+[[ -n "$EXPECTED" ]] || die "checksum entry not found for ${ASSET}"
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL="$(sha256sum "$TMP" | awk '{print $1}')"
+else
+  ACTUAL="$(shasum -a 256 "$TMP" | awk '{print $1}')"
 fi
+[[ "$ACTUAL" == "$EXPECTED" ]] || die "checksum verification failed"
 
-log "building ai"
-cd "$INSTALL_ROOT"
-go build -trimpath -ldflags "-s -w" -o "$INSTALL_ROOT/ai" ./cmd/ai
-chmod 0755 "$INSTALL_ROOT/ai"
-
+chmod 0755 "$TMP"
+mv -f "$TMP" "$INSTALL_ROOT/ai"
 ln -sfn "$INSTALL_ROOT/ai" "$BIN_DIR/ai"
 
-# Migrate links left behind by older installers. Only remove symlinks that
-# point exactly at this installation's binary; never remove real files or
-# unrelated ai executables from package-manager directories.
 if [[ -n "${PATH:-}" ]]; then
   IFS=: read -r -a PATH_DIRS <<< "$PATH"
   for dir in "${PATH_DIRS[@]}"; do

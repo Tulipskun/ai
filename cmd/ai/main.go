@@ -26,14 +26,26 @@ func main() {
 	if err != nil { printUsage(os.Stderr); log.Fatal(err) }
 	switch command {
 	case commandStart:
-		if err := run(); err != nil && !errors.Is(err, context.Canceled) { log.Fatal(err) }
+		if err := runBackground(); err != nil { log.Fatal(err) }
+	case commandCLI:
+		if err := runCLI(); err != nil && !errors.Is(err, context.Canceled) { log.Fatal(err) }
 	case commandUpdate:
 		if err := runUpdate(); err != nil { log.Fatal(err) }
 	}
 }
 
-func run() error {
+func runBackground() error {
+	// Background/service lifecycle is delegated to the supervisor so `ai start`
+	// returns immediately instead of occupying the caller's terminal.
+	return runSupervisorStart()
+}
+
+func runCLI() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM); defer stop()
+	return run(ctx, true)
+}
+
+func run(ctx context.Context, cliOnly bool) error {
 	providerConfigPath := envOr("AI_PROVIDER_CONFIG", ".config/provider.json")
 	providerFile, err := runtime.LoadProviderFile(providerConfigPath); if err != nil { return err }
 	rt, err := runtime.Load(providerConfigPath); if err != nil { return err }
@@ -46,20 +58,20 @@ func run() error {
 	browserConfig, err := runtime.LoadBrowserConfig(); if err != nil { return err }
 	if browserConfig.Enabled { if err := rt.StartBrowser(ctx,browserConfig); err != nil{return fmt.Errorf("start browser: %w",err)}; defer rt.CloseBrowser() }
 	transportConfig, err := transport.LoadConfig(); if err != nil { return err }
-	if !transportConfig.DiscordEnabled && !transportConfig.CLIEnabled { log.Printf("no transports enabled; set DISCORD_BOT_TOKEN or AI_CLI_ENABLED=true"); return nil }
-	workspace := envOr("AI_WORKSPACE", "."); agent, err := newAgent(rt.Client,workspace,rt.Browser,browserConfig.AllowPrivate); if err != nil{return err}
+	workspace := envOr("AI_WORKSPACE", ".")
+	agent, err := newAgent(rt.Client,workspace,rt.Browser,browserConfig.AllowPrivate); if err != nil{return err}
 	providerKeys := make(map[sdk.ProviderID]*sdk.KeyPool,len(rt.ProviderConfigs)); for _, provider := range rt.ProviderConfigs { providerKeys[provider.ID]=provider.Keys }
 	var sources []sdk.InputSource; var displays []sdk.Display
-	if transportConfig.DiscordEnabled {
+	if !cliOnly && transportConfig.DiscordEnabled {
 		discord, err := discordtransport.NewGateway(transportConfig.DiscordToken); if err != nil{return err}; defer discord.Close(context.Background()); discord.ConfigureAuthorizedUser(transportConfig.DiscordOwnerID)
 		modelSettings := &discordtransport.ModelSettingsHandler{ResolveSession:sessions.Resolve,Providers:rt.Providers,ProviderKeys:providerKeys,Models:func(ctx context.Context,provider sdk.ProviderID)([]sdk.Model,error){models:=rt.Router.Models(provider);if len(models)==0{if err:=rt.RefreshProvider(ctx,provider);err!=nil{return nil,err};models=rt.Router.Models(provider)};return models,nil}}
 		discord.ConfigureModelSettings(modelSettings); discord.ConfigureProviderSettings(&discordtransport.ProviderSettingsHandler{Adapters:providerManager.Adapters(),Upsert:func(ctx context.Context,name,adapter,endpoint,apiKey string)error{if err:=providerManager.Upsert(ctx,name,adapter,endpoint,apiKey);err!=nil{return err};config,err:=rt.Router.Provider(sdk.ProviderID(name));if err!=nil{return err};sessions.RegisterProvider(config.ID,config.Keys);providerKeys[config.ID]=config.Keys;modelSettings.Providers=providerManager.Providers();modelSettings.ProviderKeys=providerKeys;return nil}}); discord.ConfigureStop(agent.Interrupt)
 		if err:=discord.Start(ctx);err!=nil{return err}; sources=append(sources,discord);displays=append(displays,discord)
 	}
-	if transportConfig.CLIEnabled {
-		cli:=clitransport.New(os.Stdin,os.Stdout); cli.Command=func(ctx context.Context,args []string)(string,error){if len(args)==0{if len(providerManager.Providers())==0{return "No providers configured. Use: /provider add <name> <adapter> <url> <api-key>",nil};return "Providers: "+joinProviderIDs(providerManager.Providers()),nil};if args[0]!="add"||len(args)!=5{return "Usage: /provider add <name> <adapter> <url> <api-key>",nil};name:=args[1];if err:=providerManager.Upsert(ctx,name,args[2],args[3],args[4]);err!=nil{return "",err};config,err:=rt.Router.Provider(sdk.ProviderID(name));if err!=nil{return "",err};sessions.RegisterProvider(config.ID,config.Keys);providerKeys[config.ID]=config.Keys;return fmt.Sprintf("Provider %q saved and model catalogue refreshed. Configure AI_MODEL to use it.",name),nil}
-		sources=append(sources,cli);displays=append(displays,clitransport.NewDisplay(os.Stdout))
-	}
+	// `ai cli` is always interactive and uses stdin/stdout regardless of the
+	// background transport configuration.
+	cli:=clitransport.New(os.Stdin,os.Stdout); cli.Command=func(ctx context.Context,args []string)(string,error){if len(args)==0{if len(providerManager.Providers())==0{return "No providers configured. Use: /provider add <name> <adapter> <url> <api-key>",nil};return "Providers: "+joinProviderIDs(providerManager.Providers()),nil};if args[0]!="add"||len(args)!=5{return "Usage: /provider add <name> <adapter> <url> <api-key>",nil};name:=args[1];if err:=providerManager.Upsert(ctx,name,args[2],args[3],args[4]);err!=nil{return "",err};config,err:=rt.Router.Provider(sdk.ProviderID(name));if err!=nil{return "",err};sessions.RegisterProvider(config.ID,config.Keys);providerKeys[config.ID]=config.Keys;return fmt.Sprintf("Provider %q saved and model catalogue refreshed. Configure AI_MODEL to use it.",name),nil}
+	sources=append(sources,cli);displays=append(displays,clitransport.NewDisplay(os.Stdout))
 	inputs,err:=sdk.MergeInputSources(ctx,sources...);if err!=nil{return err}
 	loop:=&sdk.HarnessLoop{Agent:agent,Source:sdk.ChannelInputSource{Inputs:inputs},ResolveSession:sessions.Resolve,BuildRequest:func(context.Context,sdk.Input,*sdk.Session)(sdk.Request,error){return sdk.Request{SystemPrompt:os.Getenv("AI_SYSTEM_PROMPT"),MaxOutputTokens:maxOutputTokens},nil},Displays:displays,DisplayTimeout:10*time.Second,OnTurnError:func(input sdk.Input,err error){log.Printf("turn failed source=%s session=%s: %v",input.Source,input.SessionID,err)}}
 	return loop.Run(ctx)

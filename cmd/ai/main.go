@@ -132,6 +132,18 @@ func run() error {
 	}
 	if transportConfig.CLIEnabled {
 		cli := clitransport.New(os.Stdin, os.Stdout)
+		cli.Command = func(ctx context.Context, args []string) (string, error) {
+			if len(args) == 0 {
+				if len(providerManager.Providers()) == 0 { return "No providers configured. Use: /provider add <name> <adapter> <url> <api-key>", nil }
+				return "Providers: " + joinProviderIDs(providerManager.Providers()), nil
+			}
+			if args[0] != "add" || len(args) != 5 { return "Usage: /provider add <name> <adapter> <url> <api-key>", nil }
+			name := args[1]
+			if err := providerManager.Upsert(ctx, name, args[2], args[3], args[4]); err != nil { return "", err }
+			config, err := rt.Router.Provider(sdk.ProviderID(name)); if err != nil { return "", err }
+			sessions.RegisterProvider(config.ID, config.Keys); providerKeys[config.ID] = config.Keys
+			return fmt.Sprintf("Provider %q saved and model catalogue refreshed. Configure AI_MODEL to use it.", name), nil
+		}
 		sources = append(sources, cli)
 		displays = append(displays, clitransport.NewDisplay(os.Stdout))
 	}
@@ -146,6 +158,8 @@ func run() error {
 	}}
 	return loop.Run(ctx)
 }
+
+func joinProviderIDs(ids []sdk.ProviderID) string { values := make([]string, 0, len(ids)); for _, id := range ids { values = append(values, string(id)) }; return strings.Join(values, ", ") }
 
 func newAgent(client *sdk.RouterClient, workspace string, browser *tools.BrowserClient, allowPrivate bool) (*sdk.Agent, error) {
 	registry, err := tools.NewRegistryWithBrowser(workspace, browser, allowPrivate)

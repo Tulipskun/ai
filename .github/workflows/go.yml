@@ -16,3 +16,5 @@ jobs:
           go-version-file: 'go.mod'
       - run: go test ./... -timeout 2m
       - run: go vet ./...
+      - run: bash -n scripts/install.sh
+      - run: bash -n scripts/supervisor.sh

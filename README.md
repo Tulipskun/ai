@@ -316,3 +316,16 @@ Provider keys for direct adapter construction are read from `OPENAI_API_KEY`, `A
 Key rotation is intentionally **not** implemented yet. Retries reuse the same selected key.
 
 Streaming preserves provider-native reasoning/tool state through the canonical `EventReasoning` and `EventToolCall` events. Anthropic accumulates partial tool JSON per content block; OpenAI reasoning-summary deltas and Gemini thought parts are surfaced as reasoning events.
+
+
+## Supervisor
+
+A lightweight supervisor script can keep the built AI process running:
+
+    bash scripts/supervisor.sh run
+
+Update the running installation with one command:
+
+    bash scripts/supervisor.sh update
+
+The update flow is: git pull --ff-only -> rebuild ./ai -> stop the old AI process -> launch a new supervisor -> the new supervisor starts the rebuilt AI process -> the old supervisor exits. The PID file is .ai/supervisor.pid and logs are written to .ai/supervisor.log.

@@ -75,3 +75,11 @@ func TestLoadProviderFileRejectsMissingKeys(t *testing.T) {
 		t.Fatal("expected missing key error")
 	}
 }
+
+
+func TestLoadProviderFileAllowsMissingConfig(t *testing.T) {
+	path := t.TempDir() + "/provider.json"
+	config, err := LoadProviderFile(path)
+	if err != nil { t.Fatal(err) }
+	if len(config.Providers) != 0 { t.Fatalf("providers = %d, want 0", len(config.Providers)) }
+}

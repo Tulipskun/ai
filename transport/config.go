@@ -1,24 +1,41 @@
 package transport
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
-	"strings"
 )
 
 type Config struct {
-	DiscordToken   string
-	DiscordOwnerID string
-	DiscordEnabled bool
-	CLIEnabled     bool
+	DiscordToken   string `json:"discord_token"`
+	DiscordOwnerID string `json:"discord_owner_id"`
+	DiscordEnabled bool   `json:"discord_enabled"`
+	CLIEnabled     bool   `json:"cli_enabled"`
 }
 
-func LoadConfig() (Config, error) {
-	token := strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
-	ownerID := strings.TrimSpace(os.Getenv("DISCORD_OWNER_ID"))
-	if token != "" && ownerID == "" {
-		return Config{}, errors.New("transport: DISCORD_OWNER_ID is required when Discord is enabled")
+const DefaultConfigPath = ".config/input.json"
+
+func LoadConfig(path string) (Config, error) {
+	if path == "" {
+		path = DefaultConfigPath
 	}
-	cliEnabled := strings.EqualFold(strings.TrimSpace(os.Getenv("AI_CLI_ENABLED")), "true")
-	return Config{DiscordToken: token, DiscordOwnerID: ownerID, DiscordEnabled: token != "", CLIEnabled: cliEnabled}, nil
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Config{}, nil
+		}
+		return Config{}, fmt.Errorf("transport: read input config %q: %w", path, err)
+	}
+	var config Config
+	if err := json.Unmarshal(data, &config); err != nil {
+		return Config{}, fmt.Errorf("transport: decode input config %q: %w", path, err)
+	}
+	if config.DiscordToken != "" && config.DiscordOwnerID == "" {
+		return Config{}, errors.New("transport: discord_owner_id is required when Discord is enabled")
+	}
+	if config.DiscordToken != "" {
+		config.DiscordEnabled = true
+	}
+	return config, nil
 }

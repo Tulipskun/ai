@@ -57,17 +57,57 @@ Running `ai` with no subcommand remains equivalent to `ai start` for backwards c
 
 Use `ai update` as the single update command. Use `ai uninstall` to remove the installation. The supervisor script remains an implementation detail for source-based development and older installations.
 
-To use the terminal as an input transport, enable it with `AI_CLI_ENABLED=true`. Provider and model selection can be configured at runtime instead of requiring them before startup.
+## Configuration
 
-## Runtime provider configuration
+Runtime configuration is file-based. The application does not create or load a `.env` file.
 
-Runtime provider settings live in `.config/provider.json`. The file is intentionally ignored by Git because it contains API keys. A safe template is provided at `.config/provider.example.json`.
+```text
+~/.local/share/ai/
+├── .config/
+│   ├── provider.json
+│   ├── input.json
+│   └── browser.json
+├── .data/
+│   ├── sessions.db
+│   └── cli.history
+└── .ai/
+    ├── ai.pid
+    └── ai.log
+```
+
+The configuration files are intentionally separated by responsibility:
+
+- `.config/provider.json` contains provider endpoints, adapters, and API keys.
+- `.config/input.json` contains input transport settings such as Discord credentials/authorization and whether the CLI input is enabled.
+- `.config/browser.json` contains browser automation settings.
+
+Examples are provided as `.config/provider.example.json`, `.config/input.example.json`, and `.config/browser.example.json`. Copy an example into the same directory and edit it as needed. Secrets are kept out of the repository by `.gitignore`.
+
+### Input configuration
+
+`.config/input.json`:
+
+```json
+{
+  "discord_token": "",
+  "discord_owner_id": "",
+  "discord_enabled": false,
+  "cli_enabled": true
+}
+```
+
+Discord is enabled when `discord_token` is present and requires `discord_owner_id`. CLI input is enabled with `cli_enabled: true`.
+
+### Provider configuration
+
+`.config/provider.json`:
 
 ```json
 {
   "providers": [
     {
       "name": "openrouter",
+      "adapter": "openai",
       "http_endpoint": "https://openrouter.ai/api/v1",
       "api_keys": ["key-1", "key-2"]
     }
@@ -90,7 +130,7 @@ Normal software updates should use `ai update` rather than calling the superviso
 
 ## Binary build pipeline
 
-Every push to `main` that changes source/configuration triggers GitHub Actions. It runs the Go test suite, cross-compiles four CGO-free binaries, computes SHA-256 checksums, and commits the resulting files to `bin/`:
+Every push to `main` that changes source/configuration triggers GitHub Actions. It runs the Go test suite, cross-compiles four CGO-free binaries, computes SHA-256 checksums, and commits the resulting files to `bin/`.
 
 ```text
 bin/ai-linux-amd64
@@ -168,7 +208,7 @@ The Harness core is transport-independent. Input sources convert external events
 
 ## Discord runtime
 
-The concrete transport is `transport/discord`. `DISCORD_OWNER_ID` is the single Discord user ID authorized to use bot interactions. Model and provider settings can be managed through Discord slash commands.
+The concrete transport is `transport/discord`. The single Discord user authorized to use bot interactions is configured by `discord_owner_id` in `.config/input.json`. Model and provider settings can be managed through Discord slash commands.
 
 ## Routing and model discovery
 

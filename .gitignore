@@ -1,4 +1,5 @@
-.env
 .config/provider.json
-.config/transport.env
+.config/input.json
+.config/browser.json
 .data/
+.ai/

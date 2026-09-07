@@ -99,10 +99,9 @@ func installedBinary() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	exe, err = filepath.EvalSymlinks(exe)
-	if err != nil {
-		return "", err
-	}
+	// Keep the invocation path rather than resolving a symlink. Updating should
+	// replace the path the user actually runs (for example /usr/local/bin/ai),
+	// not the legacy target under ~/.local/share/ai.
 	if !fileExists(exe) {
 		return "", fmt.Errorf("installed binary not found: %s", exe)
 	}

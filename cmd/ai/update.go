@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
@@ -95,17 +96,39 @@ func parsePID(value string) int {
 }
 
 func installedBinary() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
+	argv0 := strings.TrimSpace(os.Args[0])
+	if argv0 == "" {
+		return "", fmt.Errorf("cannot determine invoked binary path")
 	}
-	// Keep the invocation path rather than resolving a symlink. Updating should
-	// replace the path the user actually runs (for example /usr/local/bin/ai),
-	// not the legacy target under ~/.local/share/ai.
+
+	var exe string
+	if strings.ContainsRune(argv0, os.PathSeparator) {
+		exe = argv0
+		if !filepath.IsAbs(exe) {
+			var err error
+			exe, err = filepath.Abs(exe)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else {
+		var err error
+		exe, err = exec.LookPath(argv0)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(exe) {
+			exe, err = filepath.Abs(exe)
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+
 	if !fileExists(exe) {
 		return "", fmt.Errorf("installed binary not found: %s", exe)
 	}
-	return exe, nil
+	return filepath.Clean(exe), nil
 }
 
 func stateRoot() (string, error) {

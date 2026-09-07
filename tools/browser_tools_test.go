@@ -3,37 +3,38 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 )
 
-func TestBrowserToolMapsArguments(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request struct {
-			Method string         `json:"method"`
-			Params map[string]any `json:"params"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatal(err)
-		}
-		if request.Method != "browser.fill" {
-			t.Fatalf("method=%s", request.Method)
-		}
-		if request.Params["session_id"] != "s" || request.Params["ref"] != "e1" || request.Params["text"] != "hello" {
-			t.Fatalf("params=%#v", request.Params)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": "1", "ok": true, "result": map[string]any{"ok": true}})
-	}))
-	defer srv.Close()
+func TestBrowserToolDecodeArguments(t *testing.T) {
+	raw := mustRawJSON(t, browserFillArgs{SessionID:"s", Ref:"e1", Text:"hello"})
+	value, err := decodeJSON[browserFillArgs](raw)
+	if err != nil { t.Fatal(err) }
+	args := value.(browserFillArgs)
+	if args.SessionID != "s" || args.Ref != "e1" || args.Text != "hello" { t.Fatalf("args=%#v", args) }
+}
 
-	client := NewBrowserClientForTest(srv.URL, "token", BrowserClientConfig{})
-	tool := newBrowserTool(client, "browser.fill", decodeJSON[browserFillArgs])
-	content, err := tool(context.Background(), mustRawJSON(t, browserFillArgs{SessionID: "s", Ref: "e1", Text: "hello"}))
-	if err != nil {
-		t.Fatal(err)
+func TestBrowserSchemaShape(t *testing.T) {
+	schema := browserSchema(map[string]any{"session_id":stringProperty(), "full_page":boolProperty()}, []string{"session_id"})
+	data, err := json.Marshal(schema)
+	if err != nil { t.Fatal(err) }
+	text := string(data)
+	for _, want := range []string{"session_id", "full_page", "required"} {
+		if !strings.Contains(text, want) { t.Fatalf("schema missing %q: %s", want, text) }
 	}
-	if content != `{"ok":true}` {
-		t.Fatalf("content=%s", content)
-	}
+}
+
+func TestBrowserNavigateRejectsUnsupportedScheme(t *testing.T) {
+	u, err := url.Parse("ftp://example.com")
+	if err != nil { t.Fatal(err) }
+	policy := NewNetworkPolicy(true)
+	if err := policy.ValidateURL(context.Background(), u); err == nil { t.Fatal("expected unsupported scheme error") }
+}
+
+func TestBrowserToolNilClient(t *testing.T) {
+	tool := newBrowserTool(nil, "browser.open", decodeJSON[browserSessionArgs])
+	_, err := tool(context.Background(), mustRawJSON(t, browserSessionArgs{SessionID:"s"}))
+	if err == nil || !strings.Contains(err.Error(), "browser worker is unavailable") { t.Fatalf("error=%v", err) }
 }

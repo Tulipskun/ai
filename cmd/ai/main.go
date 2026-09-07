@@ -142,7 +142,7 @@ func run(ctx context.Context, cliOnly bool) error {
 	providerID := strings.TrimSpace(os.Getenv("AI_PROVIDER")); if providerID == "" && len(rt.ProviderConfigs) == 1 { providerID = string(rt.ProviderConfigs[0].ID) }
 	modelID := strings.TrimSpace(os.Getenv("AI_MODEL"))
 	sessions := runtime.NewSessionManagerWithProviders(sessionDB, sdk.SessionConfig{Provider:sdk.ProviderID(providerID), Model:modelID}, rt.ProviderConfigs); defer sessions.Close()
-	browserConfig, err := runtime.LoadBrowserConfig(); if err != nil { return err }
+	browserConfig, err := runtime.LoadBrowserConfig(filepath.Join(state, runtime.DefaultBrowserConfigPath)); if err != nil { return err }
 	if browserConfig.Enabled { if err := rt.StartBrowser(ctx, browserConfig); err != nil { return fmt.Errorf("start browser: %w", err) }; defer rt.CloseBrowser() }
 	inputConfigPath := filepath.Join(state, transport.DefaultConfigPath)
 	transportConfig, err := transport.LoadConfig(inputConfigPath); if err != nil { return err }

@@ -13,6 +13,7 @@ const (
 	commandCLI
 	commandUpdate
 	commandDaemon
+	commandUninstall
 )
 
 func parseCommand(args []string) (command, error) {
@@ -27,6 +28,10 @@ func parseCommand(args []string) (command, error) {
 	if args[0] == "update" {
 		if len(args) > 1 { return commandUpdate, fmt.Errorf("update: unexpected argument %q", args[1]) }
 		return commandUpdate, nil
+	}
+	if args[0] == "uninstall" {
+		if len(args) > 1 { return commandUninstall, fmt.Errorf("uninstall: unexpected argument %q", args[1]) }
+		return commandUninstall, nil
 	}
 	if args[0] == "daemon" {
 		if len(args) > 1 { return commandDaemon, fmt.Errorf("daemon: unexpected argument %q", args[1]) }
@@ -44,7 +49,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: ai <command>")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
-	fmt.Fprintln(w, "  start    Start the AI Harness in the background and return")
-	fmt.Fprintln(w, "  cli      Open an interactive AI Harness CLI session")
-	fmt.Fprintln(w, "  update   Download and replace the installed AI binary")
+	fmt.Fprintln(w, "  start      Start the AI Harness in the background and return")
+	fmt.Fprintln(w, "  cli        Open an interactive AI Harness CLI session")
+	fmt.Fprintln(w, "  update     Download and replace the installed AI binary")
+	fmt.Fprintln(w, "  uninstall  Stop AI and remove the binary and runtime state")
 }

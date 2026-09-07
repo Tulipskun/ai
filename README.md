@@ -24,6 +24,14 @@ ai update
 
 The installer and updater verify the downloaded binary against `bin/checksums.txt`. `AI_VERSION` can be set to a branch, tag, or commit ref when a pinned repository version is required.
 
+To completely remove the installation, including the daemon, runtime state, sessions, provider configuration, logs, and history, run:
+
+```bash
+ai uninstall
+```
+
+`ai uninstall` removes the binary path being invoked and the default runtime directory `~/.local/share/ai` (or `AI_DATA_DIR` when set). It also cleans up the legacy executable stored inside the runtime directory.
+
 If `~/.local/bin` is not already on `PATH`, add it to the shell profile:
 
 ```bash
@@ -47,7 +55,7 @@ go run ./cmd/ai start
 
 Running `ai` with no subcommand remains equivalent to `ai start` for backwards compatibility. `ai --help` shows the available commands.
 
-Use `ai update` as the single update command. The supervisor script remains an implementation detail for source-based development and older installations.
+Use `ai update` as the single update command. Use `ai uninstall` to remove the installation. The supervisor script remains an implementation detail for source-based development and older installations.
 
 To use the terminal as an input transport, enable it with `AI_CLI_ENABLED=true`. Provider and model selection can be configured at runtime instead of requiring them before startup.
 

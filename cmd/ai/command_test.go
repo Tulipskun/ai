@@ -15,6 +15,7 @@ func TestParseCommand(t *testing.T) {
 		{name: "start", args: []string{"start"}, want: commandStart},
 		{name: "cli", args: []string{"cli"}, want: commandCLI},
 		{name: "update", args: []string{"update"}, want: commandUpdate},
+		{name: "uninstall", args: []string{"uninstall"}, want: commandUninstall},
 		{name: "no args keeps backwards compatibility", args: nil, want: commandStart},
 		{name: "help", args: []string{"help"}, want: commandStart, err: errHelp},
 		{name: "short help", args: []string{"-h"}, want: commandStart, err: errHelp},

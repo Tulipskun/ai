@@ -35,6 +35,8 @@ func main() {
 		if err := runUpdate(); err != nil { log.Fatal(err) }
 	case commandDaemon:
 		if err := runDaemon(); err != nil && !errors.Is(err, context.Canceled) { log.Fatal(err) }
+	case commandUninstall:
+		if err := runUninstall(); err != nil { log.Fatal(err) }
 	}
 }
 

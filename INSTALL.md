@@ -12,16 +12,10 @@ The installer:
 
 1. downloads only the matching prebuilt binary from `bin/`;
 2. verifies it against `bin/checksums.txt`;
-3. installs `~/.local/bin/ai` as the command;
-4. creates `.config`, `.data`, `.ai`, and a starter `.env` without overwriting existing state.
+3. installs the `ai` command;
+4. creates `.config`, `.data`, and `.ai` runtime directories.
 
-No Git or Go installation is required for normal use.
-
-If necessary:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
+No Git, Go, Node.js, or Playwright installation is required for normal use.
 
 Start:
 
@@ -35,33 +29,44 @@ Update later:
 ai update
 ```
 
-## Build pipeline
-
-GitHub Actions builds Linux amd64/arm64 and macOS amd64/arm64 binaries from `main` and commits them to:
-
-```text
-bin/ai-linux-amd64
-bin/ai-linux-arm64
-bin/ai-darwin-amd64
-bin/ai-darwin-arm64
-bin/checksums.txt
-```
-
-The workflow ignores changes under `bin/` when triggering, preventing its own generated commit from starting another build.
-
 ## Configuration
 
-The installation directory is `~/.local/share/ai`. Put runtime configuration in:
+Runtime state is stored in `~/.local/share/ai` by default:
 
 ```text
-~/.local/share/ai/.env
-~/.local/share/ai/.config/provider.json
+~/.local/share/ai/
+├── .config/
+│   ├── provider.json
+│   ├── input.json
+│   └── browser.json
+├── .data/
+│   └── browser/
+│       └── profile/
+└── .ai/
 ```
 
-For a terminal transport, set `AI_CLI_ENABLED=true`. Providers can then be added from the CLI with:
+There is no `.env` file. Copy the example JSON files from the repository into `.config/` and edit them as needed.
 
-```text
-/provider add <name> <adapter> <url> <api-key>
+For Discord and CLI input, configure `.config/input.json`.
+
+For providers, configure `.config/provider.json`, or add providers interactively with `/provider` or `/provider add ...`.
+
+For browser automation, configure `.config/browser.json`. Browser automation uses the installed Chrome, Chromium, or Edge browser through Chrome DevTools Protocol and is headed by default.
+
+Example:
+
+```json
+{
+  "enabled": true,
+  "headless": false,
+  "browser": "auto",
+  "profile": ".data/browser/profile",
+  "allow_private": false,
+  "idle_timeout": "30m",
+  "navigation_timeout": "30s",
+  "action_timeout": "10s",
+  "snapshot_timeout": "10s"
+}
 ```
 
-For Discord, set `DISCORD_BOT_TOKEN` and `DISCORD_OWNER_ID` in `.env`, then run `ai start`.
+On Linux, headed browser automation requires a graphical session.

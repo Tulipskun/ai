@@ -50,17 +50,10 @@ func (r *Runtime) StartBrowser(ctx context.Context, cfg BrowserConfig, stateRoot
 	if r.Browser != nil && r.Browser.Ready() { return nil }
 	profile := cfg.Profile
 	if !filepath.IsAbs(profile) { profile = filepath.Join(stateRoot, profile) }
-	client := tools.NewBrowserClient(tools.BrowserClientConfig{
-		Browser: cfg.Browser,
-		Profile: profile,
-		Headless: cfg.Headless,
-		AllowPrivate: cfg.AllowPrivate,
-		IdleTimeout: cfg.IdleTimeout,
-		NavigationTimeout: cfg.NavigationTimeout,
-		ActionTimeout: cfg.ActionTimeout,
-		SnapshotTimeout: cfg.SnapshotTimeout,
-	})
-	if err := client.Start(ctx); err != nil { return err }
+	client := tools.NewBrowserClient(tools.BrowserClientConfig{Browser:cfg.Browser,Profile:profile,Headless:cfg.Headless,AllowPrivate:cfg.AllowPrivate,IdleTimeout:cfg.IdleTimeout,NavigationTimeout:cfg.NavigationTimeout,ActionTimeout:cfg.ActionTimeout,SnapshotTimeout:cfg.SnapshotTimeout})
+	if cfg.Mode == "attach" {
+		if err := client.Attach(ctx, cfg.CDPEndpoint); err != nil { return err }
+	} else if err := client.Start(ctx); err != nil { return err }
 	r.Browser = client
 	return nil
 }

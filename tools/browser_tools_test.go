@@ -21,9 +21,7 @@ func TestBrowserSchemaShape(t *testing.T) {
 	data, err := json.Marshal(schema)
 	if err != nil { t.Fatal(err) }
 	text := string(data)
-	for _, want := range []string{"session_id", "full_page", "required"} {
-		if !strings.Contains(text, want) { t.Fatalf("schema missing %q: %s", want, text) }
-	}
+	for _, want := range []string{"session_id", "full_page", "required"} { if !strings.Contains(text, want) { t.Fatalf("schema missing %q: %s", want, text) } }
 }
 
 func TestBrowserNavigateRejectsUnsupportedScheme(t *testing.T) {
@@ -36,5 +34,5 @@ func TestBrowserNavigateRejectsUnsupportedScheme(t *testing.T) {
 func TestBrowserToolNilClient(t *testing.T) {
 	tool := newBrowserTool(nil, "browser.open", decodeJSON[browserSessionArgs])
 	_, err := tool(context.Background(), mustRawJSON(t, browserSessionArgs{SessionID:"s"}))
-	if err == nil || !strings.Contains(err.Error(), "browser worker is unavailable") { t.Fatalf("error=%v", err) }
+	if err == nil || !strings.Contains(err.Error(), "browser is unavailable") { t.Fatalf("error=%v", err) }
 }

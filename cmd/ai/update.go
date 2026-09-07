@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -65,13 +66,7 @@ func runUpdate() error {
 		return err
 	}
 
-	// Download and verify first. Only stop the current daemon after the new
-	// binary is known to be valid, so a failed update leaves the old daemon up.
-	wasRunning := false
-	pidPath := filepath.Join(filepath.Dir(app), ".ai", "ai.pid")
-	if data, readErr := os.ReadFile(pidPath); readErr == nil {
-		wasRunning = processAlive(parsePID(string(data)))
-	}
+	wasRunning := daemonRunning()
 	if wasRunning {
 		if err := stopDaemon(app); err != nil {
 			return fmt.Errorf("stop daemon for update: %w", err)
@@ -112,6 +107,32 @@ func installedBinary() (string, error) {
 		return "", fmt.Errorf("installed binary not found: %s", exe)
 	}
 	return exe, nil
+}
+
+func stateRoot() (string, error) {
+	if value := strings.TrimSpace(os.Getenv("AI_DATA_DIR")); value != "" {
+		return filepath.Clean(value), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		if current, userErr := user.Current(); userErr == nil && current.HomeDir != "" {
+			return filepath.Join(current.HomeDir, ".local", "share", "ai"), nil
+		}
+		return "", err
+	}
+	return filepath.Join(home, ".local", "share", "ai"), nil
+}
+
+func daemonRunning() bool {
+	root, err := stateRoot()
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".ai", "ai.pid"))
+	if err != nil {
+		return false
+	}
+	return processAlive(parsePID(string(data)))
 }
 
 func download(url string) ([]byte, error) {

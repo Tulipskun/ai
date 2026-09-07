@@ -65,16 +65,18 @@ Runtime configuration is file-based. The application does not create or load a `
 
 ### Browser configuration
 
-Browser automation is built into the Go runtime. It does not start a Node.js worker or require Playwright to be installed. The runtime finds an installed Chrome, Chromium, or Edge binary, starts a dedicated browser profile, and communicates with it through Chrome DevTools Protocol.
+Browser automation is built into the Go runtime. It does not start a Node.js worker or require Playwright to be installed. The runtime can either start a dedicated installed Chrome/Chromium/Edge profile or attach to an already running browser through Chrome DevTools Protocol.
 
-The default mode is headed so the browser window is visible to the user:
+The default mode is `managed` and headed, so the browser window is visible to the user:
 
 ```json
 {
   "enabled": true,
+  "mode": "managed",
   "headless": false,
   "browser": "auto",
   "profile": ".data/browser/profile",
+  "cdp_endpoint": "http://127.0.0.1:9222",
   "allow_private": false,
   "idle_timeout": "30m",
   "navigation_timeout": "30s",
@@ -83,11 +85,24 @@ The default mode is headed so the browser window is visible to the user:
 }
 ```
 
-`browser` may be `auto`, `chrome`, `chromium`, or `edge`. In `auto` mode the runtime searches the installed browser executables. A dedicated profile is used so the AI browser does not take over the user's normal browser profile. On Linux, headed mode requires an available graphical session (`DISPLAY`/Wayland environment).
+`browser` may be `auto`, `chrome`, `chromium`, or `edge`. In `managed` mode the runtime starts a dedicated browser profile. In `attach` mode, `cdp_endpoint` points at an existing browser's remote debugging endpoint; for example:
+
+```json
+{
+  "enabled": true,
+  "mode": "attach",
+  "headless": false,
+  "cdp_endpoint": "http://127.0.0.1:9222"
+}
+```
+
+Start an existing Chromium-family browser with remote debugging enabled, then AI can list its tabs with `browser_list_pages` and attach the AI session to a selected tab with `browser_attach`. This mode controls the already-open tab instead of creating a new browser window. On Linux, headed mode requires an available graphical session (`DISPLAY`/Wayland environment).
 
 The browser is exposed to the Agent as built-in tools:
 
 ```text
+browser_list_pages
+browser_attach
 browser_open
 browser_close
 browser_navigate
@@ -183,7 +198,7 @@ Sessions can be backed by a `.db` file instead of keeping history only in memory
 
 ## Web fetch and browser automation
 
-`web_fetch` is the lightweight path for static HTTP/HTTPS pages, documentation, and APIs. Browser automation is a built-in native CDP tool and runs in headed mode by default against an installed Chrome/Chromium/Edge browser.
+`web_fetch` is the lightweight path for static HTTP/HTTPS pages, documentation, and APIs. Browser automation is a built-in native CDP tool. It defaults to a visible managed browser, and can also attach to an existing visible browser exposing a local CDP endpoint.
 
 ## Input and display architecture
 

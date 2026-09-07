@@ -73,19 +73,12 @@ if [[ -n "${PATH:-}" ]]; then
 fi
 
 mkdir -p "$INSTALL_ROOT/.config" "$INSTALL_ROOT/.data" "$INSTALL_ROOT/.ai"
-if [[ ! -f "$INSTALL_ROOT/.env" ]]; then
-  cat > "$INSTALL_ROOT/.env" <<'EOF'
-# Add provider/transport settings here, then run: ai start
-# AI_CLI_ENABLED=true
-# DISCORD_BOT_TOKEN=
-# DISCORD_OWNER_ID=
-EOF
-fi
 
 log "installed: $BIN_DIR/ai"
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   log "add this to your shell profile: export PATH=\"$BIN_DIR:\$PATH\""
 fi
+log "config directory: $INSTALL_ROOT/.config"
 log "run: ai start"
 log "update: ai update"
 log "if your shell previously cached another ai path, run: hash -r"

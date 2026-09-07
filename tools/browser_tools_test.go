@@ -25,14 +25,22 @@ func TestBrowserSchemaShape(t *testing.T) {
 	}
 }
 
-func TestBrowserNavigateNormalizesURL(t *testing.T) {
-	_, err := normalizeURL("example.com")
-	if err == nil { t.Fatal("expected URL validation error") }
-	if _, err := normalizeURL("https://example.com"); err != nil { t.Fatal(err) }
+func TestBrowserNavigateRejectsUnsupportedScheme(t *testing.T) {
+	_, err := normalizeURL("ftp://example.com")
+	if err != nil { t.Fatal(err) }
+	policy := NewNetworkPolicy(true)
+	if err := policy.ValidateURL(context.Background(), mustURL(t, "ftp://example.com")); err == nil { t.Fatal("expected unsupported scheme error") }
 }
 
 func TestBrowserToolNilClient(t *testing.T) {
 	tool := newBrowserTool(nil, "browser.open", decodeJSON[browserSessionArgs])
 	_, err := tool(context.Background(), mustRawJSON(t, browserSessionArgs{SessionID:"s"}))
 	if err == nil || !strings.Contains(err.Error(), "browser worker is unavailable") { t.Fatalf("error=%v", err) }
+}
+
+func mustURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil { t.Fatal(err) }
+	return u
 }

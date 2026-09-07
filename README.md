@@ -16,7 +16,7 @@ Then start it with:
 ai start
 ```
 
-GitHub Actions builds Linux amd64/arm64 and macOS amd64/arm64 binaries and commits them to `bin/` after source changes. Updates download the matching binary from the repository:
+GitHub Actions builds Linux amd64/arm64 and macOS amd64/arm64 binaries and commits them to `bin/` after source changes.
 
 ```bash
 ai update
@@ -30,33 +30,6 @@ To completely remove the installation, including the daemon, runtime state, sess
 ai uninstall
 ```
 
-`ai uninstall` removes the binary path being invoked and the default runtime directory `~/.local/share/ai` (or `AI_DATA_DIR` when set). It also cleans up the legacy executable stored inside the runtime directory.
-
-If `~/.local/bin` is not already on `PATH`, add it to the shell profile:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-## CLI
-
-The application entry point is `cmd/ai`. Build it as the `ai` command and start the Harness with:
-
-```bash
-go build -o ai ./cmd/ai
-./ai start
-```
-
-For development, the same command can be run with:
-
-```bash
-go run ./cmd/ai start
-```
-
-Running `ai` with no subcommand remains equivalent to `ai start` for backwards compatibility. `ai --help` shows the available commands.
-
-Use `ai update` as the single update command. Use `ai uninstall` to remove the installation. The supervisor script remains an implementation detail for source-based development and older installations.
-
 ## Configuration
 
 Runtime configuration is file-based. The application does not create or load a `.env` file.
@@ -69,23 +42,17 @@ Runtime configuration is file-based. The application does not create or load a `
 │   └── browser.json
 ├── .data/
 │   ├── sessions.db
-│   └── cli.history
+│   ├── cli.history
+│   └── browser/
+│       └── profile/
 └── .ai/
     ├── ai.pid
     └── ai.log
 ```
 
-The configuration files are intentionally separated by responsibility:
-
-- `.config/provider.json` contains provider endpoints, adapters, and API keys.
-- `.config/input.json` contains input transport settings such as Discord credentials/authorization and whether the CLI input is enabled.
-- `.config/browser.json` contains browser automation settings.
-
-Examples are provided as `.config/provider.example.json`, `.config/input.example.json`, and `.config/browser.example.json`. Copy an example into the same directory and edit it as needed. Secrets are kept out of the repository by `.gitignore`.
+`.config/provider.json` contains providers and API keys. `.config/input.json` contains transport settings. `.config/browser.json` contains browser automation settings. Example files are provided in `.config/`.
 
 ### Input configuration
-
-`.config/input.json`:
 
 ```json
 {
@@ -96,7 +63,43 @@ Examples are provided as `.config/provider.example.json`, `.config/input.example
 }
 ```
 
-Discord is enabled when `discord_token` is present and requires `discord_owner_id`. CLI input is enabled with `cli_enabled: true`.
+### Browser configuration
+
+Browser automation is built into the Go runtime. It does not start a Node.js worker or require Playwright to be installed. The runtime finds an installed Chrome, Chromium, or Edge binary, starts a dedicated browser profile, and communicates with it through Chrome DevTools Protocol.
+
+The default mode is headed so the browser window is visible to the user:
+
+```json
+{
+  "enabled": true,
+  "headless": false,
+  "browser": "auto",
+  "profile": ".data/browser/profile",
+  "allow_private": false,
+  "idle_timeout": "30m",
+  "navigation_timeout": "30s",
+  "action_timeout": "10s",
+  "snapshot_timeout": "10s"
+}
+```
+
+`browser` may be `auto`, `chrome`, `chromium`, or `edge`. In `auto` mode the runtime searches the installed browser executables. A dedicated profile is used so the AI browser does not take over the user's normal browser profile. On Linux, headed mode requires an available graphical session (`DISPLAY`/Wayland environment).
+
+The browser is exposed to the Agent as built-in tools:
+
+```text
+browser_open
+browser_close
+browser_navigate
+browser_snapshot
+browser_click
+browser_fill
+browser_press
+browser_select
+browser_scroll
+browser_get_text
+browser_screenshot
+```
 
 ### Provider configuration
 
@@ -117,16 +120,16 @@ Discord is enabled when `discord_token` is present and requires `discord_owner_i
 
 Providers may also be added from Discord with `/provider`, or from the CLI with `/provider add <name> <adapter> <url> <api-key>`.
 
-## Supervisor
+## CLI
 
-The supervisor is an implementation detail for service administration and older source-based installations:
+The application entry point is `cmd/ai`. Build it as the `ai` command and start the Harness with:
 
 ```bash
-bash scripts/supervisor.sh run
-bash scripts/supervisor.sh stop
+go build -o ai ./cmd/ai
+./ai cli
 ```
 
-Normal software updates should use `ai update` rather than calling the supervisor update mode directly.
+`ai start` runs the daemon in the background. `ai cli` runs the interactive terminal UI. `ai update` updates the installed binary and restarts the daemon. `ai uninstall` removes the binary and runtime state.
 
 ## Binary build pipeline
 
@@ -172,27 +175,7 @@ Streaming is retried only when the failure happens before the stream has emitted
 
 ## Persistent SQLite sessions
 
-Sessions can be backed by a `.db` file instead of keeping history only in memory:
-
-```go
-session, err := sdk.OpenSession("sessions/user-123.db", config, keys)
-if err != nil { panic(err) }
-defer session.Close()
-```
-
-`OpenSession()` creates the database if needed and reloads the existing canonical history for `config.ID`. `Session.Append()` and `Session.ReplaceHistory()` persist the history, so Agent rollback also persists the rolled-back state. The database uses SQLite WAL mode for concurrent readers and transactional updates.
-
-The database records more than the reconstructed conversation history. It keeps sessions, turns, requests, and responses, including individual provider retry attempts.
-
-The SQLite driver is `modernc.org/sqlite`, a CGo-free pure-Go SQLite implementation.
-
-## Session-owned history
-
-A `Session` owns a canonical history and returns defensive copies. Use `GenerateTurn()` or `StreamTurn()` when the Harness should manage a complete user turn transactionally.
-
-The user turn is committed first, but the model output is committed only after a successful request. If all retries fail, the session is restored to its exact history from before the turn. `StreamTurn()` follows the same rule: streamed output is committed only after `EventDone`; a failed stream restores the previous history.
-
-`Session.RepairHistory()` can repair externally restored/corrupted history by removing orphan tool results, duplicate tool-call IDs, and incomplete tool calls. It never changes the selected API key.
+Sessions can be backed by a `.db` file instead of keeping history only in memory. The database uses SQLite WAL mode for concurrent readers and transactional updates.
 
 ## Agent loop
 
@@ -200,7 +183,7 @@ The user turn is committed first, but the model output is committed only after a
 
 ## Web fetch and browser automation
 
-`web_fetch` is the lightweight path for static HTTP/HTTPS pages, documentation, and APIs. Browser automation uses Playwright with Chromium in a separate Node.js worker for interactive sites.
+`web_fetch` is the lightweight path for static HTTP/HTTPS pages, documentation, and APIs. Browser automation is a built-in native CDP tool and runs in headed mode by default against an installed Chrome/Chromium/Edge browser.
 
 ## Input and display architecture
 
@@ -209,10 +192,6 @@ The Harness core is transport-independent. Input sources convert external events
 ## Discord runtime
 
 The concrete transport is `transport/discord`. The single Discord user authorized to use bot interactions is configured by `discord_owner_id` in `.config/input.json`. Model and provider settings can be managed through Discord slash commands.
-
-## Routing and model discovery
-
-Discovered model catalogues are preferred over static routes. The model name does not implicitly choose a logical provider; the provider is part of the session configuration.
 
 ## Provider adapters
 

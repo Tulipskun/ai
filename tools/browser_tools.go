@@ -16,10 +16,11 @@ type browserSelectArgs struct { SessionID string `json:"session_id"`; Ref string
 type browserScrollArgs struct { SessionID string `json:"session_id"`; Direction string `json:"direction,omitempty"`; Amount int `json:"amount,omitempty"` }
 type browserTextArgs struct { SessionID string `json:"session_id"`; Ref string `json:"ref,omitempty"` }
 type browserScreenshotArgs struct { SessionID string `json:"session_id"`; FullPage bool `json:"full_page,omitempty"` }
+type browserAttachArgs struct { SessionID string `json:"session_id"`; TargetID string `json:"target_id"` }
 
 func newBrowserNavigateTool(client *BrowserClient, policy *NetworkPolicy) handler {
 	return func(ctx context.Context, raw json.RawMessage) (string, error) {
-		if client == nil { return "", errors.New("browser worker is unavailable") }
+		if client == nil { return "", errors.New("browser is unavailable") }
 		var args browserNavigateArgs
 		if err := json.Unmarshal(raw, &args); err != nil { return "", fmt.Errorf("invalid browser arguments: %w", err) }
 		u, err := normalizeURL(args.URL)
@@ -34,11 +35,34 @@ func newBrowserNavigateTool(client *BrowserClient, policy *NetworkPolicy) handle
 
 func newBrowserTool(client *BrowserClient, method string, decode func(json.RawMessage) (any, error)) handler {
 	return func(ctx context.Context, raw json.RawMessage) (string, error) {
-		if client == nil { return "", errors.New("browser worker is unavailable") }
+		if client == nil { return "", errors.New("browser is unavailable") }
 		params, err := decode(raw)
 		if err != nil { return "", err }
 		var result json.RawMessage
 		if err := client.Call(ctx, method, params, &result); err != nil { return "", err }
+		if len(result) == 0 || string(result) == "null" { return "{}", nil }
+		return string(result), nil
+	}
+}
+
+func newBrowserListPagesTool(client *BrowserClient) handler {
+	return func(ctx context.Context, raw json.RawMessage) (string, error) {
+		if client == nil { return "", errors.New("browser is unavailable") }
+		pages, err := client.ListPages(ctx)
+		if err != nil { return "", err }
+		data, err := json.Marshal(map[string]any{"pages": pages})
+		if err != nil { return "", err }
+		return string(data), nil
+	}
+}
+
+func newBrowserAttachTool(client *BrowserClient) handler {
+	return func(ctx context.Context, raw json.RawMessage) (string, error) {
+		if client == nil { return "", errors.New("browser is unavailable") }
+		var args browserAttachArgs
+		if err := json.Unmarshal(raw, &args); err != nil { return "", fmt.Errorf("invalid browser arguments: %w", err) }
+		var result json.RawMessage
+		if err := client.AttachPage(ctx, args.SessionID, args.TargetID, &result); err != nil { return "", err }
 		if len(result) == 0 || string(result) == "null" { return "{}", nil }
 		return string(result), nil
 	}

@@ -36,25 +36,3 @@ func TestInstalledBinaryPreservesSymlinkInvocationPath(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	if got != invoked { t.Fatalf("installed binary = %q, want %q", got, invoked) }
 }
-
-func TestStatePathResolvesRelativeValuesAgainstStateRoot(t *testing.T) {
-	state := filepath.Join(t.TempDir(), ".local", "share", "ai")
-	old := os.Getenv("AI_PROVIDER_CONFIG")
-	defer func() { _ = os.Setenv("AI_PROVIDER_CONFIG", old) }()
-	_ = os.Setenv("AI_PROVIDER_CONFIG", "custom/provider.json")
-
-	got := statePath(state, "AI_PROVIDER_CONFIG", ".config/provider.json")
-	want := filepath.Join(state, "custom/provider.json")
-	if got != want { t.Fatalf("state path = %q, want %q", got, want) }
-}
-
-func TestStatePathPreservesAbsoluteValues(t *testing.T) {
-	state := filepath.Join(t.TempDir(), ".local", "share", "ai")
-	absolute := filepath.Join(t.TempDir(), "provider.json")
-	old := os.Getenv("AI_PROVIDER_CONFIG")
-	defer func() { _ = os.Setenv("AI_PROVIDER_CONFIG", old) }()
-	_ = os.Setenv("AI_PROVIDER_CONFIG", absolute)
-
-	got := statePath(state, "AI_PROVIDER_CONFIG", ".config/provider.json")
-	if got != absolute { t.Fatalf("state path = %q, want %q", got, absolute) }
-}

@@ -11,27 +11,27 @@ import (
 
 type BrowserConfig struct {
 	Enabled           bool          `json:"enabled"`
-	Host              string        `json:"host"`
-	Port              int           `json:"port"`
-	NodeCommand       string        `json:"node_command"`
-	WorkerPath        string        `json:"worker_path"`
-	WorkerDir         string        `json:"worker_dir"`
 	Headless          bool          `json:"headless"`
-	IdleTimeout       time.Duration `json:"-"`
+	Browser           string        `json:"browser"`
+	Profile           string        `json:"profile"`
 	AllowPrivate      bool          `json:"allow_private"`
+	IdleTimeout       time.Duration `json:"-"`
 	NavigationTimeout time.Duration `json:"-"`
 	ActionTimeout     time.Duration `json:"-"`
 	SnapshotTimeout   time.Duration `json:"-"`
-	RPCStartupTimeout time.Duration `json:"-"`
 }
 
 const DefaultBrowserConfigPath = ".config/browser.json"
 
 func defaultBrowserConfig() BrowserConfig {
 	return BrowserConfig{
-		Host: "127.0.0.1", NodeCommand: "node", WorkerPath: "browser/server.mjs", WorkerDir: ".",
-		Headless: true, IdleTimeout: 30 * time.Minute, NavigationTimeout: 30 * time.Second,
-		ActionTimeout: 10 * time.Second, SnapshotTimeout: 10 * time.Second, RPCStartupTimeout: 30 * time.Second,
+		Browser: "auto",
+		Profile: ".data/browser/profile",
+		Headless: false,
+		IdleTimeout: 30 * time.Minute,
+		NavigationTimeout: 30 * time.Second,
+		ActionTimeout: 10 * time.Second,
+		SnapshotTimeout: 10 * time.Second,
 	}
 }
 
@@ -46,28 +46,28 @@ func LoadBrowserConfig(path string) (BrowserConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return BrowserConfig{}, fmt.Errorf("browser: decode config %q: %w", path, err)
 	}
-	if cfg.Host == "" || cfg.NodeCommand == "" || cfg.WorkerPath == "" || cfg.WorkerDir == "" {
-		return BrowserConfig{}, fmt.Errorf("browser configuration contains an empty required value")
+	cfg.Browser = strings.ToLower(strings.TrimSpace(cfg.Browser))
+	if cfg.Browser == "" { cfg.Browser = "auto" }
+	switch cfg.Browser {
+	case "auto", "chrome", "chromium", "edge":
+	default:
+		return BrowserConfig{}, fmt.Errorf("browser must be one of auto, chrome, chromium, edge")
 	}
-	if cfg.Port < 0 || cfg.Port > 65535 { return BrowserConfig{}, fmt.Errorf("browser port must be between 0 and 65535") }
+	if strings.TrimSpace(cfg.Profile) == "" { return BrowserConfig{}, fmt.Errorf("browser profile is required") }
 	return cfg, nil
 }
 
 func (c *BrowserConfig) UnmarshalJSON(data []byte) error {
 	type raw struct {
 		Enabled bool `json:"enabled"`
-		Host string `json:"host"`
-		Port int `json:"port"`
-		NodeCommand string `json:"node_command"`
-		WorkerPath string `json:"worker_path"`
-		WorkerDir string `json:"worker_dir"`
 		Headless bool `json:"headless"`
-		IdleTimeout string `json:"idle_timeout"`
+		Browser string `json:"browser"`
+		Profile string `json:"profile"`
 		AllowPrivate bool `json:"allow_private"`
+		IdleTimeout string `json:"idle_timeout"`
 		NavigationTimeout string `json:"navigation_timeout"`
 		ActionTimeout string `json:"action_timeout"`
 		SnapshotTimeout string `json:"snapshot_timeout"`
-		RPCStartupTimeout string `json:"rpc_startup_timeout"`
 	}
 	var r raw
 	if err := json.Unmarshal(data, &r); err != nil { return err }
@@ -82,7 +82,6 @@ func (c *BrowserConfig) UnmarshalJSON(data []byte) error {
 	nav, err := parse("navigation_timeout", r.NavigationTimeout, 30*time.Second); if err != nil { return err }
 	action, err := parse("action_timeout", r.ActionTimeout, 10*time.Second); if err != nil { return err }
 	snapshot, err := parse("snapshot_timeout", r.SnapshotTimeout, 10*time.Second); if err != nil { return err }
-	rpc, err := parse("rpc_startup_timeout", r.RPCStartupTimeout, 30*time.Second); if err != nil { return err }
-	*c = BrowserConfig{Enabled:r.Enabled, Host:r.Host, Port:r.Port, NodeCommand:r.NodeCommand, WorkerPath:r.WorkerPath, WorkerDir:r.WorkerDir, Headless:r.Headless, IdleTimeout:idle, AllowPrivate:r.AllowPrivate, NavigationTimeout:nav, ActionTimeout:action, SnapshotTimeout:snapshot, RPCStartupTimeout:rpc}
+	*c = BrowserConfig{Enabled:r.Enabled, Headless:r.Headless, Browser:r.Browser, Profile:r.Profile, AllowPrivate:r.AllowPrivate, IdleTimeout:idle, NavigationTimeout:nav, ActionTimeout:action, SnapshotTimeout:snapshot}
 	return nil
 }

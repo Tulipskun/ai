@@ -35,7 +35,7 @@ mkdir -p "$INSTALL_ROOT" "$BIN_DIR"
 ASSET="ai-${OS}-${ARCH}"
 BASE_URL="https://raw.githubusercontent.com/${REPO}/${REF}/bin"
 
-TMP="$(mktemp)"
+TMP="$(mktemp "${BIN_DIR}/.ai-install.XXXXXX")"
 CHECKSUMS="$(mktemp)"
 cleanup() { rm -f "$TMP" "$CHECKSUMS"; }
 trap cleanup EXIT
@@ -53,8 +53,7 @@ fi
 [[ "$ACTUAL" == "$EXPECTED" ]] || die "checksum verification failed"
 
 chmod 0755 "$TMP"
-mv -f "$TMP" "$INSTALL_ROOT/ai"
-ln -sfn "$INSTALL_ROOT/ai" "$BIN_DIR/ai"
+mv -f "$TMP" "$BIN_DIR/ai"
 
 if [[ -n "${PATH:-}" ]]; then
   IFS=: read -r -a PATH_DIRS <<< "$PATH"
@@ -63,9 +62,13 @@ if [[ -n "${PATH:-}" ]]; then
     candidate="$dir/ai"
     [[ "$candidate" != "$BIN_DIR/ai" ]] || continue
     [[ -L "$candidate" ]] || continue
-    [[ "$(readlink "$candidate")" == "$INSTALL_ROOT/ai" ]] || continue
-    rm -f "$candidate"
-    log "removed stale link: $candidate"
+    target="$(readlink "$candidate")"
+    case "$target" in
+      "$INSTALL_ROOT/ai"|"/usr/local/bin/ai"|"${HOME}/.local/bin/ai")
+        rm -f "$candidate"
+        log "removed stale link: $candidate"
+        ;;
+    esac
   done
 fi
 

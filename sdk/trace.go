@@ -29,6 +29,7 @@ type TraceEvent struct {
 	Text       string        `json:"text,omitempty"`
 	Err        error         `json:"-"`
 	RetryAfter time.Duration `json:"retry_after,omitempty"`
+	Elapsed    time.Duration `json:"elapsed,omitempty"`
 }
 
 type TraceFunc func(context.Context, TraceEvent)

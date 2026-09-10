@@ -83,6 +83,8 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 	}
 	ctx, cleanup := a.beginInterrupt(ctx, session.ID())
 	defer cleanup()
+	turnStart:=time.Now()
+	if trace!=nil{inner:=trace;trace=func(ctx context.Context,event TraceEvent){event.Elapsed=time.Since(turnStart);inner(ctx,event)}}
 
 	before := session.History()
 	retries := a.MaxRetries

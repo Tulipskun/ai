@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/Tulipskun/ai/sdk"
 )
@@ -110,4 +111,32 @@ func TestTruncateTextPreservesNewlines(t *testing.T) {
 	if got != "a\nb" { t.Fatalf("truncateText = %q", got) }
 	got = truncateText("abcdef", 3)
 	if got != "ab…" { t.Fatalf("truncateText = %q", got) }
+}
+
+func TestDisplayTraceReadyShowsElapsed(t *testing.T) {
+	sender := &routingFakeSender{}
+	display := Display{Sender: sender}
+	trace := sdk.TraceEvent{Stage: sdk.TraceProviderReady, Elapsed: 23 * time.Second}
+	output := sdk.Output{Source: "discord", SessionID: "s", Metadata: map[string]string{"channel_id": "c"}, Trace: &trace}
+	if err := display.Display(context.Background(), output); err != nil { t.Fatal(err) }
+	if len(sender.tools) != 1 || sender.tools[0] != "provider accepted request; processing · 23s" {
+		t.Fatalf("tools = %q", sender.tools)
+	}
+}
+
+func TestDisplayTraceToolShowsElapsed(t *testing.T) {
+	sender := &routingFakeSender{}
+	display := Display{Sender: sender}
+	call := &sdk.ToolCall{ID: "1", Name: "list_directory", Arguments: "{}"}
+	trace := sdk.TraceEvent{Stage: sdk.TraceToolCall, ToolCall: call, Elapsed: 5 * time.Second}
+	output := sdk.Output{Source: "discord", SessionID: "s", Metadata: map[string]string{"channel_id": "c"}, Trace: &trace}
+	if err := display.Display(context.Background(), output); err != nil { t.Fatal(err) }
+	if len(sender.tools) != 1 || sender.tools[0] != `list_directory("{}") · 5s` {
+		t.Fatalf("tools = %q", sender.tools)
+	}
+}
+
+func TestWithElapsedSkipsZero(t *testing.T) {
+	if got := withElapsed("msg", 0); got != "msg" { t.Fatalf("withElapsed = %q", got) }
+	if got := withElapsed("msg", 1500*time.Millisecond); got != "msg · 2s" { t.Fatalf("withElapsed = %q", got) }
 }

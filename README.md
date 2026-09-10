@@ -164,11 +164,11 @@ ai-linux-arm64
 checksums.txt
 ```
 
-`main` builds update the moving `latest` release. Pushing a tag like `v1.2.3` publishes a pinned release with the same asset. Install/update with:
+`main` builds publish the next version automatically (`v1.0`, `v1.1`, ...). Pushing your own tag like `v1.5` publishes that pinned release instead. Install/update with:
 
 ```bash
 gh release download --repo Tulipskun/ai --pattern 'ai-linux-arm64' --pattern checksums.txt
-AI_VERSION=v1.2.3 ai update
+AI_VERSION=v1.1 ai update
 ```
 
 ## Harness selection flow

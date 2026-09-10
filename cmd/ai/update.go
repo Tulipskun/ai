@@ -1,32 +1,40 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 )
 
 func runUpdate() error {
 	app, err := installedBinary()
 	if err != nil { return err }
-	repo := envOr("AI_REPO", "kyomu53n-group/ai")
-	ref := envOr("AI_VERSION", "main")
+	repo := envOr("AI_REPO", "Tulipskun/ai")
+	version := strings.TrimSpace(os.Getenv("AI_VERSION"))
 	assetOS := runtime.GOOS
 	assetArch := runtime.GOARCH
-	if assetOS != "linux" && assetOS != "darwin" { return fmt.Errorf("unsupported operating system: %s", assetOS) }
-	if assetArch != "amd64" && assetArch != "arm64" { return fmt.Errorf("unsupported architecture: %s", assetArch) }
+	if assetOS != "linux" { return fmt.Errorf("unsupported operating system: %s (only linux is supported)", assetOS) }
+	if assetArch != "arm64" { return fmt.Errorf("unsupported architecture: %s (only arm64 is supported)", assetArch) }
 	asset := fmt.Sprintf("ai-%s-%s", assetOS, assetArch)
-	base := fmt.Sprintf("https://gitlab.com/%s/-/raw/%s/bin", repo, ref)
-	binary, err := download(fmt.Sprintf("%s/%s", base, asset)); if err != nil { return fmt.Errorf("download %s: %w", asset, err) }
-	checksums, err := download(fmt.Sprintf("%s/checksums.txt", base)); if err != nil { return fmt.Errorf("download checksums: %w", err) }
+	if _, err := exec.LookPath("gh"); err != nil {
+		return fmt.Errorf("gh CLI is required for ai update (install from https://cli.github.com and run: gh auth login): %w", err)
+	}
+	tmpDir, err := os.MkdirTemp("", "ai-update-*")
+	if err != nil { return err }
+	defer os.RemoveAll(tmpDir)
+	if err := ghReleaseDownload(repo, version, tmpDir, []string{asset, "checksums.txt"}); err != nil {
+		return err
+	}
+	binary, err := os.ReadFile(filepath.Join(tmpDir, asset))
+	if err != nil { return fmt.Errorf("read downloaded %s: %w", asset, err) }
+	checksums, err := os.ReadFile(filepath.Join(tmpDir, "checksums.txt"))
+	if err != nil { return fmt.Errorf("read downloaded checksums: %w", err) }
 	expected, err := checksumForAsset(checksums, asset); if err != nil { return err }
 	actual := fmt.Sprintf("%x", sha256.Sum256(binary)); if actual != expected { return fmt.Errorf("checksum verification failed for %s", asset) }
 	tmp, err := os.CreateTemp(filepath.Dir(app), ".ai-update-*"); if err != nil { return err }
@@ -41,11 +49,57 @@ func runUpdate() error {
 	return nil
 }
 
+// ghReleaseDownload downloads release assets with `gh release download`.
+// Empty version or "latest" means the GitHub latest release, otherwise an explicit tag.
+func ghReleaseDownload(repo, version, dir string, patterns []string) error {
+	args := ghReleaseDownloadArgs(repo, version, dir, patterns)
+	cmd := exec.Command("gh", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			detail = err.Error()
+		}
+		return fmt.Errorf("gh release download %s: %s", releaseLabel(version), detail)
+	}
+	return nil
+}
+
+func ghReleaseDownloadArgs(repo, version, dir string, patterns []string) []string {
+	args := []string{"release", "download"}
+	if !isLatestVersion(version) {
+		args = append(args, strings.TrimSpace(version))
+	}
+	if repo != "" {
+		args = append(args, "--repo", repo)
+	}
+	for _, p := range patterns {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		args = append(args, "--pattern", p)
+	}
+	args = append(args, "--dir", dir, "--clobber")
+	return args
+}
+
+func isLatestVersion(version string) bool {
+	v := strings.TrimSpace(version)
+	return v == "" || strings.EqualFold(v, "latest")
+}
+
+func releaseLabel(version string) string {
+	if isLatestVersion(version) {
+		return "latest"
+	}
+	return strings.TrimSpace(version)
+}
+
 func restartDaemonAfterUpdate(app string, wasRunning bool) error { if !wasRunning { return nil }; return startDaemon(app) }
 func parsePID(value string) int { var pid int; if _, err := fmt.Sscanf(strings.TrimSpace(value), "%d", &pid); err != nil { return 0 }; return pid }
 func installedBinary() (string, error) { argv0 := strings.TrimSpace(os.Args[0]); if argv0 == "" { return "", fmt.Errorf("cannot determine invoked binary path") }; var exe string; if strings.ContainsRune(argv0, os.PathSeparator) { exe=argv0; if !filepath.IsAbs(exe) { var err error; exe,err=filepath.Abs(exe); if err!=nil{return "",err} } } else { var err error; exe,err=exec.LookPath(argv0); if err!=nil{return "",err}; if !filepath.IsAbs(exe) { exe,err=filepath.Abs(exe); if err!=nil{return "",err} } }; if !fileExists(exe) { return "",fmt.Errorf("installed binary not found: %s",exe) }; return filepath.Clean(exe),nil }
 func stateRoot() (string, error) { if value:=strings.TrimSpace(os.Getenv("AI_DATA_DIR"));value!=""{return filepath.Clean(value),nil};home,err:=os.UserHomeDir();if err!=nil{if current,userErr:=user.Current();userErr==nil&&current.HomeDir!=""{return filepath.Join(current.HomeDir,".local","share","ai"),nil};return "",err};return filepath.Join(home,".local","share","ai"),nil }
 func daemonRunning() bool { root,err:=stateRoot();if err!=nil{return false};data,err:=os.ReadFile(filepath.Join(root,"ai.pid"));if err!=nil{return false};return processAlive(parsePID(string(data))) }
-func download(url string)([]byte,error){client:=&http.Client{Timeout:30*time.Second};req,err:=http.NewRequest(http.MethodGet,url,nil);if err!=nil{return nil,err};resp,err:=client.Do(req);if err!=nil{return nil,err};defer resp.Body.Close();if resp.StatusCode!=http.StatusOK{return nil,fmt.Errorf("HTTP %d",resp.StatusCode)};return io.ReadAll(resp.Body)}
 func checksumForAsset(data []byte,asset string)(string,error){for _,line:=range strings.Split(string(data),"\n"){fields:=strings.Fields(line);if len(fields)>=2&&fields[1]==asset{return fields[0],nil}};return "",fmt.Errorf("checksum entry not found for %s",asset)}
 func fileExists(path string)bool{_,err:=os.Stat(path);return err==nil}

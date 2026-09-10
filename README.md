@@ -4,7 +4,7 @@ Prototype canonical Go SDK for an AI Harness.
 
 ## Install
 
-Install the `ai` command on Linux or macOS with one command. The installer downloads only the prebuilt binary committed under `bin/`; it does not require Git or Go. Runtime state is kept under `~/.local/share/ai` by default.
+Install the `ai` command on Linux arm64 with one command. The installer downloads only the `ai-linux-arm64` binary from GitHub Releases (`gh release download`); it does not require Git or Go. Runtime state is kept under `~/.local/share/ai` by default.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Tulipskun/ai/main/scripts/install.sh | bash
@@ -16,13 +16,17 @@ Then start it with:
 ai start
 ```
 
-GitHub Actions builds Linux amd64/arm64 and macOS amd64/arm64 binaries and commits them to `bin/` after source changes.
+GitHub Actions builds the Linux arm64 binary and publishes it as a GitHub Release asset after source changes.
 
 ```bash
 ai update
 ```
 
-The installer and updater verify the downloaded binary against `bin/checksums.txt`. `AI_VERSION` can be set to a branch, tag, or commit ref when a pinned repository version is required.
+The installer and updater download with `gh release download --repo Tulipskun/ai` and verify the binary against the release `checksums.txt`. `AI_VERSION` can be set to a release tag when a pinned version is required (default: `latest`).
+
+```bash
+AI_VERSION=v1.2.3 ai update
+```
 
 To completely remove the installation, including the daemon, runtime state, sessions, provider configuration, logs, and history, run:
 
@@ -153,17 +157,19 @@ go build -o ai ./cmd/ai
 
 ## Binary build pipeline
 
-Every push to `main` that changes source/configuration triggers GitHub Actions. It runs the Go test suite, cross-compiles four CGO-free binaries, computes SHA-256 checksums, and commits the resulting files to `bin/`.
+Every push to `main` triggers GitHub Actions (`.github/workflows/release.yml`). It runs the Go test suite, cross-compiles one CGO-free Linux arm64 binary, computes SHA-256 checksums, and publishes it as a GitHub Release asset (no binaries are committed to the repo).
 
 ```text
-bin/ai-linux-amd64
-bin/ai-linux-arm64
-bin/ai-darwin-amd64
-bin/ai-darwin-arm64
-bin/checksums.txt
+ai-linux-arm64
+checksums.txt
 ```
 
-The workflow ignores `bin/**` changes when triggering, so its own binary commit does not recursively rebuild.
+`main` builds update the moving `latest` release. Pushing a tag like `v1.2.3` publishes a pinned release with the same asset. Install/update with:
+
+```bash
+gh release download --repo Tulipskun/ai --pattern 'ai-linux-arm64' --pattern checksums.txt
+AI_VERSION=v1.2.3 ai update
+```
 
 ## Harness selection flow
 

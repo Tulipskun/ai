@@ -2,13 +2,13 @@
 
 ## One command
 
-Linux and macOS:
+Linux arm64:
 
 ```bash
-curl -fsSL https://gitlab.com/kyomu53n-group/ai/-/raw/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Tulipskun/ai/main/scripts/install.sh | bash
 ```
 
-The installer downloads only the matching prebuilt binary from `bin/`, verifies it against `bin/checksums.txt`, and installs the `ai` command.
+The installer downloads only the `ai-linux-arm64` binary from GitHub Releases with `gh release download --repo Tulipskun/ai`, verifies it against the release `checksums.txt`, and installs the `ai` command.
 
 No Git, Go, Node.js, or Playwright installation is required for normal use.
 

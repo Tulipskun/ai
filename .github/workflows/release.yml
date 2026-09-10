@@ -1,0 +1,80 @@
+name: Build Binaries
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'bin/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            goos: linux
+            goarch: amd64
+          - os: linux
+            goos: linux
+            goarch: arm64
+          - os: darwin
+            goos: darwin
+            goarch: amd64
+          - os: darwin
+            goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go test ./... -timeout 2m
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags '-s -w' -o dist/ai-${{ matrix.os }}-${{ matrix.goarch }} ./cmd/ai
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-${{ matrix.os }}-${{ matrix.goarch }}
+          path: dist/ai-${{ matrix.os }}-${{ matrix.goarch }}
+
+  commit:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: ai-*
+          merge-multiple: true
+      - name: Commit binaries
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          cp dist/ai-* bin/
+          chmod 0755 bin/ai-*
+          (cd bin && sha256sum ai-* > checksums.txt)
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bin
+          if git diff --cached --quiet; then
+            echo 'No binary changes.'
+            exit 0
+          fi
+          git commit -m 'build: update prebuilt binaries'
+          git push origin HEAD:main

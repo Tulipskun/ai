@@ -1,0 +1,51 @@
+package main
+
+import (
+	"crypto/sha256"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"os/user"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+)
+
+func runUpdate() error {
+	app, err := installedBinary()
+	if err != nil { return err }
+	repo := envOr("AI_REPO", "kyomu53n-group/ai")
+	ref := envOr("AI_VERSION", "main")
+	assetOS := runtime.GOOS
+	assetArch := runtime.GOARCH
+	if assetOS != "linux" && assetOS != "darwin" { return fmt.Errorf("unsupported operating system: %s", assetOS) }
+	if assetArch != "amd64" && assetArch != "arm64" { return fmt.Errorf("unsupported architecture: %s", assetArch) }
+	asset := fmt.Sprintf("ai-%s-%s", assetOS, assetArch)
+	base := fmt.Sprintf("https://gitlab.com/%s/-/raw/%s/bin", repo, ref)
+	binary, err := download(fmt.Sprintf("%s/%s", base, asset)); if err != nil { return fmt.Errorf("download %s: %w", asset, err) }
+	checksums, err := download(fmt.Sprintf("%s/checksums.txt", base)); if err != nil { return fmt.Errorf("download checksums: %w", err) }
+	expected, err := checksumForAsset(checksums, asset); if err != nil { return err }
+	actual := fmt.Sprintf("%x", sha256.Sum256(binary)); if actual != expected { return fmt.Errorf("checksum verification failed for %s", asset) }
+	tmp, err := os.CreateTemp(filepath.Dir(app), ".ai-update-*"); if err != nil { return err }
+	tmpPath := tmp.Name(); defer os.Remove(tmpPath)
+	if _, err := tmp.Write(binary); err != nil { _ = tmp.Close(); return err }
+	if err := tmp.Chmod(0o755); err != nil { _ = tmp.Close(); return err }
+	if err := tmp.Close(); err != nil { return err }
+	wasRunning := daemonRunning(); if wasRunning { if err := stopDaemon(app); err != nil { return fmt.Errorf("stop daemon for update: %w", err) } }
+	if err := os.Rename(tmpPath, app); err != nil { if wasRunning { if restartErr := startDaemon(app); restartErr != nil { return fmt.Errorf("replace binary: %w; restore daemon: %v", err, restartErr) } }; return fmt.Errorf("replace binary: %w", err) }
+	fmt.Printf("[ai] updated %s\n", app)
+	if err := restartDaemonAfterUpdate(app, wasRunning); err != nil { return fmt.Errorf("restart daemon: %w", err) }
+	return nil
+}
+
+func restartDaemonAfterUpdate(app string, wasRunning bool) error { if !wasRunning { return nil }; return startDaemon(app) }
+func parsePID(value string) int { var pid int; if _, err := fmt.Sscanf(strings.TrimSpace(value), "%d", &pid); err != nil { return 0 }; return pid }
+func installedBinary() (string, error) { argv0 := strings.TrimSpace(os.Args[0]); if argv0 == "" { return "", fmt.Errorf("cannot determine invoked binary path") }; var exe string; if strings.ContainsRune(argv0, os.PathSeparator) { exe=argv0; if !filepath.IsAbs(exe) { var err error; exe,err=filepath.Abs(exe); if err!=nil{return "",err} } } else { var err error; exe,err=exec.LookPath(argv0); if err!=nil{return "",err}; if !filepath.IsAbs(exe) { exe,err=filepath.Abs(exe); if err!=nil{return "",err} } }; if !fileExists(exe) { return "",fmt.Errorf("installed binary not found: %s",exe) }; return filepath.Clean(exe),nil }
+func stateRoot() (string, error) { if value:=strings.TrimSpace(os.Getenv("AI_DATA_DIR"));value!=""{return filepath.Clean(value),nil};home,err:=os.UserHomeDir();if err!=nil{if current,userErr:=user.Current();userErr==nil&&current.HomeDir!=""{return filepath.Join(current.HomeDir,".local","share","ai"),nil};return "",err};return filepath.Join(home,".local","share","ai"),nil }
+func daemonRunning() bool { root,err:=stateRoot();if err!=nil{return false};data,err:=os.ReadFile(filepath.Join(root,"ai.pid"));if err!=nil{return false};return processAlive(parsePID(string(data))) }
+func download(url string)([]byte,error){client:=&http.Client{Timeout:30*time.Second};req,err:=http.NewRequest(http.MethodGet,url,nil);if err!=nil{return nil,err};resp,err:=client.Do(req);if err!=nil{return nil,err};defer resp.Body.Close();if resp.StatusCode!=http.StatusOK{return nil,fmt.Errorf("HTTP %d",resp.StatusCode)};return io.ReadAll(resp.Body)}
+func checksumForAsset(data []byte,asset string)(string,error){for _,line:=range strings.Split(string(data),"\n"){fields:=strings.Fields(line);if len(fields)>=2&&fields[1]==asset{return fields[0],nil}};return "",fmt.Errorf("checksum entry not found for %s",asset)}
+func fileExists(path string)bool{_,err:=os.Stat(path);return err==nil}

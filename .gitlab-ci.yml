@@ -1,0 +1,19 @@
+image: golang:1.25
+
+stages:
+  - test
+
+cache:
+  key: go-mod-cache
+  paths:
+    - /go/pkg/mod/
+    - /root/.cache/go-build/
+
+before_script:
+  - go version
+  - go mod download
+
+test:
+  stage: test
+  script:
+    - go test ./...

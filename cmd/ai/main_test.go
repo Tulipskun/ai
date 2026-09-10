@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Tulipskun/ai/sdk"
@@ -51,3 +52,33 @@ func TestExpandHome(t *testing.T) {
 	if got := expandHome("~/my-project"); got != filepath.Join(home, "my-project") { t.Fatalf("expandHome(~/my-project) = %q", got) }
 	if got := expandHome("/tmp/x"); got != "/tmp/x" { t.Fatalf("expandHome(/tmp/x) = %q", got) }
 }
+
+func TestSystemPromptEnvOverridesDefault(t *testing.T) {
+	t.Setenv("AI_SYSTEM_PROMPT", "custom prompt")
+	if got := systemPrompt(nil); got != "custom prompt" {
+		t.Fatalf("systemPrompt = %q", got)
+	}
+}
+
+func TestSystemPromptDefaultMentionsTools(t *testing.T) {
+	t.Setenv("AI_SYSTEM_PROMPT", "")
+	client := sdk.NewRouterClient(sdk.NewRouter())
+	agent, err := newAgent(client, t.TempDir(), nil, false, "")
+	if err != nil { t.Fatal(err) }
+	got := systemPrompt(agent)
+	for _, want := range []string{"CALL the matching tool", "run_command", "read_file", "Available tools:"} {
+		if !containsStr(got, want) {
+			t.Fatalf("default prompt missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestSystemPromptNilAgentHasRules(t *testing.T) {
+	t.Setenv("AI_SYSTEM_PROMPT", "")
+	got := systemPrompt(nil)
+	if !containsStr(got, "gets things done with tools") {
+		t.Fatalf("default prompt missing rules:\n%s", got)
+	}
+}
+
+func containsStr(haystack, needle string) bool { return strings.Contains(haystack, needle) }

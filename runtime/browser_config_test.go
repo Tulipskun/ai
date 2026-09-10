@@ -44,3 +44,20 @@ func TestLoadBrowserConfigRequiresEndpointForAttach(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"mode":"attach"}`), 0o600); err != nil { t.Fatal(err) }
 	if _, err := LoadBrowserConfig(path); err == nil { t.Fatal("expected cdp endpoint error") }
 }
+
+func TestSaveBrowserConfigRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "browser.json")
+	cfg, err := LoadBrowserConfig(filepath.Join(t.TempDir(), "missing.json"))
+	if err != nil { t.Fatal(err) }
+	cfg.Enabled = true
+	cfg.Mode = "attach"
+	cfg.Browser = "chromium"
+	cfg.CDPEndpoint = "http://127.0.0.1:9222"
+	cfg.Headless = true
+	cfg.AllowPrivate = true
+	if err := SaveBrowserConfig(path, cfg); err != nil { t.Fatal(err) }
+	got, err := LoadBrowserConfig(path)
+	if err != nil { t.Fatal(err) }
+	if !got.Enabled || got.Mode != "attach" || got.Browser != "chromium" || got.CDPEndpoint != "http://127.0.0.1:9222" || !got.Headless || !got.AllowPrivate { t.Fatalf("round trip mismatch: %#v", got) }
+	if got.IdleTimeout != cfg.IdleTimeout || got.NavigationTimeout != cfg.NavigationTimeout || got.ActionTimeout != cfg.ActionTimeout || got.SnapshotTimeout != cfg.SnapshotTimeout { t.Fatalf("durations mismatch: %#v", got) }
+}

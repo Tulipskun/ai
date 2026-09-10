@@ -16,6 +16,8 @@ func TestParseCommand(t *testing.T) {
 		{name: "cli", args: []string{"cli"}, want: commandCLI},
 		{name: "discord", args: []string{"discord"}, want: commandDiscord},
 		{name: "discord disable", args: []string{"discord", "disable"}, want: commandDiscord},
+		{name: "browser", args: []string{"browser"}, want: commandBrowser},
+		{name: "browser disable", args: []string{"browser", "disable"}, want: commandBrowser},
 		{name: "update", args: []string{"update"}, want: commandUpdate},
 		{name: "uninstall", args: []string{"uninstall"}, want: commandUninstall},
 		{name: "no args keeps backwards compatibility", args: nil, want: commandStart},
@@ -24,6 +26,7 @@ func TestParseCommand(t *testing.T) {
 		{name: "long help", args: []string{"--help"}, want: commandStart, err: errHelp},
 		{name: "unknown command", args: []string{"status"}, want: commandStart, err: errors.New("unknown command")},
 		{name: "discord rejects flags", args: []string{"discord", "--token", "x"}, want: commandDiscord, err: errors.New("discord usage")},
+		{name: "browser rejects flags", args: []string{"browser", "--mode", "x"}, want: commandBrowser, err: errors.New("browser usage")},
 	}
 
 	for _, tt := range tests {

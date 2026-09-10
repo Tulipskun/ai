@@ -34,6 +34,8 @@ func main() {
 		if err := runCLI(); err != nil && !errors.Is(err, context.Canceled) { log.Fatal(err) }
 	case commandDiscord:
 		if err := runDiscordConfig(os.Args[2:]); err != nil { log.Fatal(err) }
+	case commandBrowser:
+		if err := runBrowserConfig(os.Args[2:]); err != nil { log.Fatal(err) }
 	case commandUpdate:
 		if err := runUpdate(); err != nil { log.Fatal(err) }
 	case commandDaemon:
@@ -60,6 +62,39 @@ func runDiscordConfig(args []string) error {
 }
 
 func prompt(reader *bufio.Reader, label string) (string, error) { fmt.Print(label); value, err := reader.ReadString('\n'); if err != nil && !errors.Is(err, os.ErrClosed) && len(value) == 0 { return "", err }; return strings.TrimSpace(value), nil }
+func promptDefault(reader *bufio.Reader, label, def string) (string, error) { value, err := prompt(reader, fmt.Sprintf("%s [%s]: ", label, def)); if err != nil { return "", err }; if value == "" { return def, nil }; return value, nil }
+func promptBool(reader *bufio.Reader, label string, def bool) (bool, error) { hint := "y/n"; if def { hint = "Y/n" } else { hint = "y/N" }; value, err := prompt(reader, fmt.Sprintf("%s (%s): ", label, hint)); if err != nil { return false, err }; if value == "" { return def, nil }; switch strings.ToLower(value) { case "y", "yes", "true", "1": return true, nil; case "n", "no", "false", "0": return false, nil }; return false, fmt.Errorf("browser: answer y or n for %q", label) }
+func runBrowserConfig(args []string) error {
+	state, err := stateRoot(); if err != nil { return err }
+	path := filepath.Join(state, runtime.DefaultBrowserConfigPath)
+	current, err := runtime.LoadBrowserConfig(path); if err != nil { return err }
+	if len(args) == 1 && args[0] == "disable" { current.Enabled = false; if err := runtime.SaveBrowserConfig(path, current); err != nil { return err }; fmt.Printf("Browser automation disabled. Config: %s\n", path); return nil }
+	if len(args) != 0 { return errors.New("browser: usage is 'ai browser' or 'ai browser disable'") }
+	reader := bufio.NewReader(os.Stdin)
+	enabled, err := promptBool(reader, "Enable browser automation", current.Enabled); if err != nil { return err }
+	current.Enabled = enabled
+	mode, err := promptDefault(reader, "Mode (managed/attach)", current.Mode); if err != nil { return err }
+	mode = strings.ToLower(strings.TrimSpace(mode)); if mode != "managed" && mode != "attach" { return fmt.Errorf("browser: mode must be managed or attach") }
+	current.Mode = mode
+	if mode == "attach" {
+		endpoint, err := promptDefault(reader, "CDP endpoint (http://127.0.0.1:9222)", current.CDPEndpoint); if err != nil { return err }
+		if strings.TrimSpace(endpoint) == "" { return errors.New("browser: cdp_endpoint is required in attach mode") }
+		current.CDPEndpoint = strings.TrimSpace(endpoint)
+	} else {
+		browser, err := promptDefault(reader, "Browser (auto/chrome/chromium/edge)", current.Browser); if err != nil { return err }
+		browser = strings.ToLower(strings.TrimSpace(browser)); switch browser { case "auto", "chrome", "chromium", "edge": default: return fmt.Errorf("browser must be one of auto, chrome, chromium, edge") }
+		current.Browser = browser
+		profile, err := promptDefault(reader, "Profile directory", current.Profile); if err != nil { return err }
+		if strings.TrimSpace(profile) == "" { return errors.New("browser: profile is required in managed mode") }
+		current.Profile = strings.TrimSpace(profile)
+		headless, err := promptBool(reader, "Headless", current.Headless); if err != nil { return err }
+		current.Headless = headless
+	}
+	allowPrivate, err := promptBool(reader, "Allow private pages", current.AllowPrivate); if err != nil { return err }
+	current.AllowPrivate = allowPrivate
+	if err := runtime.SaveBrowserConfig(path, current); err != nil { return err }
+	fmt.Printf("Browser config saved to %s\n", path); return nil
+}
 func runBackground() error { app, err := installedBinary(); if err != nil { return err }; return startDaemon(app) }
 func startDaemon(app string) error {
 	state, err := stateRoot(); if err != nil { return err }

@@ -96,7 +96,7 @@ The default mode is `managed` and headed:
 }
 ```
 
-`browser` may be `auto`, `chrome`, `chromium`, or `edge`. In `managed` mode the runtime starts a dedicated profile. In `attach` mode, `cdp_endpoint` points at an existing browser remote debugging endpoint:
+`browser` may be `auto`, `chrome`, `chromium`, or `edge`. Run `ai browser` to configure browser automation interactively (`ai browser disable` turns it off). In `managed` mode the runtime starts a dedicated profile. In `attach` mode, `cdp_endpoint` points at an existing browser remote debugging endpoint:
 
 ```json
 {

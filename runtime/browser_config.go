@@ -56,6 +56,24 @@ func LoadBrowserConfig(path string) (BrowserConfig, error) {
 	return cfg, nil
 }
 
+func SaveBrowserConfig(path string, cfg BrowserConfig) error {
+	if path == "" { path = DefaultBrowserConfigPath }
+	out := map[string]any{
+		"enabled": cfg.Enabled, "mode": cfg.Mode, "headless": cfg.Headless,
+		"browser": cfg.Browser, "profile": cfg.Profile, "cdp_endpoint": cfg.CDPEndpoint,
+		"allow_private": cfg.AllowPrivate, "idle_timeout": cfg.IdleTimeout.String(),
+		"navigation_timeout": cfg.NavigationTimeout.String(), "action_timeout": cfg.ActionTimeout.String(),
+		"snapshot_timeout": cfg.SnapshotTimeout.String(),
+	}
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil { return fmt.Errorf("browser: encode config: %w", err) }
+	if err := os.MkdirAll(dirOf(path), 0o700); err != nil { return fmt.Errorf("browser: create config directory: %w", err) }
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil { return fmt.Errorf("browser: write config %q: %w", path, err) }
+	return nil
+}
+
+func dirOf(path string) string { i := strings.LastIndex(path, "/"); if i < 0 { return "." }; if i == 0 { return "/" }; return path[:i] }
+
 func (c *BrowserConfig) UnmarshalJSON(data []byte) error {
 	defaults := defaultBrowserConfig()
 	type raw struct {

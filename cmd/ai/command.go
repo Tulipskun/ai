@@ -15,6 +15,7 @@ const (
 	commandDaemon
 	commandUninstall
 	commandDiscord
+	commandBrowser
 )
 
 func parseCommand(args []string) (command, error) {
@@ -44,6 +45,12 @@ func parseCommand(args []string) (command, error) {
 		}
 		return commandDiscord, nil
 	}
+	if args[0] == "browser" {
+		if len(args) > 2 || (len(args) == 2 && args[1] != "disable") {
+			return commandBrowser, fmt.Errorf("browser: usage is 'ai browser' or 'ai browser disable'")
+		}
+		return commandBrowser, nil
+	}
 	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		return commandStart, errHelp
 	}
@@ -59,6 +66,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  start      Start the AI Harness in the background and return")
 	fmt.Fprintln(w, "  cli        Open an interactive AI Harness CLI session")
 	fmt.Fprintln(w, "  discord    Configure Discord interactively")
+	fmt.Fprintln(w, "  browser    Configure browser automation interactively")
 	fmt.Fprintln(w, "  update     Download and replace the installed AI binary")
 	fmt.Fprintln(w, "  uninstall  Stop AI and remove the binary and runtime state")
 }

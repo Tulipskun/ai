@@ -42,3 +42,50 @@ func TestGatewayIntentsIncludeMessageContentAndMessages(t *testing.T) {
 		t.Fatal("message content intent is missing")
 	}
 }
+
+func TestToolTraceEmbedHasNoTitle(t *testing.T) {
+	embed := toolTraceEmbed([]string{"hello"})
+	if embed.Title != "" {
+		t.Fatalf("embed title = %q, want empty", embed.Title)
+	}
+	if embed.Description != "hello" {
+		t.Fatalf("embed description = %q", embed.Description)
+	}
+}
+
+func TestToolTraceStateStartsNewEmbedOnTextTransition(t *testing.T) {
+	state := &toolTraceState{messageID: "msg-1", items: []string{"tool_call"}, isText: false}
+	if isNew := state.append("hello", true); !isNew {
+		t.Fatal("text after trace items should start a new embed")
+	}
+	if len(state.items) != 1 || state.items[0] != "hello" {
+		t.Fatalf("new embed items = %q", state.items)
+	}
+	if state.messageID != "" {
+		t.Fatalf("messageID should reset, got %q", state.messageID)
+	}
+}
+
+func TestToolTraceStateConcatenatesConsecutiveText(t *testing.T) {
+	state := &toolTraceState{}
+	if isNew := state.append("hel", true); !isNew {
+		t.Fatal("first text should request a new embed")
+	}
+	state.messageID = "msg-1"
+	if isNew := state.append("lo", true); isNew {
+		t.Fatal("consecutive text should edit the same embed")
+	}
+	if len(state.items) != 1 || state.items[0] != "hello" {
+		t.Fatalf("text items = %q", state.items)
+	}
+}
+
+func TestToolTraceStateStartsNewEmbedOnTraceAfterText(t *testing.T) {
+	state := &toolTraceState{messageID: "msg-1", items: []string{"hello"}, isText: true}
+	if isNew := state.append("tool_call", false); !isNew {
+		t.Fatal("trace after text should start a new embed")
+	}
+	if len(state.items) != 1 || state.items[0] != "tool_call" {
+		t.Fatalf("new embed items = %q", state.items)
+	}
+}

@@ -58,3 +58,57 @@ func TestDisplayTraceRequiresChannel(t *testing.T) {
 		t.Fatal("expected missing channel_id error")
 	}
 }
+
+type routingFakeSender struct{ texts, tools, messages []string }
+
+func (f *routingFakeSender) SendMessage(_ context.Context, channelID, content string) error {
+	f.messages = append(f.messages, channelID+":"+content)
+	return nil
+}
+func (f *routingFakeSender) setToolTrace(_ context.Context, _ string, _ []string) error { return nil }
+func (f *routingFakeSender) appendToolTrace(_ context.Context, _ string, item string) error {
+	f.tools = append(f.tools, item)
+	return nil
+}
+func (f *routingFakeSender) clearToolTrace(_ context.Context, _ string) error { return nil }
+func (f *routingFakeSender) appendTextTrace(_ context.Context, _ string, text string) error {
+	f.texts = append(f.texts, text)
+	return nil
+}
+
+func TestDisplayTraceContentRoutesTextToNewEmbed(t *testing.T) {
+	sender := &routingFakeSender{}
+	display := Display{Sender: sender}
+	trace := sdk.TraceEvent{Stage: sdk.TraceResponseContent, Response: &sdk.Response{Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "hello"}}}}
+	output := sdk.Output{Source: "discord", SessionID: "s", Metadata: map[string]string{"channel_id": "c"}, Trace: &trace}
+	if err := display.Display(context.Background(), output); err != nil { t.Fatal(err) }
+	if len(sender.texts) != 1 || sender.texts[0] != "hello" { t.Fatalf("texts = %q", sender.texts) }
+	if len(sender.tools) != 0 || len(sender.messages) != 0 { t.Fatalf("text should only go to new embed: tools=%q messages=%q", sender.tools, sender.messages) }
+}
+
+func TestDisplayTraceContentPrefersStreamText(t *testing.T) {
+	sender := &routingFakeSender{}
+	display := Display{Sender: sender}
+	trace := sdk.TraceEvent{Stage: sdk.TraceResponseContent, Text: "chunk"}
+	output := sdk.Output{Source: "discord", SessionID: "s", Metadata: map[string]string{"channel_id": "c"}, Trace: &trace}
+	if err := display.Display(context.Background(), output); err != nil { t.Fatal(err) }
+	if len(sender.texts) != 1 || sender.texts[0] != "chunk" { t.Fatalf("texts = %q", sender.texts) }
+}
+
+func TestDisplayTraceContentEmptySendsNothing(t *testing.T) {
+	sender := &routingFakeSender{}
+	display := Display{Sender: sender}
+	trace := sdk.TraceEvent{Stage: sdk.TraceResponseContent, Response: &sdk.Response{}}
+	output := sdk.Output{Source: "discord", SessionID: "s", Metadata: map[string]string{"channel_id": "c"}, Trace: &trace}
+	if err := display.Display(context.Background(), output); err != nil { t.Fatal(err) }
+	if len(sender.texts) != 0 || len(sender.tools) != 0 || len(sender.messages) != 0 {
+		t.Fatalf("empty content should send nothing: texts=%q tools=%q messages=%q", sender.texts, sender.tools, sender.messages)
+	}
+}
+
+func TestTruncateTextPreservesNewlines(t *testing.T) {
+	got := truncateText("a\nb", 100)
+	if got != "a\nb" { t.Fatalf("truncateText = %q", got) }
+	got = truncateText("abcdef", 3)
+	if got != "ab…" { t.Fatalf("truncateText = %q", got) }
+}

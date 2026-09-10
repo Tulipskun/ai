@@ -30,3 +30,31 @@ func TestDisplaySendsRawDiscordOutput(t *testing.T) {
 
 type recordingSender struct{ channelID, content string }
 func (s *recordingSender) SendMessage(_ context.Context, channelID, content string) error { s.channelID = channelID; s.content = content; return nil }
+
+func TestDisplaySendsTraceResponseAsText(t *testing.T) {
+	sender := &recordingSender{}
+	display := Display{Sender: sender}
+	trace := sdk.TraceEvent{Stage: sdk.TraceResponse, Response: &sdk.Response{Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "hello"}}}}
+	output := sdk.Output{Source: "discord", SessionID: "discord:channel:1", Metadata: map[string]string{"channel_id": "channel-1"}, Trace: &trace}
+	if err := display.Display(context.Background(), output); err != nil { t.Fatal(err) }
+	if sender.channelID != "channel-1" { t.Fatalf("unexpected channel: %q", sender.channelID) }
+	if sender.content != "hello" { t.Fatalf("trace response should send plain text, got %q", sender.content) }
+}
+
+func TestDisplaySkipsEmptyTraceResponse(t *testing.T) {
+	sender := &recordingSender{}
+	display := Display{Sender: sender}
+	trace := sdk.TraceEvent{Stage: sdk.TraceResponse, Response: &sdk.Response{}}
+	output := sdk.Output{Source: "discord", SessionID: "discord:channel:1", Metadata: map[string]string{"channel_id": "channel-1"}, Trace: &trace}
+	if err := display.Display(context.Background(), output); err != nil { t.Fatal(err) }
+	if sender.content != "" { t.Fatalf("empty trace response should send nothing, got %q", sender.content) }
+}
+
+func TestDisplayTraceRequiresChannel(t *testing.T) {
+	display := Display{Sender: &recordingSender{}}
+	trace := sdk.TraceEvent{Stage: sdk.TraceResponse, Response: &sdk.Response{Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "hello"}}}}
+	output := sdk.Output{Source: "discord", SessionID: "discord:channel:1", Trace: &trace}
+	if err := display.Display(context.Background(), output); err == nil {
+		t.Fatal("expected missing channel_id error")
+	}
+}

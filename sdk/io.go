@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"log"
 	"time"
 )
 
@@ -43,7 +44,9 @@ func DispatchDisplay(parent context.Context, display Display, output Output, tim
 		defer func() { _ = recover() }()
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), timeout)
 		defer cancel()
-		_ = display.Display(ctx, output)
+		if err := display.Display(ctx, output); err != nil {
+			log.Printf("sdk: display failed source=%s session=%s: %v", output.Source, output.SessionID, err)
+		}
 	}
 	if output.Trace != nil {
 		run()

@@ -34,3 +34,23 @@ func TestBrowserClientCallWithoutStart(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestBrowserDisplayEnv(t *testing.T) {
+	if got := browserDisplayEnv(""); got != nil {
+		t.Fatalf("empty display should inherit env, got %v", got)
+	}
+	t.Setenv("DISPLAY", ":0")
+	got := browserDisplayEnv(":1")
+	found := false
+	for _, kv := range got {
+		if kv == "DISPLAY=:1" {
+			found = true
+		}
+		if kv == "DISPLAY=:0" {
+			t.Fatalf("old DISPLAY leaked through: %v", got)
+		}
+	}
+	if !found {
+		t.Fatalf("DISPLAY=:1 missing: %v", got)
+	}
+}

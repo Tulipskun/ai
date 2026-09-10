@@ -89,6 +89,13 @@ func runBrowserConfig(args []string) error {
 		current.Profile = strings.TrimSpace(profile)
 		headless, err := promptBool(reader, "Headless", current.Headless); if err != nil { return err }
 		current.Headless = headless
+		if !headless {
+			dispDef := current.Display; if strings.TrimSpace(dispDef) == "" { dispDef = ":1" }
+			disp, err := promptDefault(reader, "Display", dispDef); if err != nil { return err }
+			current.Display = strings.TrimSpace(disp)
+		} else {
+			current.Display = ""
+		}
 	}
 	allowPrivate, err := promptBool(reader, "Allow private pages", current.AllowPrivate); if err != nil { return err }
 	current.AllowPrivate = allowPrivate

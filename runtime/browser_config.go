@@ -17,6 +17,7 @@ type BrowserConfig struct {
 	Profile              string        `json:"profile"`
 	CDPEndpoint          string        `json:"cdp_endpoint"`
 	AllowPrivate         bool          `json:"allow_private"`
+	Display              string        `json:"display"`
 	IdleTimeout          time.Duration `json:"-"`
 	NavigationTimeout    time.Duration `json:"-"`
 	ActionTimeout        time.Duration `json:"-"`
@@ -60,7 +61,7 @@ func SaveBrowserConfig(path string, cfg BrowserConfig) error {
 	if path == "" { path = DefaultBrowserConfigPath }
 	out := map[string]any{
 		"enabled": cfg.Enabled, "mode": cfg.Mode, "headless": cfg.Headless,
-		"browser": cfg.Browser, "profile": cfg.Profile, "cdp_endpoint": cfg.CDPEndpoint,
+		"browser": cfg.Browser, "profile": cfg.Profile, "cdp_endpoint": cfg.CDPEndpoint, "display": cfg.Display,
 		"allow_private": cfg.AllowPrivate, "idle_timeout": cfg.IdleTimeout.String(),
 		"navigation_timeout": cfg.NavigationTimeout.String(), "action_timeout": cfg.ActionTimeout.String(),
 		"snapshot_timeout": cfg.SnapshotTimeout.String(),
@@ -77,7 +78,7 @@ func dirOf(path string) string { i := strings.LastIndex(path, "/"); if i < 0 { r
 func (c *BrowserConfig) UnmarshalJSON(data []byte) error {
 	defaults := defaultBrowserConfig()
 	type raw struct {
-		Enabled *bool `json:"enabled"`; Mode *string `json:"mode"`; Headless *bool `json:"headless"`; Browser *string `json:"browser"`; Profile *string `json:"profile"`; CDPEndpoint *string `json:"cdp_endpoint"`; AllowPrivate *bool `json:"allow_private"`
+		Enabled *bool `json:"enabled"`; Mode *string `json:"mode"`; Headless *bool `json:"headless"`; Browser *string `json:"browser"`; Profile *string `json:"profile"`; CDPEndpoint *string `json:"cdp_endpoint"`; AllowPrivate *bool `json:"allow_private"`; Display *string `json:"display"`
 		IdleTimeout string `json:"idle_timeout"`; NavigationTimeout string `json:"navigation_timeout"`; ActionTimeout string `json:"action_timeout"`; SnapshotTimeout string `json:"snapshot_timeout"`
 	}
 	var r raw; if err := json.Unmarshal(data, &r); err != nil { return err }
@@ -89,6 +90,7 @@ func (c *BrowserConfig) UnmarshalJSON(data []byte) error {
 	if r.Profile != nil { c.Profile = *r.Profile }
 	if r.CDPEndpoint != nil { c.CDPEndpoint = *r.CDPEndpoint }
 	if r.AllowPrivate != nil { c.AllowPrivate = *r.AllowPrivate }
+	if r.Display != nil { c.Display = strings.TrimSpace(*r.Display) }
 	parse := func(name, value string, fallback time.Duration) (time.Duration, error) { if strings.TrimSpace(value)=="" { return fallback,nil }; d,err:=time.ParseDuration(value); if err!=nil{return 0,fmt.Errorf("%s: %w",name,err)};if d<=0{return 0,fmt.Errorf("%s must be positive",name)};return d,nil }
 	var err error
 	if c.IdleTimeout,err=parse("idle_timeout",r.IdleTimeout,defaults.IdleTimeout);err!=nil{return err}

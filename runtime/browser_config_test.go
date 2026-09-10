@@ -55,9 +55,10 @@ func TestSaveBrowserConfigRoundTrip(t *testing.T) {
 	cfg.CDPEndpoint = "http://127.0.0.1:9222"
 	cfg.Headless = true
 	cfg.AllowPrivate = true
+	cfg.Display = ":1"
 	if err := SaveBrowserConfig(path, cfg); err != nil { t.Fatal(err) }
 	got, err := LoadBrowserConfig(path)
 	if err != nil { t.Fatal(err) }
-	if !got.Enabled || got.Mode != "attach" || got.Browser != "chromium" || got.CDPEndpoint != "http://127.0.0.1:9222" || !got.Headless || !got.AllowPrivate { t.Fatalf("round trip mismatch: %#v", got) }
+	if !got.Enabled || got.Mode != "attach" || got.Browser != "chromium" || got.CDPEndpoint != "http://127.0.0.1:9222" || !got.Headless || !got.AllowPrivate || got.Display != ":1" { t.Fatalf("round trip mismatch: %#v", got) }
 	if got.IdleTimeout != cfg.IdleTimeout || got.NavigationTimeout != cfg.NavigationTimeout || got.ActionTimeout != cfg.ActionTimeout || got.SnapshotTimeout != cfg.SnapshotTimeout { t.Fatalf("durations mismatch: %#v", got) }
 }

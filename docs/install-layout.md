@@ -29,3 +29,5 @@ Each file under `data/sessions/` contains exactly one session. The session datab
 Browser automation is implemented directly in Go using Chrome DevTools Protocol. It does not require Node.js, Playwright, or a separate browser worker.
 
 `ai update` replaces the executable in the binary directory and restarts the daemon only when it was already running.
+
+`scripts/keepalive.sh` watches `ai.pid` and restarts the daemon when the process is gone. Browser startup failure no longer stops the daemon; it logs the error and continues without browser automation instead.

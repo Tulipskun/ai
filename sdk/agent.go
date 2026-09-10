@@ -154,9 +154,7 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		}
 
 		if len(resp.ToolCalls) == 0 {
-			if len(resp.Content) == 0 {
-				traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
-			}
+			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
 			return resp, nil
 		}
 		if a.Tools == nil {
@@ -290,10 +288,8 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 		}
 
 		commitResponse(session, resp)
-		if len(resp.Content) == 0 && len(resp.ToolCalls) == 0 {
-			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
-		}
 		if len(resp.ToolCalls) == 0 {
+			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
 			return resp, nil
 		}
 		if a.Tools == nil {

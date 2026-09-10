@@ -46,7 +46,7 @@ func TestLoopToolResultDoesNotDeadlock(t *testing.T) {
 	}
 }
 
-func TestLoopDoesNotDuplicateTracedResponse(t *testing.T) {
+func TestLoopEmitsFinalResponseTrace(t *testing.T) {
 	session := NewSession(SessionConfig{ID: "s1", Provider: "test", Model: "model", KeyIndex: 0}, NewKeyPool("test-key"))
 	provider := &tracedLoopTestProvider{}
 	router := NewRouter()
@@ -57,20 +57,30 @@ func TestLoopDoesNotDuplicateTracedResponse(t *testing.T) {
 	display := DisplayFunc(func(_ context.Context, output Output) error { if output.Trace != nil { events <- *output.Trace }; return nil })
 	loop := &HarnessLoop{Client: client, Agent: &Agent{Client: client, MaxRetries: 0}, ResolveSession: func(context.Context, Input) (*Session, error) { return session, nil }, Displays: []Display{display}, DisplayTimeout: time.Second}
 	if err := loop.Handle(context.Background(), Input{Source: "discord", SessionID: "s1", Turn: Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: "input"}}}}); err != nil { t.Fatal(err) }
-	deadline := time.After(time.Second)
+	deadline := time.After(2 * time.Second)
+	var sawContent, sawFinal bool
+	var finalCount int
 	for {
 		select {
 		case event := <-events:
 			if event.Stage == TraceResponseContent && event.Response != nil && len(event.Response.Content) > 0 && event.Response.Content[0].Text == "response" {
-				select {
-				case extra := <-events:
-					if extra.Stage == TraceResponse { t.Fatalf("duplicate final response trace") }
-				case <-time.After(100 * time.Millisecond):
+				sawContent = true
+			}
+			if event.Stage == TraceResponse {
+				finalCount++
+				if event.Response == nil || len(event.Response.Content) != 1 || event.Response.Content[0].Text != "response" {
+					t.Fatalf("final response trace missing content: %+v", event.Response)
+				}
+				sawFinal = true
+			}
+			if sawContent && sawFinal {
+				if finalCount != 1 {
+					t.Fatalf("final response trace emitted %d times", finalCount)
 				}
 				return
 			}
 		case <-deadline:
-			t.Fatal("response content trace was not dispatched")
+			t.Fatalf("content trace=%v final trace=%v (final x%d)", sawContent, sawFinal, finalCount)
 		}
 	}
 }

@@ -45,6 +45,9 @@ func runCommandTool(workspace string) handler {
 		defer cancel()
 
 		cmd := exec.Command(args.Command, args.Args...)
+		if len(args.Args) == 0 && hasShellSyntax(args.Command) {
+			cmd = shellCommand(args.Command)
+		}
 		cmd.Dir = workspace
 		configureCommandProcess(cmd)
 
@@ -103,6 +106,21 @@ func (b *limitedCommandBuffer) Write(p []byte) (int, error) {
 }
 
 func (b *limitedCommandBuffer) String() string { return strings.TrimSpace(string(b.data)) }
+
+// hasShellSyntax reports whether a bare command line relies on shell
+// features (chains, pipes, redirects, expansions). Such lines run
+// through the system shell; anything else executes directly.
+func hasShellSyntax(line string) bool {
+	if strings.Contains(line, "\n") {
+		return true
+	}
+	for _, op := range []string{"&&", "||", "|", ";", ">", "<", "$", "`", "*", "?"} {
+		if strings.Contains(line, op) {
+			return true
+		}
+	}
+	return false
+}
 
 func parsePositiveInt(value string, fallback int) int {
 	n, err := strconv.Atoi(value)

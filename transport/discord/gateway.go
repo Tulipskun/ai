@@ -3,6 +3,7 @@ package discord
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ const maxEmbedChars=4000
 // traceFlushInterval bounds embed updates to one snapshot per second so bursts of
 // trace events stay under Discord's message-edit rate limits.
 const traceFlushInterval=time.Second
+const traceCooldownOnError=5*time.Second
 func embedChars(items []string)int{n:=0;for i,w:=range items{if i>0{n++};n+=len([]rune(w))};return n}
 func(s *toolTraceState)append(item string,isText bool){
 if isText&&s.isText&&len(s.items)>0{s.items[len(s.items)-1]+=item;s.items[len(s.items)-1]=truncateText(s.items[len(s.items)-1],maxTextTraceLength)}else{s.items=append(s.items,item)}
@@ -69,17 +71,17 @@ if len(state.items)>0&&state.isText!=isText{g.pushToolTraceLocked(ctx,channelID,
 state.append(item,isText)}
 // scheduleTraceFlushLocked queues a snapshot of the current trace state; snapshots
 // are pushed at most once per traceFlushInterval.
-func(g *Gateway)scheduleTraceFlushLocked(channelID string,state *toolTraceState){state.dirty=true;if state.flushTimer!=nil{return};state.flushTimer=time.AfterFunc(traceFlushDelay(state.lastPush),func(){g.flushToolTrace(context.Background(),channelID)})}
+func(g *Gateway)scheduleTraceFlushLocked(channelID string,state *toolTraceState){state.dirty=true;if state.flushTimer!=nil{return};state.flushTimer=time.AfterFunc(traceFlushDelay(state.lastPush),func(){if err:=g.flushToolTrace(context.Background(),channelID);err!=nil{log.Printf("discord: background trace flush failed: %v",err)}})}
 // flushToolTrace pushes the current trace snapshot to Discord immediately.
 func(g *Gateway)flushToolTrace(ctx context.Context,channelID string)error{if g==nil{return nil};g.toolTraceMu.Lock();defer g.toolTraceMu.Unlock();state:=g.toolTrace[channelID];if state==nil{return nil};return g.pushToolTraceLocked(ctx,channelID,state)}
 func(g *Gateway)pushToolTraceLocked(ctx context.Context,channelID string,state *toolTraceState)error{
 if state.flushTimer!=nil{state.flushTimer.Stop();state.flushTimer=nil}
 if !state.dirty||len(state.items)==0{return nil}
 embed:=toolTraceEmbed(state.items,turnFooterText(state))
-if state.messageID==""{id,err:=g.SendEmbed(ctx,channelID,embed);if err!=nil{return err};state.messageID=id}else if err:=g.EditEmbed(ctx,channelID,state.messageID,embed);err!=nil{if !isUnknownMessage(err){return err};id,sendErr:=g.SendEmbed(ctx,channelID,embed);if sendErr!=nil{return sendErr};state.messageID=id}
+if state.messageID==""{id,err:=g.SendEmbed(ctx,channelID,embed);if err!=nil{return err};state.messageID=id}else if err:=g.EditEmbed(ctx,channelID,state.messageID,embed);err!=nil{if !isUnknownMessage(err){state.lastPush=time.Now().Add(traceCooldownOnError);return err};id,sendErr:=g.SendEmbed(ctx,channelID,embed);if sendErr!=nil{return sendErr};state.messageID=id}
 state.dirty=false;state.lastPush=time.Now();return nil}
 func(g *Gateway)resetToolTrace(channelID string){if g==nil||strings.TrimSpace(channelID)==""{return};g.toolTraceMu.Lock();defer g.toolTraceMu.Unlock();if state:=g.toolTrace[channelID];state!= nil&&state.footerTimer!=nil{state.footerTimer.Stop()};delete(g.toolTrace,channelID)}
-func(g *Gateway)startTurnFooter(channelID string){if g==nil||strings.TrimSpace(channelID)==""{return};g.toolTraceMu.Lock();defer g.toolTraceMu.Unlock();state:=g.traceState(channelID);state.footerActive=true;state.turnStart=time.Now();g.scheduleFooterTickLocked(channelID,state)}
+func(g *Gateway)startTurnFooter(channelID string){if g==nil||strings.TrimSpace(channelID)==""{return};g.toolTraceMu.Lock();defer g.toolTraceMu.Unlock();state:=g.traceState(channelID);if !state.footerActive{state.footerActive=true;state.turnStart=time.Now()};g.scheduleFooterTickLocked(channelID,state)}
 func(g *Gateway)updateTurnFooterUsage(channelID string,usage sdk.Usage){if g==nil||strings.TrimSpace(channelID)==""{return};g.toolTraceMu.Lock();defer g.toolTraceMu.Unlock();g.traceState(channelID).turnUsage=usage}
 func(g *Gateway)stopTurnFooter(channelID string){if g==nil||strings.TrimSpace(channelID)==""{return};g.toolTraceMu.Lock();defer g.toolTraceMu.Unlock();state:=g.toolTrace[channelID];if state==nil{return};state.footerActive=false;if state.footerTimer!=nil{state.footerTimer.Stop();state.footerTimer=nil};state.dirty=true;g.scheduleTraceFlushLocked(channelID,state)}
 func(g *Gateway)scheduleFooterTickLocked(channelID string,state *toolTraceState){if state==nil||!state.footerActive||state.footerTimer!=nil{return};state.footerTimer=time.AfterFunc(time.Second,func(){g.tickTurnFooter(channelID)})}

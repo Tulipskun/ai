@@ -142,10 +142,12 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 			if a.wasInterrupted(session.ID()) {
 				settleInterruptedTurn(session, before)
 			}
+			traceEvent(ctx, trace, TraceEvent{Stage: TraceError, Err: err})
 			return Response{}, err
 		}
 	}
 
+	traceEvent(ctx, trace, TraceEvent{Stage: TraceError, Err: lastErr})
 	if errors.Is(lastErr, context.Canceled) || errors.Is(lastErr, context.DeadlineExceeded) {
 		return Response{}, lastErr
 	}
@@ -425,7 +427,7 @@ func traceEvent(ctx context.Context, trace TraceFunc, event TraceEvent) {
 	}
 }
 func cloneResponseContent(in Response) *Response {
-	return &Response{Provider: in.Provider, Model: in.Model, Content: append([]ContentPart(nil), in.Content...), Reasoning: in.Reasoning}
+	return &Response{Provider: in.Provider, Model: in.Model, Content: append([]ContentPart(nil), in.Content...), Reasoning: in.Reasoning, Usage: in.Usage}
 }
 func cloneToolCall(in ToolCall) *ToolCall { out := in; return &out }
 func cloneToolResult(in ToolResult) *ToolResult { out := in; return &out }

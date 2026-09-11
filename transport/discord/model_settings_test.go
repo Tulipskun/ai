@@ -75,3 +75,25 @@ func TestModelInCatalog(t *testing.T) {
 	if !modelInCatalog(models, "m1") { t.Fatal("expected m1 in catalog") }
 	if modelInCatalog(models, "m3") { t.Fatal("did not expect m3 in catalog") }
 }
+
+func TestSessionIDForChannelUsesMapping(t *testing.T) {
+	h := &ModelSettingsHandler{SessionForChannel: func(channelID string) string {
+		if channelID == "c1" {
+			return "custom-session-9"
+		}
+		return ""
+	}}
+	if got := h.sessionIDFor("c1"); got != "custom-session-9" {
+		t.Fatalf("mapped session = %q", got)
+	}
+	if got := h.sessionIDFor("c2"); got != "discord:channel:c2" {
+		t.Fatalf("unmapped fallback = %q", got)
+	}
+	var nilHandler *ModelSettingsHandler
+	if got := nilHandler.sessionIDFor("c1"); got != "discord:channel:c1" {
+		t.Fatalf("nil handler fallback = %q", got)
+	}
+	if got := (&ModelSettingsHandler{}).sessionIDFor("c1"); got != "discord:channel:c1" {
+		t.Fatalf("missing mapping fallback = %q", got)
+	}
+}

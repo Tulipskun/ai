@@ -200,3 +200,24 @@ func TestTurnFooterLifecycle(t *testing.T) {
 		t.Fatal("footer tick should stop")
 	}
 }
+
+func TestTurnFooterStartKeepsOriginalClock(t *testing.T) {
+	g := &Gateway{toolTrace: map[string]*toolTraceState{}}
+	g.startTurnFooter("c1")
+	first := g.toolTrace["c1"].turnStart
+	g.updateTurnFooterUsage("c1", sdk.Usage{InputTokens: 50})
+	g.startTurnFooter("c1")
+	if !g.toolTrace["c1"].turnStart.Equal(first) {
+		t.Fatal("retry attempts must not restart the turn clock")
+	}
+	g.stopTurnFooter("c1")
+}
+
+func TestTraceFlushDelayHonorsCooldown(t *testing.T) {
+	if d := traceFlushDelay(time.Now().Add(traceCooldownOnError)); d < traceCooldownOnError {
+		t.Fatalf("cooldown delay = %s, want >= %s", d, traceCooldownOnError)
+	}
+	if d := traceFlushDelay(time.Now().Add(-2 * time.Second)); d != 0 {
+		t.Fatalf("stale push delay = %s, want 0", d)
+	}
+}

@@ -18,10 +18,21 @@ const (
 )
 
 type ModelSettingsHandler struct {
-	ResolveSession func(context.Context, sdk.Input) (*sdk.Session, error)
-	Providers      []sdk.ProviderID
-	ProviderKeys   map[sdk.ProviderID]*sdk.KeyPool
-	Models         func(context.Context, sdk.ProviderID) ([]sdk.Model, error)
+	ResolveSession   func(context.Context, sdk.Input) (*sdk.Session, error)
+	SessionForChannel func(channelID string) string
+	Providers        []sdk.ProviderID
+	ProviderKeys     map[sdk.ProviderID]*sdk.KeyPool
+	Models           func(context.Context, sdk.ProviderID) ([]sdk.Model, error)
+}
+
+func (h *ModelSettingsHandler) sessionIDFor(channelID string) string {
+	channelID = strings.TrimSpace(channelID)
+	if h != nil && h.SessionForChannel != nil {
+		if id := strings.TrimSpace(h.SessionForChannel(channelID)); id != "" {
+			return id
+		}
+	}
+	return "discord:channel:" + channelID
 }
 
 func (h *ModelSettingsHandler) Handle(s *discordgo.Session, i *discordgo.InteractionCreate) error {
@@ -46,7 +57,7 @@ func (h *ModelSettingsHandler) Handle(s *discordgo.Session, i *discordgo.Interac
 func (h *ModelSettingsHandler) respondProviderStep(s *discordgo.Session, i *discordgo.InteractionCreate, channelID string) error {
 	if h.ResolveSession == nil { return h.respondError(s, i, "session manager is not configured") }
 	if len(h.Providers) == 0 { return h.respondError(s, i, "no providers are configured") }
-	session, err := h.ResolveSession(context.Background(), sdk.Input{SessionID: "discord:channel:" + channelID})
+	session, err := h.ResolveSession(context.Background(), sdk.Input{SessionID: h.sessionIDFor(channelID)})
 	if err != nil { return h.respondError(s, i, err.Error()) }
 	provider := string(session.Config().Provider)
 	if provider == "" || !h.hasProvider(sdk.ProviderID(provider)) { provider = string(h.Providers[0]) }
@@ -97,7 +108,7 @@ func (h *ModelSettingsHandler) handleModelSelect(s *discordgo.Session, i *discor
 	if len(values) == 0 || strings.TrimSpace(values[0]) == "" { return h.respondError(s, i, "model is required") }
 	model := strings.TrimSpace(values[0])
 	if h.ResolveSession == nil { return h.respondError(s, i, "session manager is not configured") }
-	session, err := h.ResolveSession(context.Background(), sdk.Input{SessionID: "discord:channel:" + channelID})
+	session, err := h.ResolveSession(context.Background(), sdk.Input{SessionID: h.sessionIDFor(channelID)})
 	if err != nil { return h.respondError(s, i, err.Error()) }
 	if h.Models != nil {
 		models, modelErr := h.Models(context.Background(), provider)
@@ -108,7 +119,7 @@ func (h *ModelSettingsHandler) handleModelSelect(s *discordgo.Session, i *discor
 	if err := session.SetModel(model); err != nil { return h.respondError(s, i, err.Error()) }
 	config := session.Config(); keyCount := 1
 	if keys := h.ProviderKeys[provider]; keys != nil && keys.Len() > 0 { keyCount = keys.Len() }
-	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseModal, Data: modelSettingsModal(session.ID(), string(provider), model, temperatureLabel(config.Temperature), string(config.ThinkingLevel), strconv.Itoa(config.KeyIndex+1), keyCount)})
+	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseModal, Data: modelSettingsModal(i.ChannelID, string(provider), model, temperatureLabel(config.Temperature), string(config.ThinkingLevel), strconv.Itoa(config.KeyIndex+1), keyCount)})
 }
 
 func modelSettingsModal(sessionID, provider, model, temperature, thinking, key string, keyCount ...int) *discordgo.InteractionResponseData {
@@ -136,7 +147,7 @@ func (h *ModelSettingsHandler) handleSettingsSubmit(s *discordgo.Session, i *dis
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || h.ResolveSession == nil { return h.respondError(s, i, "invalid model settings session") }
 	channelID := parts[0]; provider := sdk.ProviderID(parts[1])
 	if !h.hasProvider(provider) { return h.respondError(s, i, fmt.Sprintf("unknown provider %q", provider)) }
-	session, err := h.ResolveSession(context.Background(), sdk.Input{SessionID: "discord:channel:" + channelID}); if err != nil { return h.respondError(s, i, err.Error()) }
+	session, err := h.ResolveSession(context.Background(), sdk.Input{SessionID: h.sessionIDFor(channelID)}); if err != nil { return h.respondError(s, i, err.Error()) }
 	values := modalValues(i); model := strings.TrimSpace(values["model"]); thinking := strings.TrimSpace(strings.ToLower(values["thinking"])); temperatureText := strings.TrimSpace(values["temperature"]); keyText := strings.TrimSpace(values["key"])
 	keys := h.ProviderKeys[provider]; if keys == nil { return h.respondError(s, i, fmt.Sprintf("provider %q has no API key pool", provider)) }; if model == "" { return h.respondError(s, i, "model is required") }
 	if h.Models != nil { models, modelErr := h.Models(context.Background(), provider); if modelErr != nil { return h.respondError(s, i, modelErr.Error()) }; if !modelInCatalog(models, model) { return h.respondError(s, i, fmt.Sprintf("model %q is not available for provider %q", model, provider)) } }

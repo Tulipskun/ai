@@ -21,7 +21,7 @@ func(p *blockingAgentProvider)Name()string{return "blocking"}
 func(p *blockingAgentProvider)Generate(ctx context.Context,_ Request)(Response,error){select{case <-p.started:default:close(p.started)};<-ctx.Done();return Response{},ctx.Err()}
 func(p *blockingAgentProvider)Stream(context.Context,Request)(<-chan Event,error){return nil,errors.New("not implemented")}
 func(p *blockingAgentProvider)WithAPIKey(string)Provider{return p}
-func newAgentTestSession(p Provider)(*RouterClient,*Session){r:=NewRouter();r.RegisterProvider(ProviderConfig{ID:"test",BaseURL:"http://test",Keys:NewKeyPool("key"),Adapter:AdapterOpenAI});r.Register(ModelRoute{Provider:"test",Model:"model",Adapter:AdapterOpenAI});c:=NewRouterClient(r);c.RegisterAdapter(AdapterOpenAI,p);s:=NewSession(SessionConfig{ID:"s",Provider:"test",Model:"model",KeyIndex:0},NewKeyPool("key"));return c,s}
+func newAgentTestSession(p Provider)(*RouterClient,*Session){r:=NewRouter();r.RegisterProvider(ProviderConfig{ID:"test",BaseURL:"http://test",Keys:NewKeyPool("key"),Adapter:AdapterOpenAI});r.Register(ModelRoute{Provider:"test",Model:"model",Adapter:AdapterOpenAI});c:=NewRouterClient(r);c.Retry=RetryPolicy{MaxAttempts:3,InitialBackoff:time.Millisecond,MaxBackoff:10*time.Millisecond};c.RegisterAdapter(AdapterOpenAI,p);s:=NewSession(SessionConfig{ID:"s",Provider:"test",Model:"model",KeyIndex:0},NewKeyPool("key"));return c,s}
 func TestAgentFinalResponse(t *testing.T){p:=&agentTestProvider{responses:[]Response{{Content:[]ContentPart{{Type:ContentText,Text:"done"}}}}};c,s:=newAgentTestSession(p);a:=&Agent{Client:c,MaxRetries:0};resp,err:=a.RunTurn(context.Background(),s,Turn{Role:RoleUser,Content:[]ContentPart{{Type:ContentText,Text:"hi"}}},Request{});if err!=nil{t.Fatal(err)};if len(resp.Content)!=1||resp.Content[0].Text!="done"{t.Fatalf("unexpected response: %#v",resp)};if len(s.History())!=2{t.Fatalf("history=%d",len(s.History()))}}
 func TestAgentToolDefinitionsReachProvider(t *testing.T){p:=&agentTestProvider{responses:[]Response{{Content:[]ContentPart{{Type:ContentText,Text:"done"}}}}};c,s:=newAgentTestSession(p);tools:=&agentTestTools{definitions:[]Tool{{Name:"echo",Description:"echo text"}}};a:=&Agent{Client:c,Tools:tools,MaxRetries:0};_,err:=a.RunTurn(context.Background(),s,Turn{Role:RoleUser},Request{});if err!=nil{t.Fatal(err)};if len(p.requests)!=1||len(p.requests[0].Tools)!=1||p.requests[0].Tools[0].Name!="echo"{t.Fatalf("tools not sent: %#v",p.requests)}}
 func TestAgentToolThenFinal(t *testing.T){p:=&agentTestProvider{responses:[]Response{{ToolCalls:[]ToolCall{{ID:"1",Name:"echo",Arguments:"{}"}}},{Content:[]ContentPart{{Type:ContentText,Text:"finished"}}}}};c,s:=newAgentTestSession(p);tools:=&agentTestTools{definitions:[]Tool{{Name:"echo"}}};a:=&Agent{Client:c,Tools:tools,MaxRetries:0};resp,err:=a.RunTurn(context.Background(),s,Turn{Role:RoleUser},Request{});if err!=nil{t.Fatal(err)};if resp.Content[0].Text!="finished"{t.Fatalf("unexpected final response")};h:=s.History();if len(h)!=4||h[2].Role!=RoleToolResult||h[2].ToolResult.Content!="ok"{t.Fatalf("unexpected history: %#v",h)};if len(tools.results)!=1{t.Fatalf("tool calls=%d",len(tools.results))}}
@@ -78,4 +78,29 @@ func TestHasReplyMarker(t *testing.T) {
 	plain := Response{Content: []ContentPart{{Type: ContentText, Text: "hi ✨✨✨"}}}
 	if HasReplyMarker(plain) { t.Fatal("non-prefixed marker should not count") }
 	if HasReplyMarker(Response{}) { t.Fatal("empty response should not count") }
+}
+
+func TestCloneResponseContentKeepsUsage(t *testing.T) {
+	in := Response{Content: []ContentPart{{Type: ContentText, Text: "hi"}}, Usage: Usage{InputTokens: 100, OutputTokens: 5, TotalTokens: 105, CacheReadTokens: 10}}
+	got := cloneResponseContent(in)
+	if got == nil || got.Usage.InputTokens != 100 || got.Usage.CacheReadTokens != 10 || got.Usage.OutputTokens != 5 {
+		t.Fatalf("usage dropped: %+v", got)
+	}
+}
+
+func TestTerminalFailureEmitsTraceError(t *testing.T) {
+	p := &agentTestProvider{errors: []error{errors.New("boom")}}
+	c, s := newAgentTestSession(p)
+	c.Retry = RetryPolicy{MaxAttempts: 1, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond}
+	a := &Agent{Client: c, MaxRetries: 1}
+	var stages []TraceEvent
+	_, err := a.RunTurnWithTrace(context.Background(), s, Turn{Role: RoleUser}, Request{}, func(_ context.Context, e TraceEvent) { stages = append(stages, e) })
+	if err == nil { t.Fatal("expected error") }
+	found := false
+	for _, e := range stages {
+		if e.Stage == TraceError {
+			found = true
+		}
+	}
+	if !found { t.Fatalf("no TraceError emitted: %+v", stages) }
 }

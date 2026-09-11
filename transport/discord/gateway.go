@@ -14,7 +14,7 @@ import (
 type discordMessage struct { ID string; ChannelID string; AuthorID string; AuthorName string; Content string; AuthorIsBot bool }
 func normalizeMessage(message discordMessage)(InputMessage,bool){if message.AuthorIsBot||message.ID==""||message.ChannelID==""||message.AuthorID==""{return InputMessage{},false};return InputMessage{SessionID:"discord:channel:"+message.ChannelID,ChannelID:message.ChannelID,MessageID:message.ID,AuthorID:message.AuthorID,AuthorName:message.AuthorName,Content:message.Content},true}
 func gatewayIntents()discordgo.Intent{return discordgo.IntentsGuildMessages|discordgo.IntentsDirectMessages|discordgo.IntentsMessageContent}
-type toolTraceState struct{messageID string;items []string;isText bool;dirty bool;lastPush time.Time;flushTimer *time.Timer}
+type toolTraceState struct{messageID string;items []string;isText bool;dirty bool;lastPush time.Time;flushTimer *time.Timer;footerActive bool;turnStart time.Time;turnUsage sdk.Usage;footerTimer *time.Timer}
 const maxEmbedChars=4000
 // traceFlushInterval bounds embed updates to one snapshot per second so bursts of
 // trace events stay under Discord's message-edit rate limits.
@@ -55,7 +55,8 @@ func(g *Gateway)EditMessage(ctx context.Context,channelID,messageID,content stri
 func(g *Gateway)DeleteMessage(ctx context.Context,channelID,messageID string)error{if g==nil||g.session==nil{return errors.New("discord: gateway is not initialized")};if err:=ctx.Err();err!=nil{return err};if channelID==""||messageID==""{return errors.New("discord: channel ID and message ID are required")};return g.session.ChannelMessageDelete(channelID,messageID)}
 func(g *Gateway)SendEmbed(ctx context.Context,channelID string,embed *discordgo.MessageEmbed)(string,error){if g==nil||g.session==nil{return "",errors.New("discord: gateway is not initialized")};if err:=ctx.Err();err!=nil{return "",err};message,err:=g.session.ChannelMessageSendEmbed(channelID,embed);if err!=nil{return "",err};return message.ID,nil}
 func(g *Gateway)EditEmbed(ctx context.Context,channelID,messageID string,embed *discordgo.MessageEmbed)error{if g==nil||g.session==nil{return errors.New("discord: gateway is not initialized")};if err:=ctx.Err();err!=nil{return err};if channelID==""||messageID==""{return errors.New("discord: channel ID and message ID are required")};_,err:=g.session.ChannelMessageEditEmbed(channelID,messageID,embed);return err}
-func toolTraceEmbed(items []string)*discordgo.MessageEmbed{return &discordgo.MessageEmbed{Description:strings.Join(items,"\n")}}
+func toolTraceEmbed(items []string,footer string)*discordgo.MessageEmbed{embed:=&discordgo.MessageEmbed{Description:strings.Join(items,"\n")};if footer!=""{embed.Footer=&discordgo.MessageEmbedFooter{Text:footer}};return embed}
+func turnFooterText(state *toolTraceState)string{if state==nil||state.turnStart.IsZero(){return ""};return "in: "+formatCount(state.turnUsage.InputTokens)+"/"+formatCount(state.turnUsage.CacheReadTokens)+" · out: "+formatCount(state.turnUsage.OutputTokens)+" · ⏱ "+formatElapsed(time.Since(state.turnStart))}
 func(g *Gateway)traceState(channelID string)*toolTraceState{state:=g.toolTrace[channelID];if state==nil{state=&toolTraceState{};g.toolTrace[channelID]=state};return state}
 func(g *Gateway)setToolTrace(_ context.Context,channelID string,items []string)error{g.toolTraceMu.Lock();defer g.toolTraceMu.Unlock();state:=g.traceState(channelID);state.items=append([]string(nil),items...);state.isText=false;g.scheduleTraceFlushLocked(channelID,state);return nil}
 func(g *Gateway)appendToolTrace(ctx context.Context,channelID,item string)error{return g.appendTraceItem(ctx,channelID,truncateOneLine(item,maxToolTraceLength),false)}
@@ -74,14 +75,19 @@ func(g *Gateway)flushToolTrace(ctx context.Context,channelID string)error{if g==
 func(g *Gateway)pushToolTraceLocked(ctx context.Context,channelID string,state *toolTraceState)error{
 if state.flushTimer!=nil{state.flushTimer.Stop();state.flushTimer=nil}
 if !state.dirty||len(state.items)==0{return nil}
-embed:=toolTraceEmbed(state.items)
+embed:=toolTraceEmbed(state.items,turnFooterText(state))
 if state.messageID==""{id,err:=g.SendEmbed(ctx,channelID,embed);if err!=nil{return err};state.messageID=id}else if err:=g.EditEmbed(ctx,channelID,state.messageID,embed);err!=nil{if !isUnknownMessage(err){return err};id,sendErr:=g.SendEmbed(ctx,channelID,embed);if sendErr!=nil{return sendErr};state.messageID=id}
 state.dirty=false;state.lastPush=time.Now();return nil}
-func(g *Gateway)resetToolTrace(channelID string){if g==nil||strings.TrimSpace(channelID)==""{return};g.toolTraceMu.Lock();defer g.toolTraceMu.Unlock();delete(g.toolTrace,channelID)}
+func(g *Gateway)resetToolTrace(channelID string){if g==nil||strings.TrimSpace(channelID)==""{return};g.toolTraceMu.Lock();defer g.toolTraceMu.Unlock();if state:=g.toolTrace[channelID];state!= nil&&state.footerTimer!=nil{state.footerTimer.Stop()};delete(g.toolTrace,channelID)}
+func(g *Gateway)startTurnFooter(channelID string){if g==nil||strings.TrimSpace(channelID)==""{return};g.toolTraceMu.Lock();defer g.toolTraceMu.Unlock();state:=g.traceState(channelID);state.footerActive=true;state.turnStart=time.Now();g.scheduleFooterTickLocked(channelID,state)}
+func(g *Gateway)updateTurnFooterUsage(channelID string,usage sdk.Usage){if g==nil||strings.TrimSpace(channelID)==""{return};g.toolTraceMu.Lock();defer g.toolTraceMu.Unlock();g.traceState(channelID).turnUsage=usage}
+func(g *Gateway)stopTurnFooter(channelID string){if g==nil||strings.TrimSpace(channelID)==""{return};g.toolTraceMu.Lock();defer g.toolTraceMu.Unlock();state:=g.toolTrace[channelID];if state==nil{return};state.footerActive=false;if state.footerTimer!=nil{state.footerTimer.Stop();state.footerTimer=nil};state.dirty=true;g.scheduleTraceFlushLocked(channelID,state)}
+func(g *Gateway)scheduleFooterTickLocked(channelID string,state *toolTraceState){if state==nil||!state.footerActive||state.footerTimer!=nil{return};state.footerTimer=time.AfterFunc(time.Second,func(){g.tickTurnFooter(channelID)})}
+func(g *Gateway)tickTurnFooter(channelID string){if g==nil{return};g.toolTraceMu.Lock();defer g.toolTraceMu.Unlock();state:=g.toolTrace[channelID];if state==nil{return};state.footerTimer=nil;if !state.footerActive{return};state.dirty=true;g.scheduleTraceFlushLocked(channelID,state);g.scheduleFooterTickLocked(channelID,state)}
 func isUnknownMessage(err error)bool{var restErr *discordgo.RESTError;if errors.As(err,&restErr){return restErr.Message!=nil&&restErr.Message.Code==10008};return false}
 func(g *Gateway)clearToolTrace(_ context.Context,_ string)error{return nil}
 func(g *Gateway)updateRetryStatus(ctx context.Context,channelID,content string)error{g.retryStatusMu.Lock();defer g.retryStatusMu.Unlock();if messageID:=g.retryStatus[channelID];messageID!=""{editErr:=g.EditMessage(ctx,channelID,messageID,content);if editErr==nil{return nil};if !isUnknownMessage(editErr){return editErr};delete(g.retryStatus,channelID)};messageID,err:=g.SendStatusMessage(ctx,channelID,content);if err!=nil{return err};g.retryStatus[channelID]=messageID;return nil}
 func(g *Gateway)clearRetryStatus(ctx context.Context,channelID string)error{g.retryStatusMu.Lock();defer g.retryStatusMu.Unlock();messageID:=g.retryStatus[channelID];if messageID==""{return nil};if err:=g.DeleteMessage(ctx,channelID,messageID);err!=nil&&!isUnknownMessage(err){return err};delete(g.retryStatus,channelID);return nil}
 func(g *Gateway)Display(ctx context.Context,output sdk.Output)error{return(Display{Sender:g}).Display(ctx,output)}
 func(g *Gateway)Source()string{return "discord"}
-func(g *Gateway)Close(_ context.Context)error{if g==nil||g.session==nil{return nil};g.closeMu.Lock();if g.closed{g.closeMu.Unlock();return nil};g.closed=true;close(g.done);g.closeMu.Unlock();return g.session.Close()}
+func(g *Gateway)Close(_ context.Context)error{if g==nil||g.session==nil{return nil};g.closeMu.Lock();if g.closed{g.closeMu.Unlock();return nil};g.closed=true;close(g.done);g.closeMu.Unlock();g.toolTraceMu.Lock();for _,state:=range g.toolTrace{if state.footerTimer!=nil{state.footerTimer.Stop();state.footerTimer=nil}};g.toolTraceMu.Unlock();return g.session.Close()}

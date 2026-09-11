@@ -59,7 +59,12 @@ func TestDisplayTraceRequiresChannel(t *testing.T) {
 	}
 }
 
-type routingFakeSender struct{ texts, tools, messages []string; flushes int }
+type routingFakeSender struct {
+	texts, tools, messages []string
+	flushes                int
+	footerStarts, footerStops int
+	footerUsage            []sdk.Usage
+}
 
 func (f *routingFakeSender) SendMessage(_ context.Context, channelID, content string) error {
 	f.messages = append(f.messages, channelID+":"+content)
@@ -82,6 +87,11 @@ func (f *routingFakeSender) updateToolTrace(_ context.Context, _ string, item st
 }
 func (f *routingFakeSender) flushToolTrace(_ context.Context, _ string) error { f.flushes++; return nil }
 func (f *routingFakeSender) clearToolTrace(_ context.Context, _ string) error { return nil }
+func (f *routingFakeSender) startTurnFooter(_ string) { f.footerStarts++ }
+func (f *routingFakeSender) updateTurnFooterUsage(_ string, usage sdk.Usage) {
+	f.footerUsage = append(f.footerUsage, usage)
+}
+func (f *routingFakeSender) stopTurnFooter(_ string) { f.footerStops++ }
 func (f *routingFakeSender) appendTextTrace(_ context.Context, _ string, text string) error {
 	f.texts = append(f.texts, text)
 	return nil
@@ -203,4 +213,70 @@ func TestDisplayTraceResponseFlushesToolTrace(t *testing.T) {
 	display := Display{Sender: sender}
 	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceResponse, Response: &sdk.Response{}})
 	if sender.flushes != 1 { t.Fatalf("flushes = %d", sender.flushes) }
+}
+
+func TestFormatCount(t *testing.T) {
+	cases := map[int]string{0: "0", 512: "512", 999: "999", 1000: "1k", 15000: "15k", 1500000: "1.5M", 7000000: "7.0M", 6500000: "6.5M", -5: "0"}
+	for in, want := range cases {
+		if got := formatCount(in); got != want {
+			t.Fatalf("formatCount(%d) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestFormatElapsed(t *testing.T) {
+	cases := map[time.Duration]string{0: "0s", 5 * time.Second: "5s", 90 * time.Second: "1m 30s", 416 * time.Second: "6m 56s", 90 * time.Minute: "1h 30m"}
+	for in, want := range cases {
+		if got := formatElapsed(in); got != want {
+			t.Fatalf("formatElapsed(%s) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestTurnFooterText(t *testing.T) {
+	state := &toolTraceState{turnStart: time.Now().Add(-416 * time.Second), turnUsage: sdk.Usage{InputTokens: 7000000, CacheReadTokens: 6500000, OutputTokens: 15000}}
+	got := turnFooterText(state)
+	want := "in: 7.0M/6.5M · out: 15k · ⏱ 6m 56s"
+	if got != want {
+		t.Fatalf("footer = %q, want %q", got, want)
+	}
+	if got := turnFooterText(&toolTraceState{}); got != "" {
+		t.Fatalf("unstated footer = %q, want empty", got)
+	}
+	if got := turnFooterText(nil); got != "" {
+		t.Fatalf("nil footer = %q, want empty", got)
+	}
+}
+
+func TestDisplayFooterTracksTurn(t *testing.T) {
+	sender := &routingFakeSender{}
+	display := Display{Sender: sender}
+	meta := map[string]string{"channel_id": "c"}
+	mustDisplay := func(trace sdk.TraceEvent) {
+		t.Helper()
+		if err := display.Display(context.Background(), sdk.Output{Source: "discord", SessionID: "s", Metadata: meta, Trace: &trace}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustDisplay(sdk.TraceEvent{Stage: sdk.TraceRequest})
+	mustDisplay(sdk.TraceEvent{Stage: sdk.TraceResponseContent, Response: &sdk.Response{
+		Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "hi"}},
+		Usage:   sdk.Usage{InputTokens: 100, CacheReadTokens: 10, OutputTokens: 5},
+	}})
+	mustDisplay(sdk.TraceEvent{Stage: sdk.TraceResponse, Response: &sdk.Response{
+		Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "hi"}},
+		Usage:   sdk.Usage{InputTokens: 100, CacheReadTokens: 10, OutputTokens: 5},
+	}})
+	if sender.footerStarts != 1 {
+		t.Fatalf("footer starts = %d, want 1", sender.footerStarts)
+	}
+	if len(sender.footerUsage) != 2 {
+		t.Fatalf("footer usage updates = %d, want 2", len(sender.footerUsage))
+	}
+	if u := sender.footerUsage[0]; u.InputTokens != 100 || u.CacheReadTokens != 10 || u.OutputTokens != 5 {
+		t.Fatalf("footer usage = %+v", u)
+	}
+	if sender.footerStops != 1 {
+		t.Fatalf("footer stops = %d, want 1", sender.footerStops)
+	}
 }

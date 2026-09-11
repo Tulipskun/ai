@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/Tulipskun/ai/sdk"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -47,7 +49,7 @@ func TestGatewayIntentsIncludeMessageContentAndMessages(t *testing.T) {
 }
 
 func TestToolTraceEmbedHasNoTitle(t *testing.T) {
-	embed := toolTraceEmbed([]string{"hello"})
+	embed := toolTraceEmbed([]string{"hello"}, "")
 	if embed.Title != "" {
 		t.Fatalf("embed title = %q, want empty", embed.Title)
 	}
@@ -173,5 +175,28 @@ func TestIsUnknownMessage(t *testing.T) {
 	}
 	if isUnknownMessage(nil) {
 		t.Fatal("nil should not count as unknown message")
+	}
+}
+
+func TestTurnFooterLifecycle(t *testing.T) {
+	g := &Gateway{toolTrace: map[string]*toolTraceState{}}
+	g.startTurnFooter("c1")
+	state := g.toolTrace["c1"]
+	if state == nil || !state.footerActive || state.turnStart.IsZero() {
+		t.Fatalf("footer not started: %+v", state)
+	}
+	if state.footerTimer == nil {
+		t.Fatal("footer tick was not scheduled")
+	}
+	g.updateTurnFooterUsage("c1", sdk.Usage{InputTokens: 100, CacheReadTokens: 10, OutputTokens: 5})
+	if state.turnUsage.InputTokens != 100 || state.turnUsage.CacheReadTokens != 10 || state.turnUsage.OutputTokens != 5 {
+		t.Fatalf("usage not stored: %+v", state.turnUsage)
+	}
+	g.stopTurnFooter("c1")
+	if state.footerActive {
+		t.Fatal("footer should stop")
+	}
+	if state.footerTimer != nil {
+		t.Fatal("footer tick should stop")
 	}
 }

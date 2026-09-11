@@ -117,3 +117,26 @@ func TestToolTraceStateKeepsSingleLargeTextItem(t *testing.T) {
 		t.Fatalf("single text item should survive trim: %d items", len(state.items))
 	}
 }
+
+func TestResetToolTraceStartsFresh(t *testing.T) {
+	g := &Gateway{toolTrace: map[string]*toolTraceState{"c1": {messageID: "m1", items: []string{"old"}, isText: true}}}
+	g.resetToolTrace("c1")
+	if _, ok := g.toolTrace["c1"]; ok {
+		t.Fatal("channel trace state should be cleared for the next turn")
+	}
+	g.resetToolTrace("")
+}
+
+func TestIsUnknownMessage(t *testing.T) {
+	err := &discordgo.RESTError{Message: &discordgo.APIErrorMessage{Code: 10008}}
+	if !isUnknownMessage(err) {
+		t.Fatal("10008 should count as unknown message")
+	}
+	other := &discordgo.RESTError{Message: &discordgo.APIErrorMessage{Code: 50035}}
+	if isUnknownMessage(other) {
+		t.Fatal("50035 should not count as unknown message")
+	}
+	if isUnknownMessage(nil) {
+		t.Fatal("nil should not count as unknown message")
+	}
+}

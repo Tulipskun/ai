@@ -128,3 +128,42 @@ func TestWithHeadersDeepCopies(t *testing.T) {
 		t.Fatalf("base adapter mutated: %v", c.Headers)
 	}
 }
+
+func TestGenerateFallsBackToChatOnResponses404(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/responses" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"message":"404 page not found"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"hi","tool_calls":[]},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+	c := &Client{BaseURL: server.URL, APIKey: "k"}
+	resp, err := c.Generate(context.Background(), sdk.Request{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Content) != 1 || resp.Content[0].Text != "hi" {
+		t.Fatalf("fallback content = %+v (paths %v)", resp.Content, paths)
+	}
+	if len(paths) != 2 || paths[0] != "/responses" || paths[1] != "/chat/completions" {
+		t.Fatalf("paths = %v", paths)
+	}
+}
+
+func TestGenerateSurfacesChatErrorWhenBoth404(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"message":"nope"}}`))
+	}))
+	defer server.Close()
+	c := &Client{BaseURL: server.URL, APIKey: "k"}
+	if _, err := c.Generate(context.Background(), sdk.Request{Model: "m"}); err == nil {
+		t.Fatal("expected error when both endpoints 404")
+	}
+}

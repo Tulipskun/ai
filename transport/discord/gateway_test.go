@@ -1,8 +1,10 @@
 package discord
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -54,41 +56,74 @@ func TestToolTraceEmbedHasNoTitle(t *testing.T) {
 	}
 }
 
-func TestToolTraceStateStartsNewEmbedOnTextTransition(t *testing.T) {
-	state := &toolTraceState{messageID: "msg-1", items: []string{"tool_call"}, isText: false}
-	if isNew := state.append("hello", true); !isNew {
-		t.Fatal("text after trace items should start a new embed")
-	}
-	if len(state.items) != 1 || state.items[0] != "hello" {
-		t.Fatalf("new embed items = %q", state.items)
-	}
-	if state.messageID != "" {
-		t.Fatalf("messageID should reset, got %q", state.messageID)
-	}
-}
-
-func TestToolTraceStateConcatenatesConsecutiveText(t *testing.T) {
+func TestToolTraceStateMergesConsecutiveText(t *testing.T) {
 	state := &toolTraceState{}
-	if isNew := state.append("hel", true); !isNew {
-		t.Fatal("first text should request a new embed")
-	}
-	state.messageID = "msg-1"
-	if isNew := state.append("lo", true); isNew {
-		t.Fatal("consecutive text should edit the same embed")
-	}
+	state.append("hel", true)
+	state.append("lo", true)
 	if len(state.items) != 1 || state.items[0] != "hello" {
 		t.Fatalf("text items = %q", state.items)
 	}
 }
 
-func TestToolTraceStateStartsNewEmbedOnTraceAfterText(t *testing.T) {
-	state := &toolTraceState{messageID: "msg-1", items: []string{"hello"}, isText: true}
-	if isNew := state.append("tool_call", false); !isNew {
-		t.Fatal("trace after text should start a new embed")
+func TestToolTraceStateKeepsToolAndTextLinesSeparate(t *testing.T) {
+	state := &toolTraceState{}
+	state.append("tool_call", false)
+	state.append("hel", true)
+	state.append("lo", true)
+	if len(state.items) != 2 || state.items[0] != "tool_call" || state.items[1] != "hello" {
+		t.Fatalf("items = %q", state.items)
 	}
-	if len(state.items) != 1 || state.items[0] != "tool_call" {
-		t.Fatalf("new embed items = %q", state.items)
+}
+
+func TestToolTraceStateUpdateReplacesNewestMatch(t *testing.T) {
+	state := &toolTraceState{}
+	state.append("sending request to provider", false)
+	state.append(`tool_a("{}")`, false)
+	state.append(`tool_b("{}")`, false)
+	if !state.update(`❌ tool_a("{}") · 1s`, func(item string) bool { return strings.HasPrefix(item, "tool_a(") }) {
+		t.Fatal("expected the tool_a line to update in place")
 	}
+	if state.items[1] != `❌ tool_a("{}") · 1s` || state.items[2] != `tool_b("{}")` {
+		t.Fatalf("items = %q", state.items)
+	}
+	if state.update("x", nil) { t.Fatal("nil matcher must not update") }
+	if state.update("x", func(string) bool { return false }) { t.Fatal("unmatched item must not update") }
+}
+
+func TestTraceFlushDelaySpacesSnapshots(t *testing.T) {
+	if got := traceFlushDelay(time.Time{}); got != 0 { t.Fatalf("first snapshot should push immediately, got %v", got) }
+	if got := traceFlushDelay(time.Now().Add(-2 * traceFlushInterval)); got != 0 { t.Fatalf("overdue snapshot should push immediately, got %v", got) }
+	if got := traceFlushDelay(time.Now()); got <= 0 || got > traceFlushInterval {
+		t.Fatalf("recent push should space the next snapshot by one interval, got %v", got)
+	}
+}
+
+func TestAppendTraceItemStartsFreshEmbedOnModeSwitch(t *testing.T) {
+	g := &Gateway{toolTrace: map[string]*toolTraceState{}}
+	if err := g.appendToolTrace(context.Background(), "c1", "tool_call"); err != nil { t.Fatal(err) }
+	if err := g.appendTextTrace(context.Background(), "c1", "hello"); err != nil { t.Fatal(err) }
+	g.toolTraceMu.Lock(); defer g.toolTraceMu.Unlock()
+	state := g.toolTrace["c1"]
+	if state == nil || len(state.items) != 1 || state.items[0] != "hello" {
+		t.Fatalf("items = %q", state.items)
+	}
+	if state.messageID != "" { t.Fatalf("mode switch should reset messageID, got %q", state.messageID) }
+}
+
+func TestUpdateToolTraceReplacesPendingRequestLine(t *testing.T) {
+	g := &Gateway{toolTrace: map[string]*toolTraceState{}}
+	if err := g.updateToolTrace(context.Background(), "c1", "sending request to provider", pendingRequestLine); err != nil { t.Fatal(err) }
+	if err := g.updateToolTrace(context.Background(), "c1", "provider accepted request; processing · 1s", pendingRequestLine); err != nil { t.Fatal(err) }
+	g.toolTraceMu.Lock(); defer g.toolTraceMu.Unlock()
+	state := g.toolTrace["c1"]
+	if state == nil || len(state.items) != 1 || state.items[0] != "provider accepted request; processing · 1s" {
+		t.Fatalf("items = %q", state.items)
+	}
+}
+
+func TestFlushToolTraceWithoutStateIsNoop(t *testing.T) {
+	g := &Gateway{toolTrace: map[string]*toolTraceState{}}
+	if err := g.flushToolTrace(context.Background(), "missing"); err != nil { t.Fatal(err) }
 }
 
 func TestToolTraceStateTrimsOldestOverBudget(t *testing.T) {

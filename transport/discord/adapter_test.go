@@ -59,7 +59,7 @@ func TestDisplayTraceRequiresChannel(t *testing.T) {
 	}
 }
 
-type routingFakeSender struct{ texts, tools, messages []string }
+type routingFakeSender struct{ texts, tools, messages []string; flushes int }
 
 func (f *routingFakeSender) SendMessage(_ context.Context, channelID, content string) error {
 	f.messages = append(f.messages, channelID+":"+content)
@@ -70,6 +70,17 @@ func (f *routingFakeSender) appendToolTrace(_ context.Context, _ string, item st
 	f.tools = append(f.tools, item)
 	return nil
 }
+func (f *routingFakeSender) updateToolTrace(_ context.Context, _ string, item string, match func(string) bool) error {
+	for i := len(f.tools) - 1; i >= 0; i-- {
+		if match != nil && match(f.tools[i]) {
+			f.tools[i] = item
+			return nil
+		}
+	}
+	f.tools = append(f.tools, item)
+	return nil
+}
+func (f *routingFakeSender) flushToolTrace(_ context.Context, _ string) error { f.flushes++; return nil }
 func (f *routingFakeSender) clearToolTrace(_ context.Context, _ string) error { return nil }
 func (f *routingFakeSender) appendTextTrace(_ context.Context, _ string, text string) error {
 	f.texts = append(f.texts, text)
@@ -139,4 +150,57 @@ func TestDisplayTraceToolShowsElapsed(t *testing.T) {
 func TestWithElapsedSkipsZero(t *testing.T) {
 	if got := withElapsed("msg", 0); got != "msg" { t.Fatalf("withElapsed = %q", got) }
 	if got := withElapsed("msg", 1500*time.Millisecond); got != "msg · 2s" { t.Fatalf("withElapsed = %q", got) }
+}
+
+func displayTraceEvent(t *testing.T, display Display, trace sdk.TraceEvent) {
+	t.Helper()
+	output := sdk.Output{Source: "discord", SessionID: "s", Metadata: map[string]string{"channel_id": "c"}, Trace: &trace}
+	if err := display.Display(context.Background(), output); err != nil { t.Fatal(err) }
+}
+
+func TestDisplayTraceRequestBecomesAcceptedLine(t *testing.T) {
+	sender := &routingFakeSender{}
+	display := Display{Sender: sender}
+	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceRequest})
+	if len(sender.tools) != 1 || sender.tools[0] != "sending request to provider" { t.Fatalf("tools = %q", sender.tools) }
+	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceProviderReady, Elapsed: 23 * time.Second})
+	if len(sender.tools) != 1 || sender.tools[0] != "provider accepted request; processing · 23s" { t.Fatalf("tools = %q", sender.tools) }
+}
+
+func TestDisplayTraceRetryKeepsOnePendingRequestLine(t *testing.T) {
+	sender := &routingFakeSender{}
+	display := Display{Sender: sender}
+	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceRequest})
+	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceRequest})
+	if len(sender.tools) != 1 || sender.tools[0] != "sending request to provider" { t.Fatalf("tools = %q", sender.tools) }
+}
+
+func TestDisplayTraceToolFailureMarksLineInPlace(t *testing.T) {
+	sender := &routingFakeSender{}
+	display := Display{Sender: sender}
+	call := &sdk.ToolCall{ID: "1", Name: "list_directory", Arguments: `{"path":"~/ai"}`}
+	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceToolCall, ToolCall: call, Elapsed: 2 * time.Second})
+	if len(sender.tools) != 1 || sender.tools[0] != `list_directory("{\"path\":\"~/ai\"}") · 2s` { t.Fatalf("tools = %q", sender.tools) }
+	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceToolRunning, ToolCall: call, Elapsed: 2 * time.Second})
+	if len(sender.tools) != 1 { t.Fatalf("tool running should not add a line: %q", sender.tools) }
+	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceToolResult, ToolCall: call, ToolResult: &sdk.ToolResult{ID: "1", Content: "boom", IsError: true}, Elapsed: 3 * time.Second})
+	if len(sender.tools) != 1 || sender.tools[0] != `❌ list_directory("{\"path\":\"~/ai\"}") · 3s` { t.Fatalf("tools = %q", sender.tools) }
+	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceRequest})
+	if len(sender.tools) != 2 || sender.tools[0] != `❌ list_directory("{\"path\":\"~/ai\"}") · 3s` || sender.tools[1] != "sending request to provider" { t.Fatalf("tools = %q", sender.tools) }
+}
+
+func TestDisplayTraceToolSuccessMarksLineInPlace(t *testing.T) {
+	sender := &routingFakeSender{}
+	display := Display{Sender: sender}
+	call := &sdk.ToolCall{ID: "1", Name: "run_command", Arguments: "{}"}
+	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceToolCall, ToolCall: call, Elapsed: time.Second})
+	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceToolResult, ToolCall: call, ToolResult: &sdk.ToolResult{ID: "1", Content: "ok"}, Elapsed: 2 * time.Second})
+	if len(sender.tools) != 1 || sender.tools[0] != `✅ run_command("{}") · 2s` { t.Fatalf("tools = %q", sender.tools) }
+}
+
+func TestDisplayTraceResponseFlushesToolTrace(t *testing.T) {
+	sender := &routingFakeSender{}
+	display := Display{Sender: sender}
+	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceResponse, Response: &sdk.Response{}})
+	if sender.flushes != 1 { t.Fatalf("flushes = %d", sender.flushes) }
 }

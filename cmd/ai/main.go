@@ -42,6 +42,8 @@ func main() {
 		if err := runUpdate(); err != nil { log.Fatal(err) }
 	case commandDaemon:
 		if err := runDaemon(); err != nil && !errors.Is(err, context.Canceled) { log.Fatal(err) }
+	case commandStop:
+		if err := runStop(); err != nil { log.Fatal(err) }
 	case commandUninstall:
 		if err := runUninstall(); err != nil { log.Fatal(err) }
 	}
@@ -160,6 +162,99 @@ func startDaemon(app string) error {
 	_=logFile.Close();_=cmd.Process.Release();fmt.Printf("[ai] started (pid %d)\n",pid);return nil
 }
 func stopDaemon(_ string) error { state,err:=stateRoot();if err!=nil{return err};pidPath:=filepath.Join(state,"ai.pid");data,err:=os.ReadFile(pidPath);if err!=nil{if os.IsNotExist(err){return nil};return err};pid,err:=strconv.Atoi(strings.TrimSpace(string(data)));if err!=nil||pid<=0{_=os.Remove(pidPath);return nil};if !processAlive(pid){_=os.Remove(pidPath);return nil};if err:=syscall.Kill(pid,syscall.SIGTERM);err!=nil&&!errors.Is(err,syscall.ESRCH){return err};deadline:=time.Now().Add(10*time.Second);for time.Now().Before(deadline){if !processAlive(pid){_=os.Remove(pidPath);return nil};time.Sleep(100*time.Millisecond)};if processAlive(pid){_=syscall.Kill(pid,syscall.SIGKILL)};_=os.Remove(pidPath);return nil }
+func runStop() error {
+	state, err := stateRoot()
+	if err != nil {
+		return err
+	}
+	wasRunning := daemonRunning()
+	if err := stopDaemon(""); err != nil {
+		return err
+	}
+	stoppedKeepalive := stopKeepaliveWatchers()
+	if daemonRunning() {
+		return fmt.Errorf("ai daemon is still running")
+	}
+	if !wasRunning {
+		fmt.Printf("[ai] not running (state: %s)\n", state)
+		return nil
+	}
+	if stoppedKeepalive > 0 {
+		fmt.Printf("[ai] stopped (pid file removed, %d keepalive watcher(s) stopped)\n", stoppedKeepalive)
+	} else {
+		fmt.Printf("[ai] stopped\n")
+	}
+	return nil
+}
+
+// stopKeepaliveWatchers SIGTERMs detached keepalive.sh loops that would
+// otherwise restart the daemon right after 'ai stop'. Returns how many
+// watchers were signaled. A SIGKILLed keeper cannot run its EXIT trap, so a
+// stale keepalive.lock directory is removed when no watcher remains.
+func stopKeepaliveWatchers() int {
+	self := os.Getpid()
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return 0
+	}
+	var targets []int
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid <= 0 || pid == self {
+			continue
+		}
+		cmdline, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "cmdline"))
+		if err != nil || len(cmdline) == 0 {
+			continue
+		}
+		cmd := strings.ReplaceAll(string(cmdline), "\x00", " ")
+		if !strings.Contains(cmd, "keepalive.sh") {
+			continue
+		}
+		targets = append(targets, pid)
+	}
+	for _, pid := range targets {
+		_ = syscall.Kill(pid, syscall.SIGTERM)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		alive := false
+		for _, pid := range targets {
+			if processAlive(pid) {
+				alive = true
+				break
+			}
+		}
+		if !alive {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	for _, pid := range targets {
+		if processAlive(pid) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
+	if state, err := stateRoot(); err == nil {
+		keeperAlive := false
+		for _, pid := range targets {
+			if processAlive(pid) {
+				keeperAlive = true
+				break
+			}
+		}
+		if !keeperAlive {
+			_ = os.Remove(filepath.Join(state, "keepalive.lock"))
+		}
+	}
+	stopped := 0
+	for _, pid := range targets {
+		if !processAlive(pid) {
+			stopped++
+		}
+	}
+	return stopped
+}
 func runDaemon() error { state,err:=stateRoot();if err!=nil{return err};if err:=os.MkdirAll(state,0o755);err!=nil{return err};if err:=os.Chdir(state);err!=nil{return err};ctx,stop:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM);defer stop();return run(ctx,false) }
 func runCLI() error { state,err:=stateRoot();if err!=nil{return err};if err:=os.MkdirAll(state,0o755);err!=nil{return err};if err:=os.Chdir(state);err!=nil{return err};ctx,stop:=signal.NotifyContext(context.Background(),os.Interrupt,syscall.SIGTERM);defer stop();return run(ctx,true) }
 func run(ctx context.Context, cliOnly bool) error {

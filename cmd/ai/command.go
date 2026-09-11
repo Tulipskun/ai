@@ -17,6 +17,7 @@ const (
 	commandDiscord
 	commandBrowser
 	commandSystem
+	commandStop
 )
 
 func parseCommand(args []string) (command, error) {
@@ -61,6 +62,12 @@ func parseCommand(args []string) (command, error) {
 		}
 		return commandSystem, nil
 	}
+	if args[0] == "stop" {
+		if len(args) > 1 {
+			return commandStop, fmt.Errorf("stop: unexpected argument %q", args[1])
+		}
+		return commandStop, nil
+	}
 	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		return commandStart, errHelp
 	}
@@ -74,6 +81,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  start      Start the AI Harness in the background and return")
+	fmt.Fprintln(w, "  stop       Stop the running AI Harness daemon")
 	fmt.Fprintln(w, "  cli        Open an interactive AI Harness CLI session")
 	fmt.Fprintln(w, "  discord    Configure Discord interactively")
 	fmt.Fprintln(w, "  browser    Configure browser automation interactively")

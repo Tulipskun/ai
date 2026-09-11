@@ -142,7 +142,7 @@ browser_screenshot
 }
 ```
 
-Providers may also be added from Discord with `/provider`, or from the CLI with `/provider add <name> <adapter> <url> <api-key>`.
+Providers may also be added from Discord with `/provider`, or from the CLI with `/provider add <name> <adapter> <url> <api-key> [free]`. Append `free` (or set `"free_only": true` in `config/provider.json`) to keep only `-free` models in discovery.
 
 ## CLI
 

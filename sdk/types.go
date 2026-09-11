@@ -69,7 +69,7 @@ const (
 )
 
 type Model struct { ID string `json:"id"`; Name string `json:"name,omitempty"`; SupportsTools bool `json:"supports_tools"`; SupportsThinking bool `json:"supports_thinking"`; SupportsTemperature bool `json:"supports_temperature"`; SupportsStreaming bool `json:"supports_streaming"` }
-type ProviderConfig struct { ID ProviderID `json:"id"`; BaseURL string `json:"base_url"`; Keys *KeyPool `json:"-"`; Adapter AdapterID `json:"adapter"`; RotateKeys bool `json:"rotate_keys,omitempty"` }
+type ProviderConfig struct { ID ProviderID `json:"id"`; BaseURL string `json:"base_url"`; Keys *KeyPool `json:"-"`; Adapter AdapterID `json:"adapter"`; RotateKeys bool `json:"rotate_keys,omitempty"`; FreeOnly bool `json:"free_only,omitempty"` }
 type ModelRoute struct { Provider ProviderID `json:"provider"`; Model string `json:"model"`; Adapter AdapterID `json:"adapter"` }
 type SessionConfig struct { ID string `json:"id"`; Provider ProviderID `json:"provider"`; Model string `json:"model"`; KeyIndex int `json:"key_index"`; ThinkingLevel ThinkingLevel `json:"thinking_level,omitempty"`; Temperature *float64 `json:"temperature,omitempty"` }
 

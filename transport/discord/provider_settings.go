@@ -13,7 +13,7 @@ const providerSettingsModalID = "provider:settings"
 
 type ProviderSettingsHandler struct {
 	Adapters []sdk.AdapterID
-	Upsert   func(context.Context, string, string, string, string) error
+	Upsert   func(context.Context, string, string, string, string, bool) error
 }
 
 func (h *ProviderSettingsHandler) Handle(s *discordgo.Session, i *discordgo.InteractionCreate) error {
@@ -41,6 +41,7 @@ func (h *ProviderSettingsHandler) modalData() *discordgo.InteractionResponseData
 			discordgo.Label{Label: "Adapter", Description: "Protocol adapter", Component: discordgo.SelectMenu{CustomID: "adapter", MenuType: discordgo.StringSelectMenu, Placeholder: "Select adapter", Options: options, Required: boolPtr(true)}},
 			discordgo.Label{Label: "URL", Description: "Provider API base URL", Component: discordgo.TextInput{CustomID: "url", Style: discordgo.TextInputShort, Placeholder: "https://api.example.com/v1", Required: boolPtr(true), MaxLength: 500}},
 			discordgo.Label{Label: "API Key", Description: "Provider API key", Component: discordgo.TextInput{CustomID: "api_key", Style: discordgo.TextInputShort, Placeholder: "API key", Required: boolPtr(true), MaxLength: 500}},
+			discordgo.Label{Label: "Free only", Description: "true keeps only -free models", Component: discordgo.TextInput{CustomID: "free_only", Style: discordgo.TextInputShort, Placeholder: "false", Required: boolPtr(false), MaxLength: 5}},
 		},
 	}
 }
@@ -57,7 +58,7 @@ func (h *ProviderSettingsHandler) submit(s *discordgo.Session, i *discordgo.Inte
 	values := modalValues(i)
 	name := strings.TrimSpace(values["name"]); adapter := strings.TrimSpace(strings.ToLower(values["adapter"])); endpoint := strings.TrimSpace(values["url"]); apiKey := strings.TrimSpace(values["api_key"])
 	if name == "" || adapter == "" || endpoint == "" || apiKey == "" { return respondProviderError(s, i, "name, adapter, URL, and API key are required") }
-	if err := h.Upsert(context.Background(), name, adapter, endpoint, apiKey); err != nil { return respondProviderError(s, i, err.Error()) }
+	freeOnly := strings.EqualFold(strings.TrimSpace(values["free_only"]), "true"); if err := h.Upsert(context.Background(), name, adapter, endpoint, apiKey, freeOnly); err != nil { return respondProviderError(s, i, err.Error()) }
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Content: fmt.Sprintf("Provider `%s` saved and model catalogue refreshed.", name), Flags: discordgo.MessageFlagsEphemeral}})
 }
 

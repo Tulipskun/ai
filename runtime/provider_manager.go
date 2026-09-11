@@ -31,7 +31,7 @@ func (m *ProviderManager) Adapters() []sdk.AdapterID { return []sdk.AdapterID{sd
 func (m *ProviderManager) Providers() []sdk.ProviderID { if m == nil || m.rt == nil { return nil }; return append([]sdk.ProviderID(nil), m.rt.Providers...) }
 func (m *ProviderManager) KeyPools() map[sdk.ProviderID]*sdk.KeyPool { if m == nil || m.rt == nil { return nil }; out := make(map[sdk.ProviderID]*sdk.KeyPool, len(m.rt.ProviderConfigs)); for _, config := range m.rt.ProviderConfigs { out[config.ID] = config.Keys }; return out }
 
-func (m *ProviderManager) Upsert(ctx context.Context, name, adapter, endpoint, apiKey string) error {
+func (m *ProviderManager) Upsert(ctx context.Context, name, adapter, endpoint, apiKey string, freeOnly bool) error {
 	if m == nil || m.rt == nil || m.rt.Router == nil || m.rt.Client == nil { return errors.New("runtime: provider manager is not initialized") }
 	name = strings.TrimSpace(name); adapter = strings.ToLower(strings.TrimSpace(adapter)); endpoint = strings.TrimRight(strings.TrimSpace(endpoint), "/"); apiKey = strings.TrimSpace(apiKey)
 	if name == "" { return errors.New("provider name is required") }; if endpoint == "" { return errors.New("provider URL is required") }; if apiKey == "" { return errors.New("provider API key is required") }
@@ -40,7 +40,7 @@ func (m *ProviderManager) Upsert(ctx context.Context, name, adapter, endpoint, a
 	m.mu.Lock(); defer m.mu.Unlock()
 	file := m.config; index := -1
 	for i := range file.Providers { if strings.EqualFold(file.Providers[i].Name, name) { index = i; break } }
-	entry := ProviderFile{Name: name, Adapter: adapter, HTTPEndpoint: endpoint, APIKeys: []string{apiKey}}
+	entry := ProviderFile{Name: name, Adapter: adapter, HTTPEndpoint: endpoint, APIKeys: []string{apiKey}, FreeOnly: freeOnly}
 	if index >= 0 { file.Providers[index] = entry } else { file.Providers = append(file.Providers, entry) }
 	configs, err := file.ProviderConfigs(); if err != nil { return err }
 	var selected sdk.ProviderConfig

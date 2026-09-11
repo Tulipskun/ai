@@ -83,3 +83,15 @@ func TestLoadProviderFileAllowsMissingConfig(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	if len(config.Providers) != 0 { t.Fatalf("providers = %d, want 0", len(config.Providers)) }
 }
+
+func TestProviderFileFreeOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "provider.json")
+	data := []byte(`{"providers":[{"name":"mix","adapter":"openai","http_endpoint":"https://aihubmix.com/v1","api_keys":["k"],"free_only":true}]}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil { t.Fatal(err) }
+	file, err := LoadProviderFile(path)
+	if err != nil { t.Fatal(err) }
+	if !file.Providers[0].FreeOnly { t.Fatal("free_only was not loaded") }
+	configs, err := file.ProviderConfigs()
+	if err != nil { t.Fatal(err) }
+	if !configs[0].FreeOnly { t.Fatal("free_only was not passed to SDK config") }
+}

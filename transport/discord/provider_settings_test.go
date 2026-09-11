@@ -10,10 +10,10 @@ import (
 func TestProviderSettingsModalContainsRequiredFields(t *testing.T) {
 	h := &ProviderSettingsHandler{Adapters: []sdk.AdapterID{sdk.AdapterOpenAI, sdk.AdapterAnthropic, sdk.AdapterGemini}}
 	data := h.modalData()
-	if len(data.Components) != 4 {
-		t.Fatalf("components = %d, want 4", len(data.Components))
+	if len(data.Components) != 5 {
+		t.Fatalf("components = %d, want 5", len(data.Components))
 	}
-	want := []string{"Name", "Adapter", "URL", "API Key"}
+	want := []string{"Name", "Adapter", "URL", "API Key", "Free only"}
 	for i, label := range data.Components {
 		component, ok := label.(discordgo.Label)
 		if !ok { t.Fatalf("component %d = %T, want discordgo.Label", i, label) }

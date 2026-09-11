@@ -17,6 +17,7 @@ type ProviderFile struct {
 	Adapter       string   `json:"adapter,omitempty"`
 	HTTPEndpoint  string   `json:"http_endpoint"`
 	APIKeys       []string `json:"api_keys"`
+	FreeOnly      bool     `json:"free_only,omitempty"`
 }
 
 type ProviderFileConfig struct {
@@ -84,6 +85,7 @@ func (c ProviderFileConfig) ProviderConfigs() ([]sdk.ProviderConfig, error) {
 			BaseURL:  p.HTTPEndpoint,
 			Keys:     sdk.NewKeyPool(p.APIKeys...),
 			Adapter:  adapter,
+			FreeOnly: p.FreeOnly,
 		})
 	}
 	return configs, nil

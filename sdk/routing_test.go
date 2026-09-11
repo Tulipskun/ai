@@ -37,3 +37,18 @@ func TestSessionPinsKeyIndex(t *testing.T) {
 	current, err := pool.Current()
 	if err != nil || current != "key-1" { t.Fatalf("pool current = %q, err=%v", current, err) }
 }
+
+func TestFilterFreeModels(t *testing.T) {
+	models := []Model{{ID: "gpt-5"}, {ID: "hy3-free"}, {ID: "QWEN-FREE"}, {ID: ""}}
+	got := filterFreeModels(models, false)
+	if len(got) != len(models) {
+		t.Fatalf("disabled filter should pass through: %d", len(got))
+	}
+	got = filterFreeModels(models, true)
+	if len(got) != 2 || got[0].ID != "hy3-free" || got[1].ID != "QWEN-FREE" {
+		t.Fatalf("free filter = %+v", got)
+	}
+	if got := filterFreeModels([]Model{{ID: "gpt-5"}}, true); len(got) != 0 {
+		t.Fatalf("expected empty catalog, got %+v", got)
+	}
+}

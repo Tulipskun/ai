@@ -14,10 +14,13 @@ type discordMessage struct { ID string; ChannelID string; AuthorID string; Autho
 func normalizeMessage(message discordMessage)(InputMessage,bool){if message.AuthorIsBot||message.ID==""||message.ChannelID==""||message.AuthorID==""{return InputMessage{},false};return InputMessage{SessionID:"discord:channel:"+message.ChannelID,ChannelID:message.ChannelID,MessageID:message.ID,AuthorID:message.AuthorID,AuthorName:message.AuthorName,Content:message.Content},true}
 func gatewayIntents()discordgo.Intent{return discordgo.IntentsGuildMessages|discordgo.IntentsDirectMessages|discordgo.IntentsMessageContent}
 type toolTraceState struct{messageID string;items []string;isText bool}
+const maxEmbedChars=4000
+func embedChars(items []string)int{n:=0;for i,w:=range items{if i>0{n++};n+=len([]rune(w))};return n}
 func(s *toolTraceState)append(item string,isText bool)bool{
 if s.messageID!=""&&len(s.items)>0&&s.isText!=isText{s.messageID="";s.items=nil}
 s.isText=isText
 if !isText&&len(s.items)>0&&s.items[len(s.items)-1]=="thinking"{s.items[len(s.items)-1]=item}else if isText&&len(s.items)>0{s.items[len(s.items)-1]+=item;s.items[len(s.items)-1]=truncateText(s.items[len(s.items)-1],maxTextTraceLength)}else{s.items=append(s.items,item)}
+for len(s.items)>1&&embedChars(s.items)>maxEmbedChars{s.items=s.items[1:]}
 return s.messageID==""
 }
 type Gateway struct{session *discordgo.Session;messages chan InputMessage;done chan struct{};closeMu sync.Mutex;closed bool;modelSettings *ModelSettingsHandler;providerSettings *ProviderSettingsHandler;sessionCommand *SessionCommandHandler;sessionMapping *SessionMapping;stop func(string)bool;retryStatusMu sync.Mutex;retryStatus map[string]string;authorizedUserID string;toolTraceMu sync.Mutex;toolTrace map[string]*toolTraceState}

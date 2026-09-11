@@ -1,6 +1,7 @@
 package discord
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bwmarrin/discordgo"
@@ -87,5 +88,32 @@ func TestToolTraceStateStartsNewEmbedOnTraceAfterText(t *testing.T) {
 	}
 	if len(state.items) != 1 || state.items[0] != "tool_call" {
 		t.Fatalf("new embed items = %q", state.items)
+	}
+}
+
+func TestToolTraceStateTrimsOldestOverBudget(t *testing.T) {
+	state := &toolTraceState{}
+	item := strings.Repeat("x", 500)
+	for i := 0; i < 20; i++ {
+		state.append(item, false)
+	}
+	if embedChars(state.items) > maxEmbedChars {
+		t.Fatalf("embed still over budget: %d chars in %d items", embedChars(state.items), len(state.items))
+	}
+	if len(state.items) < 2 {
+		t.Fatalf("trimmed too aggressively: %d items", len(state.items))
+	}
+	last := state.items[len(state.items)-1]
+	if last != item {
+		t.Fatal("newest item was not preserved")
+	}
+}
+
+func TestToolTraceStateKeepsSingleLargeTextItem(t *testing.T) {
+	state := &toolTraceState{}
+	big := strings.Repeat("y", maxTextTraceLength)
+	state.append(big, true)
+	if len(state.items) != 1 {
+		t.Fatalf("single text item should survive trim: %d items", len(state.items))
 	}
 }

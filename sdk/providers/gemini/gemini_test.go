@@ -17,3 +17,11 @@ func TestBuildMapsModelAndToolResult(t *testing.T) {
 	fr:=part["functionResponse"].(map[string]any)
 	if fr["name"]!="bash"{t.Fatalf("tool result name = %v, want bash",fr["name"])}
 }
+
+func TestClientHeadersMergeCustom(t *testing.T) {
+	c := &Client{BaseURL: "https://example.invalid", APIKey: "k"}
+	got := c.WithHeaders(map[string]string{"X-Title": "ai"}).(*Client).headers()
+	if got["x-goog-api-key"] != "k" || got["X-Title"] != "ai" {
+		t.Fatalf("unexpected headers: %v", got)
+	}
+}

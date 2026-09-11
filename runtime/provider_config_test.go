@@ -95,3 +95,14 @@ func TestProviderFileFreeOnly(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	if !configs[0].FreeOnly { t.Fatal("free_only was not passed to SDK config") }
 }
+
+func TestProviderFileHeadersPassthrough(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "provider.json")
+	data := []byte(`{"providers":[{"name":"h","adapter":"openai","http_endpoint":"https://example.invalid/v1","api_keys":["k"],"headers":{"X-Title":"ai","X-Empty":""}}]}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil { t.Fatal(err) }
+	file, err := LoadProviderFile(path)
+	if err != nil { t.Fatal(err) }
+	configs, err := file.ProviderConfigs()
+	if err != nil { t.Fatal(err) }
+	if configs[0].Headers["X-Title"] != "ai" { t.Fatalf("headers = %v", configs[0].Headers) }
+}

@@ -18,6 +18,7 @@ type ProviderFile struct {
 	HTTPEndpoint  string   `json:"http_endpoint"`
 	APIKeys       []string `json:"api_keys"`
 	FreeOnly      bool     `json:"free_only,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty"`
 }
 
 type ProviderFileConfig struct {
@@ -73,6 +74,8 @@ func LoadProviderFile(path string) (ProviderFileConfig, error) {
 	return config, nil
 }
 
+func cloneStringMap(in map[string]string) map[string]string { if len(in) == 0 { return nil }; out := make(map[string]string, len(in)); for k, v := range in { out[k] = v }; return out }
+
 func (c ProviderFileConfig) ProviderConfigs() ([]sdk.ProviderConfig, error) {
 	configs := make([]sdk.ProviderConfig, 0, len(c.Providers))
 	for _, p := range c.Providers {
@@ -86,6 +89,7 @@ func (c ProviderFileConfig) ProviderConfigs() ([]sdk.ProviderConfig, error) {
 			Keys:     sdk.NewKeyPool(p.APIKeys...),
 			Adapter:  adapter,
 			FreeOnly: p.FreeOnly,
+			Headers:  cloneStringMap(p.Headers),
 		})
 	}
 	return configs, nil

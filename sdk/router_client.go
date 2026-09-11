@@ -8,6 +8,7 @@ import (
 )
 
 type KeyedProvider interface { Provider; WithAPIKey(string) Provider }
+type HeaderedProvider interface { Provider; WithHeaders(map[string]string) Provider }
 type RouterClient struct { Router *Router; Adapters map[AdapterID]Provider; Retry RetryPolicy }
 func NewRouterClient(router *Router) *RouterClient { return &RouterClient{Router: router, Adapters: make(map[AdapterID]Provider), Retry: DefaultRetryPolicy()} }
 func (c *RouterClient) RegisterAdapter(id AdapterID, p Provider) { c.Adapters[id] = p }
@@ -21,7 +22,7 @@ func (c *RouterClient) providerFor(session *Session, model string) (Provider, Mo
 	if err != nil { return nil, ModelRoute{}, err }
 	p, ok := c.Adapters[route.Adapter]; if !ok { return nil, ModelRoute{}, &RouteError{Provider: route.Provider, Model: route.Model, Adapter: route.Adapter} }
 	if kp, ok := p.(KeyedProvider); ok { key, err := session.APIKey(); if err != nil { return nil, ModelRoute{}, err }; p = kp.WithAPIKey(key) }
-	if config, err := c.Router.Provider(route.Provider); err == nil && config.BaseURL != "" { if ep, ok := p.(EndpointProvider); ok { p = ep.WithBaseURL(config.BaseURL) } }
+	if config, err := c.Router.Provider(route.Provider); err == nil { if config.BaseURL != "" { if ep, ok := p.(EndpointProvider); ok { p = ep.WithBaseURL(config.BaseURL) } }; if len(config.Headers) > 0 { if hp, ok := p.(HeaderedProvider); ok { p = hp.WithHeaders(config.Headers) } } }
 	return p, route, nil
 }
 type RouteError struct { Provider ProviderID; Model string; Adapter AdapterID }

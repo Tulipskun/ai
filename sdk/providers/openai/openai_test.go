@@ -102,3 +102,29 @@ func TestGenerateFallsBackToChatCompletions(t *testing.T) {
 		t.Fatalf("paths=%v", paths)
 	}
 }
+
+func TestClientHeadersMergeCustom(t *testing.T) {
+	c := &Client{BaseURL: "https://example.invalid/v1", APIKey: "k"}
+	p := c.WithHeaders(map[string]string{"X-Title": "ai", "Authorization": "Bearer hacked"})
+	got := p.(*Client).headers()
+	if got["Authorization"] != "Bearer k" {
+		t.Fatalf("auth header must win, got %q", got["Authorization"])
+	}
+	if got["X-Title"] != "ai" {
+		t.Fatalf("custom header missing: %v", got)
+	}
+}
+
+func TestWithHeadersDeepCopies(t *testing.T) {
+	c := &Client{}
+	in := map[string]string{"X-Title": "ai"}
+	p := c.WithHeaders(in).(*Client)
+	in["X-Title"] = "mutated"
+	in["X-New"] = "x"
+	if p.Headers["X-Title"] != "ai" || len(p.Headers) != 1 {
+		t.Fatalf("shared adapter state leaked: %v", p.Headers)
+	}
+	if len(c.Headers) != 0 {
+		t.Fatalf("base adapter mutated: %v", c.Headers)
+	}
+}

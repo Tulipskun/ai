@@ -1,6 +1,9 @@
 package sdk
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestRouterResolvesLogicalProviderAndModelToAdapter(t *testing.T) {
 	r := NewRouter()
@@ -50,5 +53,43 @@ func TestFilterFreeModels(t *testing.T) {
 	}
 	if got := filterFreeModels([]Model{{ID: "gpt-5"}}, true); len(got) != 0 {
 		t.Fatalf("expected empty catalog, got %+v", got)
+	}
+}
+
+type headerCaptureLister struct {
+	got map[string]string
+	models []Model
+}
+
+func (f *headerCaptureLister) Name() string { return "capture" }
+func (f *headerCaptureLister) WithAPIKey(string) Provider { return f }
+func (f *headerCaptureLister) WithHeaders(h map[string]string) Provider {
+	got := make(map[string]string, len(h))
+	for k, v := range h {
+		got[k] = v
+	}
+	f.got = got
+	return f
+}
+func (f *headerCaptureLister) Generate(context.Context, Request) (Response, error) {
+	return Response{}, nil
+}
+func (f *headerCaptureLister) Stream(context.Context, Request) (<-chan Event, error) {
+	ch := make(chan Event, 1)
+	close(ch)
+	return ch, nil
+}
+func (f *headerCaptureLister) ListModels(context.Context, string) ([]Model, error) { return f.models, nil }
+
+func TestRefreshModelsAppliesCustomHeaders(t *testing.T) {
+	r := NewRouter()
+	r.RegisterProvider(ProviderConfig{ID: "p1", Adapter: AdapterOpenAI, Keys: NewKeyPool("k"), Headers: map[string]string{"X-Title": "ai"}})
+	adapter := &headerCaptureLister{models: []Model{{ID: "m"}}}
+	if err := r.RefreshModels(context.Background(), "p1", adapter); err != nil { t.Fatal(err) }
+	if adapter.got["X-Title"] != "ai" {
+		t.Fatalf("custom headers not applied: %v", adapter.got)
+	}
+	if len(r.Models("p1")) != 1 {
+		t.Fatalf("catalog = %+v", r.Models("p1"))
 	}
 }

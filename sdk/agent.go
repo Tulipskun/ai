@@ -30,7 +30,7 @@ type Agent struct {
 }
 
 const (
-	defaultAgentMaxRetries = 2
+	defaultAgentMaxRetries = 6
 	maxRetryCooldown        = 96 * time.Second
 	maxMarkerNudges         = 2
 )

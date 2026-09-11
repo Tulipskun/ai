@@ -128,6 +128,9 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 			settleInterruptedTurn(session, before)
 			break
 		}
+		if retryAfterAbort(err) {
+			break
+		}
 		session.ReplaceHistory(before)
 		if !retryableAgentError(ctx, err) || attempt == retries {
 			break
@@ -431,6 +434,18 @@ func isRateLimitError(err error) bool { statusErr, ok := err.(HTTPStatusError); 
 type retryBackoff struct { consecutive int }
 func (b *retryBackoff) Reset() { b.consecutive = 0 }
 func (b *retryBackoff) Delay(err error) time.Duration { b.consecutive++; return retryDelay(err, b.consecutive) }
+// retryAfterAbort reports whether err carries a Retry-After beyond
+// maxRetryCooldown: hour/day scale bans must stop, not retry.
+func retryAfterAbort(err error) bool {
+	if !isRateLimitError(err) {
+		return false
+	}
+	ra, ok := err.(RetryAfterError)
+	if !ok {
+		return false
+	}
+	return ra.RetryAfter() > maxRetryCooldown
+}
 func retryDelay(err error, attempt int) time.Duration { if isRateLimitError(err) { if retryAfter, ok := err.(RetryAfterError); ok { if d := retryAfter.RetryAfter(); d > 0 { if d > maxRetryCooldown { return maxRetryCooldown }; return d } } }; if attempt <= 1 { return 3 * time.Second }; d := 3 * time.Second; for i := 1; i < attempt; i++ { if d >= maxRetryCooldown { return maxRetryCooldown }; d *= 2; if d > maxRetryCooldown { return maxRetryCooldown } }; return d }
 func waitRetry(ctx context.Context, delay time.Duration) error { t := time.NewTimer(delay); defer t.Stop(); select { case <-ctx.Done(): return ctx.Err(); case <-t.C: return nil }
 }

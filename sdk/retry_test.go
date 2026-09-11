@@ -72,3 +72,24 @@ func TestWaitRetryHonorsContextCancellation(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestRetryAfterAbortOnDistantRetryAfter(t *testing.T) {
+	if !retryAfterAbort(retryTestError{status: 429, delay: 5 * time.Hour}) {
+		t.Fatal("5h Retry-After should stop retrying")
+	}
+	if !retryAfterAbort(retryTestError{status: 429, delay: 24 * time.Hour}) {
+		t.Fatal("24h Retry-After should stop retrying")
+	}
+	if retryAfterAbort(retryTestError{status: 429, delay: 30 * time.Second}) {
+		t.Fatal("30s Retry-After should keep retrying")
+	}
+	if retryAfterAbort(retryTestError{status: 429}) {
+		t.Fatal("missing Retry-After should keep retrying")
+	}
+	if retryAfterAbort(retryTestError{status: 500, delay: 5 * time.Hour}) {
+		t.Fatal("Retry-After on non-429 should not abort")
+	}
+	if retryAfterAbort(nil) {
+		t.Fatal("nil error should not abort")
+	}
+}

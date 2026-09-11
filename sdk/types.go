@@ -74,7 +74,7 @@ type ModelRoute struct { Provider ProviderID `json:"provider"`; Model string `js
 type SessionConfig struct { ID string `json:"id"`; Provider ProviderID `json:"provider"`; Model string `json:"model"`; KeyIndex int `json:"key_index"`; ThinkingLevel ThinkingLevel `json:"thinking_level,omitempty"`; Temperature *float64 `json:"temperature,omitempty"` }
 
 type RetryPolicy struct { MaxAttempts int; InitialBackoff time.Duration; MaxBackoff time.Duration }
-func DefaultRetryPolicy() RetryPolicy { return RetryPolicy{MaxAttempts: 3, InitialBackoff: 250 * time.Millisecond, MaxBackoff: 4 * time.Second} }
+func DefaultRetryPolicy() RetryPolicy { return RetryPolicy{MaxAttempts: 3, InitialBackoff: 3 * time.Second, MaxBackoff: maxRetryCooldown} }
 type HTTPStatusError interface { error; HTTPStatusCode() int }
 type RetryAfterError interface { error; RetryAfter() time.Duration }
 func (r Request) RequestProvider() ProviderID { return ProviderID(r.Provider) }

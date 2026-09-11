@@ -72,3 +72,38 @@ func TestRouterClientRetriesHTTP400WithCooldown(t *testing.T) {
 	if adapter.calls!=3 { t.Fatalf("calls=%d, want 3",adapter.calls) }
 	if elapsed < 10*time.Millisecond { t.Fatalf("cooldown too short: %v",elapsed) }
 }
+
+type abortTestAdapter struct{ calls int }
+
+func (a *abortTestAdapter) Name() string { return "abort" }
+func (a *abortTestAdapter) WithAPIKey(string) Provider { return a }
+func (a *abortTestAdapter) Generate(context.Context, Request) (Response, error) {
+	a.calls++
+	return Response{}, retryTestError{status: 429, delay: 5 * time.Hour}
+}
+func (a *abortTestAdapter) Stream(context.Context, Request) (<-chan Event, error) {
+	return nil, retryTestError{status: 429, delay: 5 * time.Hour}
+}
+
+func TestGenerateStopsOnDistantRetryAfter(t *testing.T) {
+	r := NewRouter()
+	r.RegisterProvider(ProviderConfig{ID: "p", Adapter: AdapterOpenAI, Keys: NewKeyPool("k")})
+	r.Register(ModelRoute{Provider: "p", Model: "m", Adapter: AdapterOpenAI})
+	c := NewRouterClient(r)
+	adapter := &abortTestAdapter{}
+	c.RegisterAdapter(AdapterOpenAI, adapter)
+	s := NewSession(SessionConfig{ID: "s", Provider: "p", Model: "m", KeyIndex: 0}, NewKeyPool("k"))
+	done := make(chan error, 1)
+	go func() { _, err := c.Generate(context.Background(), s, Request{}); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected rate limit error")
+		}
+		if adapter.calls != 1 {
+			t.Fatalf("distant Retry-After must stop after 1 call, got %d", adapter.calls)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("abort was not fast")
+	}
+}

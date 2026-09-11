@@ -25,6 +25,7 @@ type Agent struct {
 
 	interruptMu sync.Mutex
 	interrupts  map[string]context.CancelFunc
+	interrupted map[string]bool
 }
 
 const (
@@ -50,12 +51,27 @@ func (a *Agent) Interrupt(sessionID string) bool {
 	}
 	a.interruptMu.Lock()
 	cancel, ok := a.interrupts[sessionID]
+	if ok {
+		if a.interrupted == nil {
+			a.interrupted = make(map[string]bool)
+		}
+		a.interrupted[sessionID] = true
+	}
 	a.interruptMu.Unlock()
 	if !ok {
 		return false
 	}
 	cancel()
 	return true
+}
+
+func (a *Agent) wasInterrupted(sessionID string) bool {
+	if a == nil || sessionID == "" {
+		return false
+	}
+	a.interruptMu.Lock()
+	defer a.interruptMu.Unlock()
+	return a.interrupted[sessionID]
 }
 
 func (a *Agent) beginInterrupt(ctx context.Context, sessionID string) (context.Context, func()) {
@@ -72,6 +88,7 @@ func (a *Agent) beginInterrupt(ctx context.Context, sessionID string) (context.C
 	return turnCtx, func() {
 		a.interruptMu.Lock()
 		delete(a.interrupts, sessionID)
+		delete(a.interrupted, sessionID)
 		a.interruptMu.Unlock()
 		cancel()
 	}
@@ -104,6 +121,10 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 			return resp, nil
 		}
 		lastErr = err
+		if a.wasInterrupted(session.ID()) {
+			settleInterruptedTurn(session, before)
+			break
+		}
 		session.ReplaceHistory(before)
 		if !retryableAgentError(ctx, err) || attempt == retries {
 			break
@@ -112,6 +133,9 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 		delay := backoff.Delay(err)
 		traceEvent(ctx, trace, TraceEvent{Stage: TraceRetryWait, Err: err, RetryAfter: delay})
 		if err := waitRetry(ctx, delay); err != nil {
+			if a.wasInterrupted(session.ID()) {
+				settleInterruptedTurn(session, before)
+			}
 			return Response{}, err
 		}
 	}
@@ -334,6 +358,44 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 				session.Append(Turn{Role: RoleToolResult, ToolResult: &resultCopy})
 			}
 		}
+	}
+}
+
+// settleInterruptedTurn preserves a user-interrupted turn instead of rolling
+// it back: everything committed so far stays, and every tool call that never
+// got a result is closed with an interrupted failure so the history stays
+// coherent for the next turn.
+func settleInterruptedTurn(session *Session, before []Turn) {
+	if session == nil {
+		return
+	}
+	history := session.History()
+	start := len(before)
+	if start > len(history) {
+		start = len(history)
+	}
+	pending := make(map[string]string)
+	var order []string
+	for _, turn := range history[start:] {
+		if turn.Role == RoleToolCall && turn.ToolCall != nil && turn.ToolCall.ID != "" {
+			if _, dup := pending[turn.ToolCall.ID]; !dup {
+				pending[turn.ToolCall.ID] = turn.ToolCall.Name
+				order = append(order, turn.ToolCall.ID)
+			}
+		}
+		if turn.Role == RoleToolResult && turn.ToolResult != nil {
+			delete(pending, turn.ToolResult.ID)
+		}
+	}
+	for _, id := range order {
+		name, ok := pending[id]
+		if !ok {
+			continue
+		}
+		if name == "" {
+			name = "tool"
+		}
+		session.Append(Turn{Role: RoleToolResult, ToolResult: &ToolResult{ID: id, Content: "tool `" + name + "` was interrupted by the user; it may have partially run, not run at all, or already finished - verify the actual state before retrying.", IsError: true}})
 	}
 }
 

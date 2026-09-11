@@ -44,11 +44,17 @@ func retryAfter(resp *http.Response) time.Duration {
 }
 
 func DoJSON(ctx context.Context, client *http.Client, method, url string, headers map[string]string, body any, out any) error {
-	data, err := json.Marshal(body)
+	var reader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil { return err }
+		reader = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, reader)
 	if err != nil { return err }
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(data))
-	if err != nil { return err }
-	req.Header.Set("Content-Type", "application/json")
+	if reader != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	for k, v := range headers { req.Header.Set(k, v) }
 	resp, err := client.Do(req)
 	if err != nil { return err }

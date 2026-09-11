@@ -9,13 +9,14 @@ import (
 	"strings"
 	"github.com/Tulipskun/ai/sdk"
 	"github.com/Tulipskun/ai/sdk/providers/internal"
+	"time"
 )
 type Client struct { BaseURL string; APIKey string; Headers map[string]string; HTTP *http.Client }
 func New(apiKey string)*Client{if apiKey==""{apiKey=os.Getenv("OPENAI_API_KEY")};return &Client{BaseURL:"https://api.openai.com/v1",APIKey:apiKey,HTTP:http.DefaultClient}}
 func(c *Client)WithAPIKey(key string)sdk.Provider{cp:=*c;cp.APIKey=key;return &cp}
 func(c *Client)WithBaseURL(baseURL string)sdk.Provider{cp:=*c;cp.BaseURL=baseURL;return &cp}
 func(c *Client)WithHeaders(headers map[string]string)sdk.Provider{cp:=*c;cp.Headers=cloneHeaders(headers);return &cp}
-func(c *Client)ListModels(ctx context.Context,apiKey string)([]sdk.Model,error){if apiKey!=""{c=c.WithAPIKey(apiKey).(*Client)};var r struct{Data []struct{ID string `json:"id"`} `json:"data"`};if err:=internal.DoJSON(ctx,c.http(),http.MethodGet,c.BaseURL+"/models",c.headers(),nil,&r);err!=nil{return nil,err};models:=make([]sdk.Model,0,len(r.Data));for _,item:=range r.Data{if item.ID!=""{models=append(models,sdk.Model{ID:item.ID,Name:item.ID,SupportsStreaming:true,SupportsTemperature:true})}};return models,nil}
+func(c *Client)ListModels(ctx context.Context,apiKey string)([]sdk.Model,error){var cancel context.CancelFunc; ctx, cancel = context.WithTimeout(ctx, 30*time.Second); defer cancel();if apiKey!=""{c=c.WithAPIKey(apiKey).(*Client)};var r struct{Data []struct{ID string `json:"id"`} `json:"data"`};if err:=internal.DoJSON(ctx,c.http(),http.MethodGet,c.BaseURL+"/models",c.headers(),nil,&r);err!=nil{return nil,err};models:=make([]sdk.Model,0,len(r.Data));for _,item:=range r.Data{if item.ID!=""{models=append(models,sdk.Model{ID:item.ID,Name:item.ID,SupportsStreaming:true,SupportsTemperature:true})}};return models,nil}
 func(c *Client)Name()string{return "openai"}
 type response struct{ID string `json:"id"`;Model string `json:"model"`;Output []struct{Type string `json:"type"`;ID string `json:"id"`;CallID string `json:"call_id"`;Name string `json:"name"`;Arguments string `json:"arguments"`;Content []struct{Type string `json:"type"`;Text string `json:"text"`} `json:"content"`} `json:"output"`;Status string `json:"status"`;Usage struct{InputTokens int `json:"input_tokens"`;OutputTokens int `json:"output_tokens"`;TotalTokens int `json:"total_tokens"`;InputDetails struct{Cached int `json:"cached_tokens"`} `json:"input_tokens_details"`} `json:"usage"`}
 type chatResponse struct{Model string `json:"model"`;Choices []struct{Message struct{Content string `json:"content"`;ToolCalls []struct{ID string `json:"id"`;Function struct{Name string `json:"name"`;Arguments string `json:"arguments"`} `json:"function"`} `json:"tool_calls"`} `json:"message"`;FinishReason string `json:"finish_reason"`} `json:"choices"`;Usage struct{PromptTokens int `json:"prompt_tokens"`;CompletionTokens int `json:"completion_tokens"`;TotalTokens int `json:"total_tokens"`} `json:"usage"`}

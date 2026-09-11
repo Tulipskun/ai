@@ -16,6 +16,7 @@ const (
 	commandUninstall
 	commandDiscord
 	commandBrowser
+	commandSystem
 )
 
 func parseCommand(args []string) (command, error) {
@@ -51,6 +52,15 @@ func parseCommand(args []string) (command, error) {
 		}
 		return commandBrowser, nil
 	}
+	if args[0] == "system" {
+		if len(args) >= 2 && args[1] != "set" && args[1] != "clear" {
+			return commandSystem, fmt.Errorf("system: usage is 'ai system', 'ai system set <prompt>' or 'ai system clear'")
+		}
+		if len(args) == 2 && args[1] == "set" {
+			return commandSystem, fmt.Errorf("system: usage is 'ai system set <prompt>'")
+		}
+		return commandSystem, nil
+	}
 	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		return commandStart, errHelp
 	}
@@ -67,6 +77,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  cli        Open an interactive AI Harness CLI session")
 	fmt.Fprintln(w, "  discord    Configure Discord interactively")
 	fmt.Fprintln(w, "  browser    Configure browser automation interactively")
+	fmt.Fprintln(w, "  system     Show or set the model system prompt")
 	fmt.Fprintln(w, "  update     Download and replace the installed AI binary")
 	fmt.Fprintln(w, "  uninstall  Stop AI and remove the binary and runtime state")
 }

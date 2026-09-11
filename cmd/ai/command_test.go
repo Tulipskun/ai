@@ -27,6 +27,11 @@ func TestParseCommand(t *testing.T) {
 		{name: "unknown command", args: []string{"status"}, want: commandStart, err: errors.New("unknown command")},
 		{name: "discord rejects flags", args: []string{"discord", "--token", "x"}, want: commandDiscord, err: errors.New("discord usage")},
 		{name: "browser rejects flags", args: []string{"browser", "--mode", "x"}, want: commandBrowser, err: errors.New("browser usage")},
+		{name: "system", args: []string{"system"}, want: commandSystem},
+		{name: "system set", args: []string{"system", "set", "hi"}, want: commandSystem},
+		{name: "system clear", args: []string{"system", "clear"}, want: commandSystem},
+		{name: "system set needs text", args: []string{"system", "set"}, want: commandSystem, err: errors.New("system usage")},
+		{name: "system rejects verbs", args: []string{"system", "drop"}, want: commandSystem, err: errors.New("system usage")},
 	}
 
 	for _, tt := range tests {

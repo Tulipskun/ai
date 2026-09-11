@@ -36,6 +36,8 @@ func main() {
 		if err := runDiscordConfig(os.Args[2:]); err != nil { log.Fatal(err) }
 	case commandBrowser:
 		if err := runBrowserConfig(os.Args[2:]); err != nil { log.Fatal(err) }
+	case commandSystem:
+		if err := runSystemConfig(os.Args[2:]); err != nil { log.Fatal(err) }
 	case commandUpdate:
 		if err := runUpdate(); err != nil { log.Fatal(err) }
 	case commandDaemon:
@@ -64,6 +66,37 @@ func runDiscordConfig(args []string) error {
 func prompt(reader *bufio.Reader, label string) (string, error) { fmt.Print(label); value, err := reader.ReadString('\n'); if err != nil && !errors.Is(err, os.ErrClosed) && len(value) == 0 { return "", err }; return strings.TrimSpace(value), nil }
 func promptDefault(reader *bufio.Reader, label, def string) (string, error) { value, err := prompt(reader, fmt.Sprintf("%s [%s]: ", label, def)); if err != nil { return "", err }; if value == "" { return def, nil }; return value, nil }
 func promptBool(reader *bufio.Reader, label string, def bool) (bool, error) { hint := "y/n"; if def { hint = "Y/n" } else { hint = "y/N" }; value, err := prompt(reader, fmt.Sprintf("%s (%s): ", label, hint)); if err != nil { return false, err }; if value == "" { return def, nil }; switch strings.ToLower(value) { case "y", "yes", "true", "1": return true, nil; case "n", "no", "false", "0": return false, nil }; return false, fmt.Errorf("browser: answer y or n for %q", label) }
+func runSystemConfig(args []string) error {
+	state, err := stateRoot()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(state, runtime.DefaultSystemConfigPath)
+	if len(args) >= 1 && args[0] == "clear" {
+		if err := runtime.SaveSystemConfig(path, runtime.SystemConfig{}); err != nil {
+			return err
+		}
+		fmt.Printf("System prompt cleared, using built-in default. Config: %s\n", path)
+		return nil
+	}
+	if len(args) >= 2 && args[0] == "set" {
+		text := strings.TrimSpace(strings.Join(args[1:], " "))
+		if text == "" {
+			return errors.New("system: usage is 'ai system set <prompt>'")
+		}
+		if err := runtime.SaveSystemConfig(path, runtime.SystemConfig{SystemPrompt: text}); err != nil {
+			return err
+		}
+		fmt.Printf("System prompt saved to %s\n", path)
+		return nil
+	}
+	if len(args) != 0 {
+		return errors.New("system: usage is 'ai system', 'ai system set <prompt>' or 'ai system clear'")
+	}
+	fmt.Printf("Source: %s\n\n%s\n", systemPromptSource(), systemPrompt(nil))
+	return nil
+}
+
 func runBrowserConfig(args []string) error {
 	state, err := stateRoot(); if err != nil { return err }
 	path := filepath.Join(state, runtime.DefaultBrowserConfigPath)
@@ -147,12 +180,35 @@ func systemPrompt(agent *sdk.Agent) string {
 	if value := strings.TrimSpace(os.Getenv("AI_SYSTEM_PROMPT")); value != "" {
 		return value
 	}
+	if state, err := stateRoot(); err == nil {
+		if cfg, err := runtime.LoadSystemConfig(filepath.Join(state, runtime.DefaultSystemConfigPath)); err == nil && cfg.SystemPrompt != "" {
+			return cfg.SystemPrompt
+		}
+	}
+	return defaultSystemPrompt(agent)
+}
+
+func systemPromptSource() string {
+	if strings.TrimSpace(os.Getenv("AI_SYSTEM_PROMPT")) != "" {
+		return "env AI_SYSTEM_PROMPT"
+	}
+	if state, err := stateRoot(); err == nil {
+		path := filepath.Join(state, runtime.DefaultSystemConfigPath)
+		if cfg, err := runtime.LoadSystemConfig(path); err == nil && cfg.SystemPrompt != "" {
+			return path
+		}
+	}
+	return "built-in default"
+}
+
+func defaultSystemPrompt(agent *sdk.Agent) string {
 	var b strings.Builder
 	b.WriteString("You are an AI assistant that gets things done with tools.\n")
 	b.WriteString("When the user asks to do, check, change, create, or fetch anything, CALL the matching tool instead of only describing what to do.\n")
 	b.WriteString("Prefer acting first: inspect with read_file, list_directory, or search_files, then act. Batch independent tool calls together.\n")
 	b.WriteString("Use run_command for shell work (it supports chains, pipes, and redirects). Use web_fetch for URLs. Use browser_* tools to operate web pages.\n")
 	b.WriteString("After tool results, summarize briefly what you did. Match the user's language.\n")
+	b.WriteString("Never stop at a promise: if you say you will fetch, check, or run something, call the tool in the SAME response instead of ending your turn.\n")
 	if agent != nil && agent.Tools != nil {
 		if defs := agent.Tools.Definitions(); len(defs) > 0 {
 			b.WriteString("Available tools:\n")

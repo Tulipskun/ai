@@ -82,3 +82,30 @@ func TestSystemPromptNilAgentHasRules(t *testing.T) {
 }
 
 func containsStr(haystack, needle string) bool { return strings.Contains(haystack, needle) }
+
+func TestSystemPromptFileOverridesDefault(t *testing.T) {
+	t.Setenv("AI_SYSTEM_PROMPT", "")
+	dir := t.TempDir()
+	t.Setenv("AI_DATA_DIR", dir)
+	path := filepath.Join(dir, "config", "system.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(path, []byte(`{"system_prompt":"file prompt"}`), 0o600); err != nil { t.Fatal(err) }
+	if got := systemPrompt(nil); got != "file prompt" {
+		t.Fatalf("systemPrompt = %q", got)
+	}
+	if src := systemPromptSource(); !containsStr(src, "system.json") {
+		t.Fatalf("source = %q", src)
+	}
+}
+
+func TestSystemPromptEnvBeatsFile(t *testing.T) {
+	t.Setenv("AI_SYSTEM_PROMPT", "env prompt")
+	dir := t.TempDir()
+	t.Setenv("AI_DATA_DIR", dir)
+	path := filepath.Join(dir, "config", "system.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(path, []byte(`{"system_prompt":"file prompt"}`), 0o600); err != nil { t.Fatal(err) }
+	if got := systemPrompt(nil); got != "env prompt" {
+		t.Fatalf("systemPrompt = %q", got)
+	}
+}

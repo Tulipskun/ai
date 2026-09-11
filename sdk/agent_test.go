@@ -34,3 +34,48 @@ func TestTraceEventsCarryElapsed(t *testing.T){p:=&agentTestProvider{responses:[
 func TestInterruptPreservesUserTurn(t *testing.T){p:=&blockingAgentProvider{started:make(chan struct{})};c,s:=newAgentTestSession(p);a:=&Agent{Client:c,MaxRetries:0};done:=make(chan error,1);go func(){_,err:=a.RunTurn(context.Background(),s,Turn{Role:RoleUser,Content:[]ContentPart{{Type:ContentText,Text:"do work"}}},Request{});done<-err}();select{case <-p.started:case <-time.After(time.Second):t.Fatal("agent did not start")};if !a.Interrupt(s.ID()){t.Fatal("interrupt did not find active session")};select{case <-done:case <-time.After(time.Second):t.Fatal("agent did not stop after interrupt")};h:=s.History();if len(h)!=1||h[0].Role!=RoleUser{t.Fatalf("interrupted turn was wiped: %+v",h)}}
 func TestSettleInterruptedTurnClosesPendingCalls(t *testing.T){s:=NewSession(SessionConfig{ID:"settle",Provider:"test",Model:"model",KeyIndex:0},NewKeyPool("key"));before:=s.History();s.Append(Turn{Role:RoleUser,Content:[]ContentPart{{Type:ContentText,Text:"run it"}}});s.Append(Turn{Role:RoleToolCall,ToolCall:&ToolCall{ID:"c1",Name:"list_directory",Arguments:"{}"}});s.Append(Turn{Role:RoleToolCall,ToolCall:&ToolCall{ID:"c2",Name:"read_file",Arguments:"{}"}});s.Append(Turn{Role:RoleToolResult,ToolResult:&ToolResult{ID:"c2",Content:"ok"}});settleInterruptedTurn(s,before);h:=s.History();if len(h)!=5{t.Fatalf("history=%d, want user+2 calls+2 results",len(h))};last:=h[4];if last.Role!=RoleToolResult||last.ToolResult==nil||last.ToolResult.ID!="c1"||!last.ToolResult.IsError{t.Fatalf("missing interrupted result: %+v",last)};if !strings.Contains(last.ToolResult.Content,"interrupted by the user"){t.Fatalf("result missing reason: %q",last.ToolResult.Content)}}
 func TestInterruptFlagLifecycle(t *testing.T){a:=&Agent{};if a.wasInterrupted("s"){t.Fatal("fresh agent should not be interrupted")};ctx,cleanup:=a.beginInterrupt(context.Background(),"s");_ = ctx;if !a.Interrupt("s"){t.Fatal("interrupt should find session")};if !a.wasInterrupted("s"){t.Fatal("interrupt flag missing")};cleanup();if a.wasInterrupted("s"){t.Fatal("flag should clear after turn cleanup")};if a.Interrupt("s"){t.Fatal("interrupt after cleanup should miss")}}
+func TestMarkerNudgeContinuesTurn(t *testing.T) {
+	p := &agentTestProvider{responses: []Response{
+		{Content: []ContentPart{{Type: ContentText, Text: "let me check that for you:"}}},
+		{Content: []ContentPart{{Type: ContentText, Text: "✨✨✨done"}}},
+	}}
+	c, s := newAgentTestSession(p)
+	a := &Agent{Client: c, MaxRetries: 0}
+	resp, err := a.RunTurn(context.Background(), s, Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: "hi"}}}, Request{SystemPrompt: "start with \u2728\u2728\u2728"})
+	if err != nil { t.Fatal(err) }
+	if p.calls != 2 { t.Fatalf("expected auto-continue, provider calls=%d", p.calls) }
+	if resp.Content[0].Text != "✨✨✨done" { t.Fatalf("final = %q", resp.Content[0].Text) }
+	h := s.History()
+	if len(h) != 4 || h[2].Role != RoleUser { t.Fatalf("nudge turn missing: %+v", h) }
+}
+
+func TestMarkerPresentReturnsImmediately(t *testing.T) {
+	p := &agentTestProvider{responses: []Response{{Content: []ContentPart{{Type: ContentText, Text: "✨✨✨hi"}}}}}
+	c, s := newAgentTestSession(p)
+	a := &Agent{Client: c, MaxRetries: 0}
+	if _, err := a.RunTurn(context.Background(), s, Turn{Role: RoleUser}, Request{}); err != nil { t.Fatal(err) }
+	if p.calls != 1 { t.Fatalf("provider calls=%d, want 1", p.calls) }
+}
+
+func TestMarkerNudgeBounded(t *testing.T) {
+	p := &agentTestProvider{responses: []Response{
+		{Content: []ContentPart{{Type: ContentText, Text: "one"}}},
+		{Content: []ContentPart{{Type: ContentText, Text: "two"}}},
+		{Content: []ContentPart{{Type: ContentText, Text: "three"}}},
+		{Content: []ContentPart{{Type: ContentText, Text: "four"}}},
+	}}
+	c, s := newAgentTestSession(p)
+	a := &Agent{Client: c, MaxRetries: 0}
+	resp, err := a.RunTurn(context.Background(), s, Turn{Role: RoleUser}, Request{SystemPrompt: "start with \u2728\u2728\u2728"})
+	if err != nil { t.Fatal(err) }
+	if p.calls != 3 { t.Fatalf("provider calls=%d, want 1+2 nudges", p.calls) }
+	if resp.Content[0].Text != "three" { t.Fatalf("final = %q", resp.Content[0].Text) }
+}
+
+func TestHasReplyMarker(t *testing.T) {
+	marked := Response{Content: []ContentPart{{Type: ContentText, Text: "  ✨✨✨hi"}}}
+	if !HasReplyMarker(marked) { t.Fatal("prefixed marker missed") }
+	plain := Response{Content: []ContentPart{{Type: ContentText, Text: "hi ✨✨✨"}}}
+	if HasReplyMarker(plain) { t.Fatal("non-prefixed marker should not count") }
+	if HasReplyMarker(Response{}) { t.Fatal("empty response should not count") }
+}

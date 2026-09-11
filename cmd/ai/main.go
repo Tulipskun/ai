@@ -208,6 +208,7 @@ func defaultSystemPrompt(agent *sdk.Agent) string {
 	b.WriteString("Prefer acting first: inspect with read_file, list_directory, or search_files, then act. Batch independent tool calls together.\n")
 	b.WriteString("Use run_command for shell work (it supports chains, pipes, and redirects). Use web_fetch for URLs. Use browser_* tools to operate web pages.\n")
 	b.WriteString("After tool results, summarize briefly what you did. Match the user's language.\n")
+	b.WriteString("Always start your reply to the user with \u2728\u2728\u2728 as the very first characters.\n")
 	b.WriteString("Never stop at a promise: if you say you will fetch, check, or run something, call the tool in the SAME response instead of ending your turn.\n")
 	if agent != nil && agent.Tools != nil {
 		if defs := agent.Tools.Definitions(); len(defs) > 0 {

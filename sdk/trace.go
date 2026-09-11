@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -31,6 +32,24 @@ type TraceEvent struct {
 	RetryAfter time.Duration `json:"retry_after,omitempty"`
 	Elapsed    time.Duration `json:"elapsed,omitempty"`
 }
+
+const ReplyMarker = "\u2728\u2728\u2728"
+
+func ResponseText(resp Response) string {
+	var b strings.Builder
+	for _, part := range resp.Content {
+		if part.Type == ContentText {
+			b.WriteString(part.Text)
+		}
+	}
+	return b.String()
+}
+
+func HasReplyMarker(resp Response) bool {
+	return strings.HasPrefix(strings.TrimSpace(ResponseText(resp)), ReplyMarker)
+}
+
+const markerNudgeText = "You stopped without calling any tool. Please continue the task now: call the tools you need in this response instead of only describing them. Start your reply with \u2728\u2728\u2728."
 
 type TraceFunc func(context.Context, TraceEvent)
 

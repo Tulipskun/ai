@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -31,7 +32,9 @@ type Agent struct {
 const (
 	defaultAgentMaxRetries = 2
 	maxRetryCooldown        = 96 * time.Second
+	maxMarkerNudges         = 2
 )
+func markerEnforced(req Request) bool { return strings.Contains(req.SystemPrompt, ReplyMarker) }
 
 func (a *Agent) RunTurn(ctx context.Context, session *Session, user Turn, req Request) (Response, error) {
 	return a.runTurn(ctx, session, user, req, nil, nil)
@@ -148,6 +151,7 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 
 func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
 	session.Append(user)
+	nudges := 0
 	if req.Stream {
 		return a.runStreamAttempt(ctx, session, req, trace, backoff, entry)
 	}
@@ -180,6 +184,12 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		}
 
 		if len(resp.ToolCalls) == 0 {
+			if nudges < maxMarkerNudges && markerEnforced(req) && len(resp.Content) > 0 && !HasReplyMarker(resp) {
+				nudges++
+				nudge := Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: markerNudgeText}}}
+				session.Append(nudge)
+				continue
+			}
 			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
 			return resp, nil
 		}
@@ -232,6 +242,7 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 }
 
 func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
+	nudges := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return Response{}, err
@@ -315,6 +326,12 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 
 		commitResponse(session, resp)
 		if len(resp.ToolCalls) == 0 {
+			if nudges < maxMarkerNudges && markerEnforced(req) && len(resp.Content) > 0 && !HasReplyMarker(resp) {
+				nudges++
+				nudge := Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: markerNudgeText}}}
+				session.Append(nudge)
+				continue
+			}
 			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
 			return resp, nil
 		}

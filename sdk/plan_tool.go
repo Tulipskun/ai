@@ -73,7 +73,7 @@ func (e *planningToolExecutor) Execute(ctx context.Context, call ToolCall) ToolR
 			return ToolResult{ID: call.ID, Content: "plan is required", IsError: true}
 		}
 		e.planned = true
-		return ToolResult{ID: call.ID, Content: "Execution plan recorded. Continue by carrying out the planned steps."}
+		return ToolResult{ID: call.ID, Content: "Execution plan recorded:\n" + input.Plan}
 	}
 	if !e.planned {
 		return ToolResult{ID: call.ID, Content: "call the `plan` tool before using execution tools", IsError: true}

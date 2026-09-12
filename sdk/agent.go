@@ -2,7 +2,6 @@ package sdk
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -39,8 +38,8 @@ const (
 func markerEnforced(req Request) bool { return strings.Contains(req.SystemPrompt, ReplyMarker) }
 
 const agentPlanInstruction = `Before using any tool, create a concise execution plan for the user's goal.
-Return ONLY JSON in this form: {"steps":[{"goal":"..."}]}.
-Do not call tools while creating the plan.`
+Write the plan as plain text, using one step per line. Numbered or bulleted steps are preferred.
+Do not use JSON, code fences, or tool calls while creating the plan.`
 const agentStepInstruction = `Execution plan:
 %s
 
@@ -49,6 +48,66 @@ Current step goal: %s
 Work on this step only. You may use any available tools needed to complete it, including tools needed to inspect and fix errors caused by your work. If a command fails, diagnose and fix it in this same step and retry. Do not start unrelated work.
 When the current step is complete, end your response with the exact marker %s.`
 const agentPlanDoneMarker = "<<STEP_DONE>>"
+
+func parseAgentPlan(text string) AgentPlan {
+	text = strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
+	text = strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(text, "```"), "```text"))
+	if text == "" {
+		return AgentPlan{}
+	}
+	var steps []AgentPlanStep
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		lower := strings.ToLower(line)
+		if lower == "plan:" || lower == "execution plan:" {
+			continue
+		}
+		line = stripAgentPlanPrefix(line)
+		if line == "" {
+			continue
+		}
+		steps = append(steps, AgentPlanStep{Goal: line})
+	}
+	return AgentPlan{Steps: steps}
+}
+
+func stripAgentPlanPrefix(line string) string {
+	line = strings.TrimSpace(line)
+	for len(line) > 0 && (line[0] == '-' || line[0] == '*') {
+		line = strings.TrimSpace(line[1:])
+	}
+	if strings.HasPrefix(line, "•") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "•"))
+	}
+	if i := strings.IndexByte(line, '.'); i > 0 && allAgentPlanDigits(line[:i]) {
+		return strings.TrimSpace(line[i+1:])
+	}
+	if i := strings.IndexByte(line, ')'); i > 0 && allAgentPlanDigits(line[:i]) {
+		return strings.TrimSpace(line[i+1:])
+	}
+	lower := strings.ToLower(line)
+	if strings.HasPrefix(lower, "step ") {
+		if i := strings.IndexByte(line, ':'); i > 5 {
+			return strings.TrimSpace(line[i+1:])
+		}
+	}
+	return line
+}
+
+func allAgentPlanDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
 
 func createAgentPlan(ctx context.Context, client *RouterClient, session *Session, user Turn, req Request) (AgentPlan, error) {
 	planReq := req
@@ -60,25 +119,25 @@ func createAgentPlan(ctx context.Context, client *RouterClient, session *Session
 	if err != nil {
 		return AgentPlan{}, err
 	}
-	text := strings.TrimSpace(ResponseText(resp))
-	start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
-	if start < 0 || end <= start {
-		return AgentPlan{}, errors.New("sdk: model did not return a valid execution plan")
-	}
-	var plan AgentPlan
-	if err := json.Unmarshal([]byte(text[start:end+1]), &plan); err != nil {
-		return AgentPlan{}, fmt.Errorf("sdk: invalid execution plan: %w", err)
-	}
+	plan := parseAgentPlan(ResponseText(resp))
 	if len(plan.Steps) == 0 {
-		return AgentPlan{}, errors.New("sdk: execution plan has no steps")
-	}
-	for i := range plan.Steps {
-		plan.Steps[i].Goal = strings.TrimSpace(plan.Steps[i].Goal)
-		if plan.Steps[i].Goal == "" {
-			return AgentPlan{}, fmt.Errorf("sdk: execution plan step %d is empty", i+1)
-		}
+		return AgentPlan{Steps: []AgentPlanStep{{Goal: userTurnText(user)}}}, nil
 	}
 	return plan, nil
+}
+
+func userTurnText(user Turn) string {
+	var parts []string
+	for _, part := range user.Content {
+		if text := strings.TrimSpace(part.Text); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	text := strings.TrimSpace(strings.Join(parts, "\n"))
+	if text == "" {
+		return "Complete the user's request."
+	}
+	return text
 }
 
 func injectAgentStepPrompt(req *Request, plan AgentPlan, current int) {

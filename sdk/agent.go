@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -31,10 +32,81 @@ type Agent struct {
 
 const (
 	defaultAgentMaxRetries = 6
-	maxRetryCooldown        = 96 * time.Second
-	maxMarkerNudges         = 2
+	maxRetryCooldown       = 96 * time.Second
+	maxMarkerNudges        = 2
 )
+
 func markerEnforced(req Request) bool { return strings.Contains(req.SystemPrompt, ReplyMarker) }
+
+const agentPlanInstruction = `Before using any tool, create a concise execution plan for the user's goal.
+Return ONLY JSON in this form: {"steps":[{"goal":"..."}]}.
+Do not call tools while creating the plan.`
+const agentStepInstruction = `Execution plan:
+%s
+
+Current step: %d/%d
+Current step goal: %s
+Work on this step only. You may use any available tools needed to complete it, including tools needed to inspect and fix errors caused by your work. If a command fails, diagnose and fix it in this same step and retry. Do not start unrelated work.
+When the current step is complete, end your response with the exact marker %s.`
+const agentPlanDoneMarker = "<<STEP_DONE>>"
+
+func createAgentPlan(ctx context.Context, client *RouterClient, session *Session, user Turn, req Request) (AgentPlan, error) {
+	planReq := req
+	planReq.Tools = nil
+	planReq.Stream = false
+	planReq.SystemPrompt = strings.TrimSpace(strings.Join([]string{req.SystemPrompt, agentPlanInstruction}, "\n\n"))
+	planReq.Messages = buildContextWindow(append(cloneTurns(session.History()), cloneTurn(user)), defaultContextWindowTokens)
+	resp, err := client.Generate(ctx, session, planReq)
+	if err != nil {
+		return AgentPlan{}, err
+	}
+	text := strings.TrimSpace(ResponseText(resp))
+	start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
+	if start < 0 || end <= start {
+		return AgentPlan{}, errors.New("sdk: model did not return a valid execution plan")
+	}
+	var plan AgentPlan
+	if err := json.Unmarshal([]byte(text[start:end+1]), &plan); err != nil {
+		return AgentPlan{}, fmt.Errorf("sdk: invalid execution plan: %w", err)
+	}
+	if len(plan.Steps) == 0 {
+		return AgentPlan{}, errors.New("sdk: execution plan has no steps")
+	}
+	for i := range plan.Steps {
+		plan.Steps[i].Goal = strings.TrimSpace(plan.Steps[i].Goal)
+		if plan.Steps[i].Goal == "" {
+			return AgentPlan{}, fmt.Errorf("sdk: execution plan step %d is empty", i+1)
+		}
+	}
+	return plan, nil
+}
+
+func injectAgentStepPrompt(req *Request, plan AgentPlan, current int) {
+	if req == nil || current < 0 || current >= len(plan.Steps) {
+		return
+	}
+	steps := make([]string, len(plan.Steps))
+	for i, step := range plan.Steps {
+		steps[i] = fmt.Sprintf("%d. %s", i+1, step.Goal)
+	}
+	req.SystemPrompt = strings.TrimSpace(strings.Join([]string{
+		req.SystemPrompt,
+		fmt.Sprintf(agentStepInstruction, strings.Join(steps, "\n"), current+1, len(plan.Steps), plan.Steps[current].Goal, agentPlanDoneMarker),
+	}, "\n\n"))
+}
+
+func stepDone(resp Response) bool {
+	return strings.Contains(ResponseText(resp), agentPlanDoneMarker)
+}
+
+func stripStepDoneMarker(resp Response) Response {
+	for i := range resp.Content {
+		if resp.Content[i].Type == ContentText {
+			resp.Content[i].Text = strings.TrimSpace(strings.ReplaceAll(resp.Content[i].Text, agentPlanDoneMarker, ""))
+		}
+	}
+	return resp
+}
 
 func (a *Agent) RunTurn(ctx context.Context, session *Session, user Turn, req Request) (Response, error) {
 	return a.runTurn(ctx, session, user, req, nil, nil)
@@ -103,8 +175,11 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 	}
 	ctx, cleanup := a.beginInterrupt(ctx, session.ID())
 	defer cleanup()
-	turnStart:=time.Now()
-	if trace!=nil{inner:=trace;trace=func(ctx context.Context,event TraceEvent){event.Elapsed=time.Since(turnStart);inner(ctx,event)}}
+	turnStart := time.Now()
+	if trace != nil {
+		inner := trace
+		trace = func(ctx context.Context, event TraceEvent) { event.Elapsed = time.Since(turnStart); inner(ctx, event) }
+	}
 
 	before := session.History()
 	retries := a.MaxRetries
@@ -155,11 +230,21 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 }
 
 func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
-	session.Append(user)
 	nudges := 0
-	if req.Stream {
-		return a.runStreamAttempt(ctx, session, req, trace, backoff, entry)
+	var plan AgentPlan
+	currentStep := 0
+	if a.Tools != nil {
+		var err error
+		plan, err = createAgentPlan(ctx, a.Client, session, user, req)
+		if err != nil {
+			return Response{}, err
+		}
 	}
+	session.Append(user)
+	if req.Stream {
+		return a.runStreamAttempt(ctx, session, req, plan, trace, backoff, entry)
+	}
+	baseSystemPrompt := req.SystemPrompt
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -167,6 +252,8 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		}
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
 		if a.Tools != nil {
+			req.SystemPrompt = baseSystemPrompt
+			injectAgentStepPrompt(&req, plan, currentStep)
 			req.Tools = a.Tools.Definitions()
 		}
 		traceEvent(ctx, trace, TraceEvent{Stage: TraceRequest})
@@ -182,6 +269,10 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		if backoff != nil {
 			backoff.Reset()
 		}
+		stepFinished := a.Tools != nil && len(plan.Steps) > 0 && len(resp.ToolCalls) == 0 && stepDone(resp)
+		if stepFinished {
+			resp = stripStepDoneMarker(resp)
+		}
 		commitResponse(session, resp)
 
 		if len(resp.Content) > 0 {
@@ -189,6 +280,12 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		}
 
 		if len(resp.ToolCalls) == 0 {
+			if stepFinished {
+				if currentStep+1 < len(plan.Steps) {
+					currentStep++
+					continue
+				}
+			}
 			if nudges < maxMarkerNudges && markerEnforced(req) && len(resp.Content) > 0 && !HasReplyMarker(resp) {
 				nudges++
 				nudge := Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: markerNudgeText}}}
@@ -246,14 +343,18 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 	}
 }
 
-func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
+func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Request, plan AgentPlan, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
 	nudges := 0
+	currentStep := 0
+	baseSystemPrompt := req.SystemPrompt
 	for {
 		if err := ctx.Err(); err != nil {
 			return Response{}, err
 		}
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
 		if a.Tools != nil {
+			req.SystemPrompt = baseSystemPrompt
+			injectAgentStepPrompt(&req, plan, currentStep)
 			req.Tools = a.Tools.Definitions()
 		}
 		traceEvent(ctx, trace, TraceEvent{Stage: TraceRequest})
@@ -328,9 +429,20 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 		if backoff != nil {
 			backoff.Reset()
 		}
+		stepFinished := a.Tools != nil && len(plan.Steps) > 0 && len(resp.ToolCalls) == 0 && stepDone(resp)
+		if stepFinished {
+			resp = stripStepDoneMarker(resp)
+		}
 
 		commitResponse(session, resp)
 		if len(resp.ToolCalls) == 0 {
+			if a.Tools != nil && len(plan.Steps) > 0 && stepDone(resp) {
+				if currentStep+1 < len(plan.Steps) {
+					currentStep++
+					continue
+				}
+				resp = stripStepDoneMarker(resp)
+			}
 			if nudges < maxMarkerNudges && markerEnforced(req) && len(resp.Content) > 0 && !HasReplyMarker(resp) {
 				nudges++
 				nudge := Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: markerNudgeText}}}
@@ -429,13 +541,27 @@ func traceEvent(ctx context.Context, trace TraceFunc, event TraceEvent) {
 func cloneResponseContent(in Response) *Response {
 	return &Response{Provider: in.Provider, Model: in.Model, Content: append([]ContentPart(nil), in.Content...), Reasoning: in.Reasoning, Usage: in.Usage}
 }
-func cloneToolCall(in ToolCall) *ToolCall { out := in; return &out }
+func cloneToolCall(in ToolCall) *ToolCall       { out := in; return &out }
 func cloneToolResult(in ToolResult) *ToolResult { out := in; return &out }
-func retryableAgentError(ctx context.Context, err error) bool { if err == nil || ctx.Err() != nil { return false }; return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) }
-func isRateLimitError(err error) bool { statusErr, ok := err.(HTTPStatusError); return ok && statusErr.HTTPStatusCode() == 429 }
-type retryBackoff struct { consecutive int }
+func retryableAgentError(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+func isRateLimitError(err error) bool {
+	statusErr, ok := err.(HTTPStatusError)
+	return ok && statusErr.HTTPStatusCode() == 429
+}
+
+type retryBackoff struct{ consecutive int }
+
 func (b *retryBackoff) Reset() { b.consecutive = 0 }
-func (b *retryBackoff) Delay(err error) time.Duration { b.consecutive++; return retryDelay(err, b.consecutive) }
+func (b *retryBackoff) Delay(err error) time.Duration {
+	b.consecutive++
+	return retryDelay(err, b.consecutive)
+}
+
 // retryAfterAbort reports whether err carries a Retry-After beyond
 // maxRetryCooldown: hour/day scale bans must stop, not retry.
 func retryAfterAbort(err error) bool {
@@ -448,6 +574,39 @@ func retryAfterAbort(err error) bool {
 	}
 	return ra.RetryAfter() > maxRetryCooldown
 }
-func retryDelay(err error, attempt int) time.Duration { if isRateLimitError(err) { if retryAfter, ok := err.(RetryAfterError); ok { if d := retryAfter.RetryAfter(); d > 0 { if d > maxRetryCooldown { return maxRetryCooldown }; return d } } }; if attempt <= 1 { return 3 * time.Second }; d := 3 * time.Second; for i := 1; i < attempt; i++ { if d >= maxRetryCooldown { return maxRetryCooldown }; d *= 2; if d > maxRetryCooldown { return maxRetryCooldown } }; return d }
-func waitRetry(ctx context.Context, delay time.Duration) error { t := time.NewTimer(delay); defer t.Stop(); select { case <-ctx.Done(): return ctx.Err(); case <-t.C: return nil }
+func retryDelay(err error, attempt int) time.Duration {
+	if isRateLimitError(err) {
+		if retryAfter, ok := err.(RetryAfterError); ok {
+			if d := retryAfter.RetryAfter(); d > 0 {
+				if d > maxRetryCooldown {
+					return maxRetryCooldown
+				}
+				return d
+			}
+		}
+	}
+	if attempt <= 1 {
+		return 3 * time.Second
+	}
+	d := 3 * time.Second
+	for i := 1; i < attempt; i++ {
+		if d >= maxRetryCooldown {
+			return maxRetryCooldown
+		}
+		d *= 2
+		if d > maxRetryCooldown {
+			return maxRetryCooldown
+		}
+	}
+	return d
+}
+func waitRetry(ctx context.Context, delay time.Duration) error {
+	t := time.NewTimer(delay)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }

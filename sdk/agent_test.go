@@ -68,7 +68,6 @@ func newAgentTestSession(p Provider) (*RouterClient, *Session) {
 	r.RegisterProvider(ProviderConfig{ID: "test", BaseURL: "http://test", Keys: NewKeyPool("key"), Adapter: AdapterOpenAI})
 	r.Register(ModelRoute{Provider: "test", Model: "model", Adapter: AdapterOpenAI})
 	c := NewRouterClient(r)
-	c.Retry = RetryPolicy{MaxAttempts: 3, InitialBackoff: time.Millisecond, MaxBackoff: 10 * time.Millisecond}
 	c.RegisterAdapter(AdapterOpenAI, p)
 	s := NewSession(SessionConfig{ID: "s", Provider: "test", Model: "model", KeyIndex: 0}, NewKeyPool("key"))
 	return c, s
@@ -89,7 +88,7 @@ func TestAgentFinalResponse(t *testing.T) {
 	}
 }
 func TestAgentToolDefinitionsReachProvider(t *testing.T) {
-	p := &agentTestProvider{responses: []Response{{Content: []ContentPart{{Type: ContentText, Text: `{"steps":[{"goal":"finish"}]}`}}}, {Content: []ContentPart{{Type: ContentText, Text: "finished"}}}}}
+	p := &agentTestProvider{responses: []Response{{Content: []ContentPart{{Type: ContentText, Text: "finished"}}}}}
 	c, s := newAgentTestSession(p)
 	tools := &agentTestTools{definitions: []Tool{{Name: "echo", Description: "echo text"}}}
 	a := &Agent{Client: c, Tools: tools, MaxRetries: 0}
@@ -97,12 +96,19 @@ func TestAgentToolDefinitionsReachProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p.requests) != 2 || len(p.requests[1].Tools) != 1 || p.requests[1].Tools[0].Name != "echo" {
-		t.Fatalf("tools not sent: %#v", p.requests)
+	if len(p.requests) != 1 {
+		t.Fatalf("provider calls=%d", len(p.requests))
+	}
+	if len(p.requests[0].Tools) != 2 || p.requests[0].Tools[0].Name != "echo" || p.requests[0].Tools[1].Name != "plan" {
+		t.Fatalf("tools not sent: %#v", p.requests[0].Tools)
 	}
 }
 func TestAgentToolThenFinal(t *testing.T) {
-	p := &agentTestProvider{responses: []Response{{Content: []ContentPart{{Type: ContentText, Text: `{"steps":[{"goal":"use tool"}]}`}}}, {ToolCalls: []ToolCall{{ID: "1", Name: "echo", Arguments: "{}"}}}, {Content: []ContentPart{{Type: ContentText, Text: "finished <<STEP_DONE>>"}}}}}
+	p := &agentTestProvider{responses: []Response{
+		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan", Arguments: `{"plan":"use the echo tool and return the result"}`}}},
+		{ToolCalls: []ToolCall{{ID: "1", Name: "echo", Arguments: "{}"}}},
+		{Content: []ContentPart{{Type: ContentText, Text: "finished"}}},
+	}}
 	c, s := newAgentTestSession(p)
 	tools := &agentTestTools{definitions: []Tool{{Name: "echo"}}}
 	a := &Agent{Client: c, Tools: tools, MaxRetries: 0}
@@ -114,7 +120,7 @@ func TestAgentToolThenFinal(t *testing.T) {
 		t.Fatalf("unexpected final response")
 	}
 	h := s.History()
-	if len(h) != 4 || h[2].Role != RoleToolResult || h[2].ToolResult.Content != "ok" {
+	if len(h) != 6 || h[2].Role != RoleToolResult || h[2].ToolResult.ID != "plan-1" || h[4].Role != RoleToolResult || h[4].ToolResult.ID != "1" {
 		t.Fatalf("unexpected history: %#v", h)
 	}
 	if len(tools.results) != 1 {
@@ -122,7 +128,11 @@ func TestAgentToolThenFinal(t *testing.T) {
 	}
 }
 func TestAgentPreservesReasoningAcrossToolContinuation(t *testing.T) {
-	p := &agentTestProvider{responses: []Response{{Content: []ContentPart{{Type: ContentText, Text: `{"steps":[{"goal":"use tool"}]}`}}}, {Reasoning: &ReasoningState{ID: "rs_123", Text: "think before using the tool"}, ToolCalls: []ToolCall{{ID: "call_1", Name: "echo", Arguments: "{}"}}}, {Content: []ContentPart{{Type: ContentText, Text: "finished"}}}}}
+	p := &agentTestProvider{responses: []Response{
+		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan", Arguments: `{"plan":"use the echo tool"}`}}},
+		{Reasoning: &ReasoningState{ID: "rs_123", Text: "think before using the tool"}, ToolCalls: []ToolCall{{ID: "call_1", Name: "echo", Arguments: "{}"}}},
+		{Content: []ContentPart{{Type: ContentText, Text: "finished"}}},
+	}}
 	c, s := newAgentTestSession(p)
 	tools := &agentTestTools{definitions: []Tool{{Name: "echo"}}}
 	a := &Agent{Client: c, Tools: tools, MaxRetries: 0}
@@ -149,11 +159,11 @@ func TestAgentPreservesReasoningAcrossToolContinuation(t *testing.T) {
 func TestAgentRunsBeyondPreviousIterationLimit(t *testing.T) {
 	loop := Response{ToolCalls: []ToolCall{{ID: "echo", Name: "echo", Arguments: "{}"}}}
 	responses := make([]Response, 22)
-	responses[0] = Response{Content: []ContentPart{{Type: ContentText, Text: `{"steps":[{"goal":"loop tools"}]}`}}}
-	for i := 1; i < len(responses); i++ {
+	responses[0] = Response{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan", Arguments: `{"plan":"loop tools until finished"}`}}}
+	for i := 1; i < len(responses)-1; i++ {
 		responses[i] = loop
 	}
-	responses[21] = Response{Content: []ContentPart{{Type: ContentText, Text: "finished"}}}
+	responses[len(responses)-1] = Response{Content: []ContentPart{{Type: ContentText, Text: "finished"}}}
 	p := &agentTestProvider{responses: responses}
 	c, s := newAgentTestSession(p)
 	a := &Agent{Client: c, Tools: &agentTestTools{definitions: []Tool{{Name: "echo"}}}, MaxRetries: 0}
@@ -395,7 +405,6 @@ func TestCloneResponseContentKeepsUsage(t *testing.T) {
 func TestTerminalFailureEmitsTraceError(t *testing.T) {
 	p := &agentTestProvider{errors: []error{errors.New("boom")}}
 	c, s := newAgentTestSession(p)
-	c.Retry = RetryPolicy{MaxAttempts: 1, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond}
 	a := &Agent{Client: c, MaxRetries: 1}
 	var stages []TraceEvent
 	_, err := a.RunTurnWithTrace(context.Background(), s, Turn{Role: RoleUser}, Request{}, func(_ context.Context, e TraceEvent) { stages = append(stages, e) })
@@ -415,10 +424,10 @@ func TestTerminalFailureEmitsTraceError(t *testing.T) {
 
 func TestAgentPlanKeepsRecoveryInCurrentStep(t *testing.T) {
 	p := &agentTestProvider{responses: []Response{
-		{Content: []ContentPart{{Type: ContentText, Text: `{"steps":[{"goal":"build and fix"}]}`}}},
+		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan", Arguments: `{"plan":"build and fix"}`}}},
 		{ToolCalls: []ToolCall{{ID: "1", Name: "run", Arguments: `{}`}}},
 		{ToolCalls: []ToolCall{{ID: "2", Name: "edit", Arguments: `{}`}}},
-		{Content: []ContentPart{{Type: ContentText, Text: "done <<STEP_DONE>>"}}},
+		{Content: []ContentPart{{Type: ContentText, Text: "done"}}},
 	}}
 	c, s := newAgentTestSession(p)
 	tools := &agentTestTools{definitions: []Tool{{Name: "run"}, {Name: "edit"}}}
@@ -431,6 +440,6 @@ func TestAgentPlanKeepsRecoveryInCurrentStep(t *testing.T) {
 		t.Fatalf("final=%q", ResponseText(resp))
 	}
 	if p.calls != 4 {
-		t.Fatalf("provider calls=%d, want planner+2 tools+final", p.calls)
+		t.Fatalf("provider calls=%d, want plan+2 tools+final", p.calls)
 	}
 }

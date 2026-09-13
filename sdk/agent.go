@@ -19,9 +19,10 @@ type ToolExecutor interface {
 }
 
 type Agent struct {
-	Client     *RouterClient
-	Tools      ToolExecutor
-	MaxRetries int
+	Client          *RouterClient
+	Tools           ToolExecutor
+	MaxRetries      int
+	DisablePlanning bool
 
 	interruptMu sync.Mutex
 	interrupts  map[string]context.CancelFunc
@@ -156,6 +157,9 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 
 func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
 	executor := newPlanningToolExecutor(a.Tools)
+	if a.DisablePlanning {
+		executor = nil
+	}
 	session.Append(user)
 	if req.Stream {
 		return a.runStreamAttempt(ctx, session, req, trace, backoff, entry)
@@ -173,7 +177,7 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 			req.Tools = executor.Definitions()
 		} else {
 			req.SystemPrompt = baseSystemPrompt
-			req.Tools = nil
+			req.Tools = a.Tools.Definitions()
 		}
 		traceEvent(ctx, trace, TraceEvent{Stage: TraceRequest})
 
@@ -211,7 +215,10 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 				callCopy := cloneToolCall(call)
 				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolCall, ToolCall: callCopy})
 				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolRunning, ToolCall: callCopy})
-				result := ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
+				result := a.Tools.Execute(ctx, call)
+				if result.ID == "" {
+					result.ID = call.ID
+				}
 				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolResult, ToolCall: callCopy, ToolResult: cloneToolResult(result)})
 				if entry != nil {
 					if err := entry(ctx, Input{Source: "tool", SessionID: session.ID(), Turn: Turn{Role: RoleToolResult, ToolResult: cloneToolResult(result)}}); err != nil {
@@ -253,6 +260,9 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 
 func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
 	executor := newPlanningToolExecutor(a.Tools)
+	if a.DisablePlanning {
+		executor = nil
+	}
 	baseSystemPrompt := req.SystemPrompt
 	planNudges := 0
 	for {
@@ -265,7 +275,7 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 			req.Tools = executor.Definitions()
 		} else {
 			req.SystemPrompt = baseSystemPrompt
-			req.Tools = nil
+			req.Tools = a.Tools.Definitions()
 		}
 		traceEvent(ctx, trace, TraceEvent{Stage: TraceRequest})
 
@@ -354,7 +364,10 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 			for _, call := range resp.ToolCalls {
 				callCopy := cloneToolCall(call)
 				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolRunning, ToolCall: callCopy})
-				result := ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
+				result := a.Tools.Execute(ctx, call)
+				if result.ID == "" {
+					result.ID = call.ID
+				}
 				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolResult, ToolCall: callCopy, ToolResult: cloneToolResult(result)})
 				resultCopy := result
 				if entry != nil {
@@ -390,122 +403,5 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 				session.Append(Turn{Role: RoleToolResult, ToolResult: &resultCopy})
 			}
 		}
-	}
-}
-
-func settleInterruptedTurn(session *Session, before []Turn) {
-	if session == nil {
-		return
-	}
-	history := session.History()
-	start := len(before)
-	if start > len(history) {
-		start = len(history)
-	}
-	pending := make(map[string]string)
-	var order []string
-	for _, turn := range history[start:] {
-		if turn.Role == RoleToolCall && turn.ToolCall != nil && turn.ToolCall.ID != "" {
-			if _, dup := pending[turn.ToolCall.ID]; !dup {
-				pending[turn.ToolCall.ID] = turn.ToolCall.Name
-				order = append(order, turn.ToolCall.ID)
-			}
-		}
-		if turn.Role == RoleToolResult && turn.ToolResult != nil {
-			delete(pending, turn.ToolResult.ID)
-		}
-	}
-	for _, id := range order {
-		name, ok := pending[id]
-		if !ok {
-			continue
-		}
-		if name == "" {
-			name = "tool"
-		}
-		session.Append(Turn{Role: RoleToolResult, ToolResult: &ToolResult{ID: id, Content: "tool `" + name + "` was interrupted by the user; it may have partially run, not run at all, or already finished - verify the actual state before retrying.", IsError: true}})
-	}
-}
-
-func traceEvent(ctx context.Context, trace TraceFunc, event TraceEvent) {
-	if trace != nil {
-		trace(ctx, event)
-	}
-}
-
-func cloneResponseContent(in Response) *Response {
-	return &Response{Provider: in.Provider, Model: in.Model, Content: append([]ContentPart(nil), in.Content...), Reasoning: in.Reasoning, Usage: in.Usage}
-}
-
-func cloneToolCall(in ToolCall) *ToolCall       { out := in; return &out }
-func cloneToolResult(in ToolResult) *ToolResult { out := in; return &out }
-
-func retryableAgentError(ctx context.Context, err error) bool {
-	if err == nil || ctx.Err() != nil {
-		return false
-	}
-	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
-}
-
-func isRateLimitError(err error) bool {
-	statusErr, ok := err.(HTTPStatusError)
-	return ok && statusErr.HTTPStatusCode() == 429
-}
-
-type retryBackoff struct{ consecutive int }
-
-func (b *retryBackoff) Reset() { b.consecutive = 0 }
-
-func (b *retryBackoff) Delay(err error) time.Duration {
-	b.consecutive++
-	return retryDelay(err, b.consecutive)
-}
-
-func retryAfterAbort(err error) bool {
-	if !isRateLimitError(err) {
-		return false
-	}
-	ra, ok := err.(RetryAfterError)
-	if !ok {
-		return false
-	}
-	return ra.RetryAfter() > maxRetryCooldown
-}
-
-func retryDelay(err error, attempt int) time.Duration {
-	if isRateLimitError(err) {
-		if retryAfter, ok := err.(RetryAfterError); ok {
-			if d := retryAfter.RetryAfter(); d > 0 {
-				if d > maxRetryCooldown {
-					return maxRetryCooldown
-				}
-				return d
-			}
-		}
-	}
-	if attempt <= 1 {
-		return 3 * time.Second
-	}
-	d := 3 * time.Second
-	for i := 1; i < attempt; i++ {
-		if d >= maxRetryCooldown {
-			return maxRetryCooldown
-		}
-		d *= 2
-		if d > maxRetryCooldown {
-			return maxRetryCooldown
-		}
-	}
-	return d
-}
-
-func waitRetry(ctx context.Context, delay time.Duration) error {
-	t := time.NewTimer(delay)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
 	}
 }

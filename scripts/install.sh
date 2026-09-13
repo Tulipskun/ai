@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${AI_REPO:-Tulipskun/ai}"
-REF="${AI_VERSION:-latest}"
-INSTALL_ROOT="${AI_INSTALL_ROOT:-${HOME}/.local/share/ai}"
+REPO="Tulipskun/ai"
+REF="latest"
+INSTALL_ROOT="${HOME}/.local/share/ai"
 
 log() { printf '[ai] %s\n' "$*"; }
 die() { printf '[ai] error: %s\n' "$*" >&2; exit 1; }
@@ -19,9 +19,7 @@ case "$OS" in
   *) die "unsupported operating system: $OS (only linux is supported)" ;;
 esac
 
-if [[ -n "${AI_BIN_DIR:-}" ]]; then
-  BIN_DIR="$AI_BIN_DIR"
-elif [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
+if [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
   BIN_DIR="/usr/local/bin"
 else
   BIN_DIR="${HOME}/.local/bin"
@@ -95,5 +93,5 @@ fi
 log "runtime directory: $INSTALL_ROOT"
 log "run: ai start"
 log "update: ai update (uses: gh release download --repo $REPO)"
-log "pin a release with: AI_VERSION=<tag> ai update (default: latest)"
+log "pin a release with: ai update <tag> (default: latest)"
 log "if your shell previously cached another ai path, run: hash -r"

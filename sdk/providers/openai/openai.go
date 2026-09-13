@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"strings"
 	"github.com/Tulipskun/ai/sdk"
 	"github.com/Tulipskun/ai/sdk/providers/internal"
 	"time"
 )
 type Client struct { BaseURL string; APIKey string; Headers map[string]string; HTTP *http.Client }
-func New(apiKey string)*Client{if apiKey==""{apiKey=os.Getenv("OPENAI_API_KEY")};return &Client{BaseURL:"https://api.openai.com/v1",APIKey:apiKey,HTTP:http.DefaultClient}}
+func New(apiKey string)*Client{return &Client{BaseURL:"https://api.openai.com/v1",APIKey:apiKey,HTTP:http.DefaultClient}}
 func(c *Client)WithAPIKey(key string)sdk.Provider{cp:=*c;cp.APIKey=key;return &cp}
 func(c *Client)WithBaseURL(baseURL string)sdk.Provider{cp:=*c;cp.BaseURL=baseURL;return &cp}
 func(c *Client)WithHeaders(headers map[string]string)sdk.Provider{cp:=*c;cp.Headers=cloneHeaders(headers);return &cp}

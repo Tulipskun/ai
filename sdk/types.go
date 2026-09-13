@@ -31,14 +31,6 @@ const (
 	ThinkingHigh ThinkingLevel = "high"
 )
 
-type AgentPlan struct {
-	Steps []AgentPlanStep `json:"steps"`
-}
-
-type AgentPlanStep struct {
-	Goal string `json:"goal"`
-}
-
 type Request struct {
 	Provider ProviderID `json:"provider,omitempty"`
 	SystemPrompt string `json:"system_prompt,omitempty"`

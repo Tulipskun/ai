@@ -1,6 +1,6 @@
 # Installation layout
 
-The installed executable is separate from application state. Runtime state is stored under `AI_DATA_DIR`, which defaults to `~/.local/share/ai`.
+The installed executable is separate from application state. Runtime state is always stored under `~/.local/share/ai`.
 
 ```text
 /usr/local/bin/ai                    executable
@@ -24,7 +24,7 @@ There is no application `.ai` runtime directory.
 
 Each file under `data/sessions/` contains exactly one session. The session database stores that session's settings, turns, provider request/response records, and Discord channel mappings.
 
-`AI_BIN_DIR` can override the executable directory. `AI_DATA_DIR` can override the application state directory. `AI_WORKSPACE` controls the filesystem root used by file, command, and job tools: it defaults to the user home directory (`~`), accepts `~/...` paths (for example `AI_WORKSPACE=~/my-project`), and is created automatically when it does not exist. `AI_SYSTEM_PROMPT` overrides the default tool-using system prompt sent to the model. The prompt can also live in `config/system.json` (managed with `ai system`, `ai system set <prompt>`, `ai system clear`): explicit `AI_SYSTEM_PROMPT` wins, then the file, then the built-in default.
+All runtime configuration lives in `config/*.json` under the state directory; there is no environment-variable configuration. `workspace` in `config/system.json` controls the filesystem root used by file, command, and job tools: it defaults to the user home directory (`~`), accepts `~/...` paths (for example `~/my-project`), and is created automatically when it does not exist. The system prompt lives in `config/system.json` (managed with `ai system`, `ai system set <prompt>`, `ai system clear`): the file wins when set, otherwise the built-in default applies. `config/system.json` also holds the default `provider`, `model`, and `max_output_tokens` for new sessions.
 
 Browser automation is implemented directly in Go using Chrome DevTools Protocol. It does not require Node.js, Playwright, or a separate browser worker.
 

@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # Keep the installed ai daemon alive. Restarts it when the process is gone.
-# Env: AI_BIN (default /usr/local/bin/ai), AI_DATA_DIR (default ~/.local/share/ai),
-#      AI_DISPLAY (default :1), KEEPALIVE_INTERVAL (default 30).
+# Tunables below are plain shell variables (no environment configuration).
 set -u
 
-BIN="${AI_BIN:-/usr/local/bin/ai}"
-STATE="${AI_DATA_DIR:-${HOME}/.local/share/ai}"
-KEEP_DISPLAY="${AI_DISPLAY:-:1}"
-INTERVAL="${KEEPALIVE_INTERVAL:-30}"
+BIN="/usr/local/bin/ai"
+STATE="${HOME}/.local/share/ai"
+KEEP_DISPLAY=":1"
+INTERVAL="30"
 PIDFILE="$STATE/ai.pid"
 LOCKDIR="$STATE/keepalive.lock"
 

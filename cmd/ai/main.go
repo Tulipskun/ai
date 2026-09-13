@@ -57,7 +57,7 @@ func main() {
 			log.Fatal(err)
 		}
 	case commandUpdate:
-		if err := runUpdate(); err != nil {
+		if err := runUpdate(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
 	case commandDaemon:
@@ -167,8 +167,13 @@ func runSystemConfig(args []string) error {
 		return err
 	}
 	path := filepath.Join(state, runtime.DefaultSystemConfigPath)
+	current, err := runtime.LoadSystemConfig(path)
+	if err != nil {
+		return err
+	}
 	if len(args) >= 1 && args[0] == "clear" {
-		if err := runtime.SaveSystemConfig(path, runtime.SystemConfig{}); err != nil {
+		current.SystemPrompt = ""
+		if err := runtime.SaveSystemConfig(path, current); err != nil {
 			return err
 		}
 		fmt.Printf("System prompt cleared, using built-in default. Config: %s\n", path)
@@ -179,7 +184,8 @@ func runSystemConfig(args []string) error {
 		if text == "" {
 			return errors.New("system: usage is 'ai system set <prompt>'")
 		}
-		if err := runtime.SaveSystemConfig(path, runtime.SystemConfig{SystemPrompt: text}); err != nil {
+		current.SystemPrompt = text
+		if err := runtime.SaveSystemConfig(path, current); err != nil {
 			return err
 		}
 		fmt.Printf("System prompt saved to %s\n", path)
@@ -531,16 +537,17 @@ func run(ctx context.Context, cliOnly bool) error {
 		return err
 	}
 	providerManager := runtime.NewProviderManager(providerConfigPath, rt, providerFile)
-	maxOutputTokens, err := envInt("AI_MAX_OUTPUT_TOKENS")
+	sysCfg, err := runtime.LoadSystemConfig(filepath.Join(state, runtime.DefaultSystemConfigPath))
 	if err != nil {
 		return err
 	}
+	maxOutputTokens := sysCfg.MaxOutputTokens
 	sessionDB := filepath.Join(state, "data", "sessions.db")
-	providerID := strings.TrimSpace(os.Getenv("AI_PROVIDER"))
+	providerID := sysCfg.Provider
 	if providerID == "" && len(rt.ProviderConfigs) == 1 {
 		providerID = string(rt.ProviderConfigs[0].ID)
 	}
-	modelID := strings.TrimSpace(os.Getenv("AI_MODEL"))
+	modelID := sysCfg.Model
 	sessions := runtime.NewSessionManagerWithProviders(sessionDB, sdk.SessionConfig{Provider: sdk.ProviderID(providerID), Model: modelID}, rt.ProviderConfigs)
 	defer sessions.Close()
 	browserConfig, err := runtime.LoadBrowserConfig(filepath.Join(state, runtime.DefaultBrowserConfigPath))
@@ -561,7 +568,7 @@ func run(ctx context.Context, cliOnly bool) error {
 	if !cliOnly && !transportConfig.Discord.Enabled {
 		log.Printf("no Discord transport enabled; configure config/entry.json")
 	}
-	workspace, err := resolveWorkspace()
+	workspace, err := resolveWorkspace(sysCfg.Workspace)
 	if err != nil {
 		return err
 	}
@@ -679,30 +686,33 @@ func newAgent(client *sdk.RouterClient, workspace string, browser *tools.Browser
 	}
 	return &sdk.Agent{Client: client, Tools: registry}, nil
 }
-func envOr(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return fallback
-}
 func systemPrompt(agent *sdk.Agent) string {
-	if value := strings.TrimSpace(os.Getenv("AI_SYSTEM_PROMPT")); value != "" {
-		return value
+	state, err := stateRoot()
+	if err != nil {
+		return defaultSystemPrompt(agent)
 	}
-	if state, err := stateRoot(); err == nil {
-		if cfg, err := runtime.LoadSystemConfig(filepath.Join(state, runtime.DefaultSystemConfigPath)); err == nil && cfg.SystemPrompt != "" {
-			return cfg.SystemPrompt
-		}
+	return systemPromptWithState(state, agent)
+}
+
+func systemPromptWithState(state string, agent *sdk.Agent) string {
+	if cfg, err := runtime.LoadSystemConfig(filepath.Join(state, runtime.DefaultSystemConfigPath)); err == nil && cfg.SystemPrompt != "" {
+		return cfg.SystemPrompt
 	}
 	return defaultSystemPrompt(agent)
 }
 
 func systemPromptSource() string {
-	if state, err := stateRoot(); err == nil {
-		path := filepath.Join(state, runtime.DefaultSystemConfigPath)
-		if cfg, err := runtime.LoadSystemConfig(path); err == nil && cfg.SystemPrompt != "" {
-			return path
-		}
+	state, err := stateRoot()
+	if err != nil {
+		return "built-in default"
+	}
+	return systemPromptSourceWithState(state)
+}
+
+func systemPromptSourceWithState(state string) string {
+	path := filepath.Join(state, runtime.DefaultSystemConfigPath)
+	if cfg, err := runtime.LoadSystemConfig(path); err == nil && cfg.SystemPrompt != "" {
+		return path
 	}
 	return "built-in default"
 }
@@ -711,8 +721,8 @@ func defaultSystemPrompt(agent *sdk.Agent) string {
 	var b strings.Builder
 	b.WriteString("You are an AI assistant that gets things done with tools.\n")
 	b.WriteString("Stay strictly within the user's requested goal and scope. Do not start unrelated improvements, features, cleanup, or investigations.\n")
-	b.WriteString("Before using any tool, create a concise plan with ordered steps for the user's goal. The plan describes goals and success conditions, not a fixed list of tools.\n")
-	b.WriteString("Follow the current plan step until its success condition is satisfied. You may use any available tool needed to complete that step; do not restrict yourself to one exact tool or target.\n")
+	b.WriteString("Before using any tool, record the work with the `plan_create` tool: state the original goal plus ordered concrete steps (what to do, where, and the expected outcome).\n")
+	b.WriteString("Follow the recorded plan step by step. Mark each finished step with `plan_check`. If new information requires different steps, revise with `plan_update` and a reason without changing the original goal. If the rest cannot be done, stop with `plan_close`, a reason, and a user-facing report.\n")
 	b.WriteString("When a tool, command, build, test, or edit fails, diagnose the failure and fix it within the current step. A failure is not a reason to abandon the task or move to an unrelated step.\n")
 	b.WriteString("Only mark a step complete after verifying that its intended result is actually achieved. After the final goal is complete, stop and send the final result.\n")
 	b.WriteString("When the user asks to do, check, change, create, or fetch anything, CALL the matching tool instead of only describing what to do.\n")
@@ -730,20 +740,19 @@ func defaultSystemPrompt(agent *sdk.Agent) string {
 	}
 	return b.String()
 }
-func resolveWorkspace() (string, error) {
-	raw := strings.TrimSpace(os.Getenv("AI_WORKSPACE"))
-	if raw == "" {
-		home, err := os.UserHomeDir()
-		if err != nil || strings.TrimSpace(home) == "" {
-			return ".", nil
+func resolveWorkspace(configured string) (string, error) {
+	if raw := strings.TrimSpace(configured); raw != "" {
+		path := expandHome(raw)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			return "", fmt.Errorf("workspace: %w", err)
 		}
-		return home, nil
+		return path, nil
 	}
-	path := expandHome(raw)
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		return "", fmt.Errorf("AI_WORKSPACE: %w", err)
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ".", nil
 	}
-	return path, nil
+	return home, nil
 }
 func expandHome(path string) string {
 	if path == "~" {
@@ -758,15 +767,4 @@ func expandHome(path string) string {
 		}
 	}
 	return path
-}
-func envInt(name string) (int, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return 0, nil
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", name, err)
-	}
-	return parsed, nil
 }

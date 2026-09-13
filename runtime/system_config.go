@@ -9,7 +9,11 @@ import (
 )
 
 type SystemConfig struct {
-	SystemPrompt string `json:"system_prompt"`
+	SystemPrompt    string `json:"system_prompt"`
+	Provider        string `json:"provider"`
+	Model           string `json:"model"`
+	MaxOutputTokens int    `json:"max_output_tokens"`
+	Workspace       string `json:"workspace"`
 }
 
 const DefaultSystemConfigPath = "config/system.json"
@@ -25,13 +29,22 @@ func LoadSystemConfig(path string) (SystemConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return SystemConfig{}, fmt.Errorf("system: decode config %q: %w", path, err)
 	}
+	if cfg.MaxOutputTokens < 0 {
+		return SystemConfig{}, fmt.Errorf("system: decode config %q: max_output_tokens must not be negative", path)
+	}
 	cfg.SystemPrompt = strings.TrimSpace(cfg.SystemPrompt)
+	cfg.Provider = strings.TrimSpace(cfg.Provider)
+	cfg.Model = strings.TrimSpace(cfg.Model)
+	cfg.Workspace = strings.TrimSpace(cfg.Workspace)
 	return cfg, nil
 }
 
 func SaveSystemConfig(path string, cfg SystemConfig) error {
 	if path == "" { path = DefaultSystemConfigPath }
 	cfg.SystemPrompt = strings.TrimSpace(cfg.SystemPrompt)
+	cfg.Provider = strings.TrimSpace(cfg.Provider)
+	cfg.Model = strings.TrimSpace(cfg.Model)
+	cfg.Workspace = strings.TrimSpace(cfg.Workspace)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil { return fmt.Errorf("system: encode config: %w", err) }
 	if err := os.MkdirAll(dirOf(path), 0o700); err != nil { return fmt.Errorf("system: create config directory: %w", err) }

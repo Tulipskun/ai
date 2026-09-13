@@ -92,7 +92,6 @@ func (s *planStepInput) UnmarshalJSON(data []byte) error {
 
 type planCreateInput struct {
 	Goal  string          `json:"goal"`
-	Plan  string          `json:"plan"`
 	Steps []planStepInput `json:"steps"`
 }
 
@@ -161,7 +160,6 @@ func (e *planningToolExecutor) Definitions() []Tool {
 						"description": "Ordered checklist of concrete actions. Each entry is a goal string or a {goal} object naming what to do, where, and the expected outcome.",
 						"items":       map[string]any{},
 					},
-					"plan": map[string]any{"type": "string", "description": "Fallback free-text steps; each non-empty line becomes one checklist step. `goal` is still required."},
 				},
 				"required": []string{"goal", "steps"},
 			},
@@ -354,7 +352,7 @@ func (e *planningToolExecutor) executeCreate(call ToolCall) ToolResult {
 	if len([]rune(goal)) < minGoalRunes {
 		return ToolResult{ID: call.ID, Content: fmt.Sprintf("plan_create needs a `goal` of at least %d characters stating the original objective", minGoalRunes), IsError: true}
 	}
-	steps, err := validatedSteps(input.Steps, splitPlanLines(input.Plan))
+	steps, err := validatedSteps(input.Steps)
 	if err != nil {
 		return ToolResult{ID: call.ID, Content: "invalid plan_create steps: " + err.Error(), IsError: true}
 	}
@@ -418,7 +416,7 @@ func (e *planningToolExecutor) executeUpdate(call ToolCall) ToolResult {
 	if len([]rune(strings.TrimSpace(input.Reason))) < minReasonRunes {
 		return ToolResult{ID: call.ID, Content: fmt.Sprintf("plan_update needs a `reason` of at least %d characters explaining what new information requires the change", minReasonRunes), IsError: true}
 	}
-	steps, err := validatedSteps(input.Steps, nil)
+	steps, err := validatedSteps(input.Steps)
 	if err != nil {
 		return ToolResult{ID: call.ID, Content: "invalid plan_update steps: " + err.Error(), IsError: true}
 	}
@@ -442,11 +440,11 @@ func (e *planningToolExecutor) executeUpdate(call ToolCall) ToolResult {
 	return ToolResult{ID: call.ID, Content: out}
 }
 
-// validatedSteps converts raw step inputs (or fallback free-text steps) into
-// concrete checklist steps. Every step must be long enough to name an action,
-// must not be a generic placeholder, and must not duplicate another step.
-func validatedSteps(raw []planStepInput, fallback []PlanStep) ([]PlanStep, error) {
-	steps := make([]PlanStep, 0, len(raw)+len(fallback))
+// validatedSteps converts raw step inputs into concrete checklist steps.
+// Every step must be long enough to name an action, must not be a generic
+// placeholder, and must not duplicate another step.
+func validatedSteps(raw []planStepInput) ([]PlanStep, error) {
+	steps := make([]PlanStep, 0, len(raw))
 	for _, s := range raw {
 		if strings.TrimSpace(s.Goal) == "" {
 			continue
@@ -454,10 +452,7 @@ func validatedSteps(raw []planStepInput, fallback []PlanStep) ([]PlanStep, error
 		steps = append(steps, PlanStep{Goal: strings.TrimSpace(s.Goal)})
 	}
 	if len(steps) == 0 {
-		steps = append(steps, fallback...)
-	}
-	if len(steps) == 0 {
-		return nil, fmt.Errorf("at least one concrete step is required: pass `steps` or non-empty `plan` text")
+		return nil, fmt.Errorf("at least one concrete step is required: pass a non-empty `steps` array")
 	}
 	if len(steps) > maxPlanSteps {
 		return nil, fmt.Errorf("too many steps (%d, max %d): group them into fewer concrete actions", len(steps), maxPlanSteps)
@@ -544,53 +539,4 @@ func (e *planningToolExecutor) resolveCheckTarget(input planCheckInput) (int, er
 		return 0, fmt.Errorf("plan_check goal %q matches no step (1-%d)", input.Goal, len(e.steps))
 	}
 	return 0, fmt.Errorf("plan_check needs a `step` number (1-%d) or `goal` text", len(e.steps))
-}
-
-// splitPlanLines parses fallback free-text steps: each non-empty line becomes
-// one step, with markdown bullets, ordered prefixes, and [ ]/[x] markers
-// stripped. A pre-checked [x] line starts Done.
-func splitPlanLines(plan string) []PlanStep {
-	var steps []PlanStep
-	for _, line := range strings.Split(plan, "\n") {
-		goal, done := parsePlanLine(line)
-		if goal == "" {
-			continue
-		}
-		steps = append(steps, PlanStep{Goal: goal, Done: done})
-	}
-	return steps
-}
-
-func parsePlanLine(line string) (string, bool) {
-	s := strings.TrimSpace(line)
-	if s == "" {
-		return "", false
-	}
-	done := false
-	if strings.HasPrefix(s, "- [") || strings.HasPrefix(s, "* [") {
-		rest := s[3:]
-		if strings.HasPrefix(strings.ToLower(rest), "x]") {
-			done = true
-		}
-		if idx := strings.Index(rest, "]"); idx >= 0 {
-			s = strings.TrimSpace(rest[idx+1:])
-		}
-	}
-	s = strings.TrimSpace(strings.TrimLeft(s, "-*•> "))
-	s = stripOrderedPrefix(s)
-	s = strings.TrimSpace(s)
-	return s, done
-}
-
-func stripOrderedPrefix(s string) string {
-	i := 0
-	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
-		i++
-	}
-	if i > 0 && i < len(s) && (s[i] == '.' || s[i] == ')') {
-		if n, err := strconv.Atoi(s[:i]); err == nil && n > 0 {
-			return strings.TrimSpace(s[i+1:])
-		}
-	}
-	return s
 }

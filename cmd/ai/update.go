@@ -12,13 +12,19 @@ import (
 	"strings"
 )
 
-func runUpdate() error {
+func runUpdate(args []string) error {
+	if len(args) > 1 {
+		return fmt.Errorf("update: usage is 'ai update [version]'")
+	}
 	app, err := installedBinary()
 	if err != nil {
 		return err
 	}
-	repo := envOr("AI_REPO", "Tulipskun/ai")
-	targetVersion := strings.TrimSpace(os.Getenv("AI_VERSION"))
+	const repo = "Tulipskun/ai"
+	targetVersion := ""
+	if len(args) == 1 {
+		targetVersion = strings.TrimSpace(args[0])
+	}
 	assetOS := runtime.GOOS
 	assetArch := runtime.GOARCH
 	if assetOS != "linux" {
@@ -234,9 +240,6 @@ func installedBinary() (string, error) {
 	return filepath.Clean(exe), nil
 }
 func stateRoot() (string, error) {
-	if value := strings.TrimSpace(os.Getenv("AI_DATA_DIR")); value != "" {
-		return filepath.Clean(value), nil
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		if current, userErr := user.Current(); userErr == nil && current.HomeDir != "" {

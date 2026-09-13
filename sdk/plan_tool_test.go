@@ -194,26 +194,6 @@ func TestPlanCheckByGoalAndReopen(t *testing.T) {
 	}
 }
 
-func TestLegacyPlanStringSplitsSteps(t *testing.T) {
-	e := newPlanningToolExecutor(&planningTestExecutor{})
-	res := e.Execute(context.Background(), ToolCall{ID: "1", Name: "plan_create", Arguments: `{"goal":"record the legacy plan","plan":"- [x] inspect the repository layout first\n- [ ] apply the requested code changes\n2. run the test suite for verification"}`})
-	if res.IsError {
-		t.Fatalf("plan_create failed: %s", res.Content)
-	}
-	if len(e.steps) != 3 {
-		t.Fatalf("steps=%d, want 3 (%+v)", len(e.steps), e.steps)
-	}
-	if !e.steps[0].Done || e.steps[1].Done || e.steps[2].Done {
-		t.Fatalf("pre-checked state wrong: %+v", e.steps)
-	}
-	if e.steps[1].Goal != "apply the requested code changes" || e.steps[2].Goal != "run the test suite for verification" {
-		t.Fatalf("goals not stripped: %+v", e.steps)
-	}
-	if got := e.Checklist(); !strings.Contains(got, "1. [x] inspect the repository layout first") || !strings.Contains(got, "2. [ ] apply the requested code changes") {
-		t.Fatalf("checklist render wrong:\n%s", got)
-	}
-}
-
 func TestPlanCheckRequiresPlan(t *testing.T) {
 	e := newPlanningToolExecutor(&planningTestExecutor{})
 	if r := e.Execute(context.Background(), ToolCall{ID: "1", Name: "plan_check", Arguments: `{"step":1}`}); !r.IsError {

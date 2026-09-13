@@ -22,10 +22,10 @@ GitHub Actions builds the Linux arm64 binary and publishes it as a GitHub Releas
 ai update
 ```
 
-The installer and updater download with `gh release download --repo Tulipskun/ai` and verify the binary against the release `checksums.txt`. `AI_VERSION` can be set to a release tag when a pinned version is required (default: `latest`).
+The installer and updater download with `gh release download --repo Tulipskun/ai` and verify the binary against the release `checksums.txt`. Pass a release tag to pin a version (default: `latest`).
 
 ```bash
-AI_VERSION=v1.2.3 ai update
+ai update v1.2.3
 ```
 
 To completely remove the installation, including the daemon, runtime state, sessions, provider configuration, logs, and history, run:
@@ -43,7 +43,8 @@ Runtime configuration is file-based and stored separately from executable files.
 ├── config/
 │   ├── entry.json
 │   ├── provider.json
-│   └── browser.json
+│   ├── browser.json
+│   └── system.json
 ├── data/
 │   ├── jobs.json
 │   ├── browser/
@@ -56,7 +57,19 @@ Runtime configuration is file-based and stored separately from executable files.
 └── ai.log
 ```
 
-`config/entry.json` contains Discord and CLI transport settings. `config/provider.json` contains providers and API keys. `config/browser.json` contains browser automation settings.
+`config/entry.json` contains Discord and CLI transport settings. `config/provider.json` contains providers and API keys. `config/browser.json` contains browser automation settings. `config/system.json` contains the default provider/model, max output tokens, workspace directory, and system prompt:
+
+```json
+{
+  "provider": "",
+  "model": "",
+  "max_output_tokens": 0,
+  "workspace": "",
+  "system_prompt": ""
+}
+```
+
+Empty values fall back to built-in defaults (home directory for workspace, single configured provider when only one exists). There is no environment-variable configuration; `config/*.json` is the only source. Manage the prompt with `ai system`, `ai system set <prompt>`, `ai system clear`, and pin a binary with `ai update [<version>]`.
 
 ### Discord configuration
 
@@ -168,7 +181,7 @@ checksums.txt
 
 ```bash
 gh release download --repo Tulipskun/ai --pattern 'ai-linux-arm64' --pattern checksums.txt
-AI_VERSION=v1.1 ai update
+ai update v1.1
 ```
 
 ## Harness selection flow

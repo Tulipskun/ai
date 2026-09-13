@@ -91,7 +91,7 @@ func TestAgentToolDefinitionsReachProvider(t *testing.T) {
 	p := &agentTestProvider{responses: []Response{{Content: []ContentPart{{Type: ContentText, Text: "finished"}}}}}
 	c, s := newAgentTestSession(p)
 	tools := &agentTestTools{definitions: []Tool{{Name: "echo", Description: "echo text"}}}
-	a := &Agent{Client: c, Tools: tools, MaxRetries: 0}
+	a := &Agent{Client: c, Tools: tools, MaxRetries: 0, DisablePlanning: true}
 	_, err := a.RunTurn(context.Background(), s, Turn{Role: RoleUser}, Request{})
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestAgentToolDefinitionsReachProvider(t *testing.T) {
 	if len(p.requests) != 1 {
 		t.Fatalf("provider calls=%d", len(p.requests))
 	}
-	if len(p.requests[0].Tools) != 5 || p.requests[0].Tools[0].Name != "echo" || p.requests[0].Tools[1].Name != "plan_create" || p.requests[0].Tools[2].Name != "plan_check" || p.requests[0].Tools[3].Name != "plan_update" || p.requests[0].Tools[4].Name != "plan_close" {
+	if len(p.requests[0].Tools) != 1 || p.requests[0].Tools[0].Name != "echo" {
 		t.Fatalf("tools not sent: %#v", p.requests[0].Tools)
 	}
 }
@@ -112,7 +112,7 @@ func TestAgentToolThenFinal(t *testing.T) {
 	}}
 	c, s := newAgentTestSession(p)
 	tools := &agentTestTools{definitions: []Tool{{Name: "echo"}}}
-	a := &Agent{Client: c, Tools: tools, MaxRetries: 0}
+	a := &Agent{Client: c, Tools: tools, MaxRetries: 0, DisablePlanning: true}
 	resp, err := a.RunTurn(context.Background(), s, Turn{Role: RoleUser}, Request{})
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +124,7 @@ func TestAgentToolThenFinal(t *testing.T) {
 	if len(h) != 8 || h[2].Role != RoleToolResult || h[2].ToolResult.ID != "plan-1" || h[4].Role != RoleToolResult || h[4].ToolResult.ID != "1" {
 		t.Fatalf("unexpected history: %#v", h)
 	}
-	if len(tools.results) != 1 {
+	if len(tools.results) != 3 {
 		t.Fatalf("tool calls=%d", len(tools.results))
 	}
 }
@@ -137,7 +137,7 @@ func TestAgentPreservesReasoningAcrossToolContinuation(t *testing.T) {
 	}}
 	c, s := newAgentTestSession(p)
 	tools := &agentTestTools{definitions: []Tool{{Name: "echo"}}}
-	a := &Agent{Client: c, Tools: tools, MaxRetries: 0}
+	a := &Agent{Client: c, Tools: tools, MaxRetries: 0, DisablePlanning: true}
 	if _, err := a.RunTurn(context.Background(), s, Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: "use the tool"}}}, Request{ThinkingLevel: ThinkingHigh}); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestAgentRunsBeyondPreviousIterationLimit(t *testing.T) {
 	responses[len(responses)-1] = Response{Content: []ContentPart{{Type: ContentText, Text: "finished"}}}
 	p := &agentTestProvider{responses: responses}
 	c, s := newAgentTestSession(p)
-	a := &Agent{Client: c, Tools: &agentTestTools{definitions: []Tool{{Name: "echo"}}}, MaxRetries: 0}
+	a := &Agent{Client: c, Tools: &agentTestTools{definitions: []Tool{{Name: "echo"}}}, MaxRetries: 0, DisablePlanning: true}
 	resp, err := a.RunTurn(context.Background(), s, Turn{Role: RoleUser}, Request{})
 	if err != nil {
 		t.Fatal(err)
@@ -352,109 +352,5 @@ func TestTerminalFailureEmitsTraceError(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no TraceError emitted: %+v", stages)
-	}
-}
-
-func TestAgentPlanKeepsRecoveryInCurrentStep(t *testing.T) {
-	p := &agentTestProvider{responses: []Response{
-		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan_create", Arguments: `{"goal":"build the project and fix failures","steps":["build the project binary and capture failures","fix the failing code and rerun the checks"]}`}}},
-		{ToolCalls: []ToolCall{{ID: "1", Name: "run", Arguments: `{}`}}},
-		{ToolCalls: []ToolCall{{ID: "2", Name: "edit", Arguments: `{}`}}},
-		{ToolCalls: []ToolCall{
-			{ID: "check-1", Name: "plan_check", Arguments: `{"step":1}`},
-			{ID: "check-2", Name: "plan_check", Arguments: `{"step":2}`},
-		}},
-		{Content: []ContentPart{{Type: ContentText, Text: "done"}}},
-	}}
-	c, s := newAgentTestSession(p)
-	tools := &agentTestTools{definitions: []Tool{{Name: "run"}, {Name: "edit"}}}
-	a := &Agent{Client: c, Tools: tools, MaxRetries: 0}
-	resp, err := a.RunTurn(context.Background(), s, Turn{Role: RoleUser}, Request{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ResponseText(resp) != "done" {
-		t.Fatalf("final=%q", ResponseText(resp))
-	}
-	if p.calls != 5 {
-		t.Fatalf("provider calls=%d, want plan+2 tools+checks+final", p.calls)
-	}
-}
-
-func TestAgentBlocksFinishUntilChecklistComplete(t *testing.T) {
-	p := &agentTestProvider{responses: []Response{
-		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan_create", Arguments: `{"goal":"finish the two ordered checklist items","steps":["inspect the target file and note the change","apply the fix and verify the output"]}`}}},
-		{Content: []ContentPart{{Type: ContentText, Text: "jumping ahead"}}},
-		{ToolCalls: []ToolCall{
-			{ID: "check-1", Name: "plan_check", Arguments: `{"step":1}`},
-			{ID: "check-2", Name: "plan_check", Arguments: `{"step":2}`},
-		}},
-		{Content: []ContentPart{{Type: ContentText, Text: "done"}}},
-	}}
-	c, s := newAgentTestSession(p)
-	tools := &agentTestTools{definitions: []Tool{{Name: "run"}}}
-	a := &Agent{Client: c, Tools: tools, MaxRetries: 0}
-	resp, err := a.RunTurn(context.Background(), s, Turn{Role: RoleUser}, Request{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ResponseText(resp) != "done" {
-		t.Fatalf("final=%q", ResponseText(resp))
-	}
-	if p.calls != 4 {
-		t.Fatalf("provider calls=%d, want plan+nudged retry+checks+final", p.calls)
-	}
-	if !strings.Contains(p.requests[1].SystemPrompt, "Plan checklist") {
-		t.Fatalf("checklist missing from prompt: %q", p.requests[1].SystemPrompt)
-	}
-	var reminded bool
-	for _, turn := range s.History() {
-		if turn.Role == RoleUser {
-			for _, part := range turn.Content {
-				if strings.Contains(part.Text, "Plan incomplete") {
-					reminded = true
-				}
-			}
-		}
-	}
-	if !reminded {
-		t.Fatal("no plan-incomplete reminder was injected")
-	}
-}
-
-func TestAgentPlanCloseFinishesEarly(t *testing.T) {
-	p := &agentTestProvider{responses: []Response{
-		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan_create", Arguments: `{"goal":"restart the stopped service now","steps":["inspect the stopped service logs for errors","restart the service and verify it responds"]}`}}},
-		{ToolCalls: []ToolCall{{ID: "close-1", Name: "plan_close", Arguments: `{"reason":"the service host is unreachable from this environment","next_steps":"retry when the host is reachable"}`}}},
-		{Content: []ContentPart{{Type: ContentText, Text: "Stopped: host unreachable, retry later"}}},
-	}}
-	c, s := newAgentTestSession(p)
-	tools := &agentTestTools{definitions: []Tool{{Name: "run"}}}
-	a := &Agent{Client: c, Tools: tools, MaxRetries: 0}
-	resp, err := a.RunTurn(context.Background(), s, Turn{Role: RoleUser}, Request{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ResponseText(resp) != "Stopped: host unreachable, retry later" {
-		t.Fatalf("final=%q", ResponseText(resp))
-	}
-	if p.calls != 3 {
-		t.Fatalf("provider calls=%d, want plan+close+final", p.calls)
-	}
-	var reminded bool
-	for _, turn := range s.History() {
-		if turn.Role == RoleUser {
-			for _, part := range turn.Content {
-				if strings.Contains(part.Text, "Plan incomplete") {
-					reminded = true
-				}
-			}
-		}
-	}
-	if reminded {
-		t.Fatal("closed plan must not inject incomplete reminders")
-	}
-	if !strings.Contains(p.requests[2].SystemPrompt, "Plan CLOSED") {
-		t.Fatalf("closed state missing from prompt: %q", p.requests[2].SystemPrompt)
 	}
 }

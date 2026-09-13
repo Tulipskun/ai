@@ -23,16 +23,43 @@ type Agent struct {
 	Tools           ToolExecutor
 	MaxRetries      int
 	DisablePlanning bool
+	SubAgentConfig  SubAgentConfig
 
-	interruptMu sync.Mutex
-	interrupts  map[string]context.CancelFunc
-	interrupted map[string]bool
+	subAgentMu        sync.Mutex
+	subAgents         *subAgentManager
+	subAgentEventSink func(SubAgentEvent)
+	interruptMu       sync.Mutex
+	interrupts        map[string]context.CancelFunc
+	interrupted       map[string]bool
 }
 
 const (
 	defaultAgentMaxRetries = 6
 	maxRetryCooldown       = 96 * time.Second
 )
+
+func (a *Agent) SetSubAgentEventSink(sink func(SubAgentEvent)) {
+	if a == nil {
+		return
+	}
+	a.subAgentMu.Lock()
+	a.subAgentEventSink = sink
+	manager := a.subAgents
+	a.subAgentMu.Unlock()
+	if manager != nil {
+		manager.SetEventSink(sink)
+	}
+}
+
+func (a *Agent) subAgentManager() *subAgentManager {
+	a.subAgentMu.Lock()
+	defer a.subAgentMu.Unlock()
+	if a.subAgents == nil {
+		a.subAgents = newSubAgentManager(a, a.SubAgentConfig)
+		a.subAgents.SetEventSink(a.subAgentEventSink)
+	}
+	return a.subAgents
+}
 
 func (a *Agent) RunTurn(ctx context.Context, session *Session, user Turn, req Request) (Response, error) {
 	return a.runTurn(ctx, session, user, req, nil, nil)
@@ -156,16 +183,20 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 }
 
 func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
-	executor := newPlanningToolExecutor(a.Tools)
-	if a.DisablePlanning {
-		executor = nil
+	var executor ToolExecutor
+	if !a.DisablePlanning {
+		executor = newPlanningToolExecutor(a.Tools, session)
+	} else {
+		executor = a.Tools
+	}
+	if planner, ok := executor.(*planningToolExecutor); ok && a.SubAgentConfig.Enabled {
+		planner.ConfigureSubAgent(&subAgentRunner{manager: a.subAgentManager(), parent: session})
 	}
 	session.Append(user)
 	if req.Stream {
 		return a.runStreamAttempt(ctx, session, req, trace, backoff, entry)
 	}
 	baseSystemPrompt := req.SystemPrompt
-	planNudges := 0
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -173,11 +204,11 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		}
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
 		if executor != nil {
-			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt) + executor.systemPromptExtra()
+			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt)
 			req.Tools = executor.Definitions()
 		} else {
 			req.SystemPrompt = baseSystemPrompt
-			req.Tools = a.Tools.Definitions()
+			req.Tools = nil
 		}
 		traceEvent(ctx, trace, TraceEvent{Stage: TraceRequest})
 
@@ -199,11 +230,6 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		}
 
 		if len(resp.ToolCalls) == 0 {
-			if executor != nil && executor.HasIncomplete() && !executor.IsClosed() && planNudges < maxPlanIncompleteNudges {
-				planNudges++
-				session.Append(executor.planReminderTurn())
-				continue
-			}
 			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
 			return resp, nil
 		}
@@ -215,10 +241,7 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 				callCopy := cloneToolCall(call)
 				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolCall, ToolCall: callCopy})
 				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolRunning, ToolCall: callCopy})
-				result := a.Tools.Execute(ctx, call)
-				if result.ID == "" {
-					result.ID = call.ID
-				}
+				result := ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
 				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolResult, ToolCall: callCopy, ToolResult: cloneToolResult(result)})
 				if entry != nil {
 					if err := entry(ctx, Input{Source: "tool", SessionID: session.ID(), Turn: Turn{Role: RoleToolResult, ToolResult: cloneToolResult(result)}}); err != nil {
@@ -259,23 +282,27 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 }
 
 func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
-	executor := newPlanningToolExecutor(a.Tools)
-	if a.DisablePlanning {
-		executor = nil
+	var executor ToolExecutor
+	if !a.DisablePlanning {
+		executor = newPlanningToolExecutor(a.Tools, session)
+	} else {
+		executor = a.Tools
+	}
+	if planner, ok := executor.(*planningToolExecutor); ok && a.SubAgentConfig.Enabled {
+		planner.ConfigureSubAgent(&subAgentRunner{manager: a.subAgentManager(), parent: session})
 	}
 	baseSystemPrompt := req.SystemPrompt
-	planNudges := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return Response{}, err
 		}
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
 		if executor != nil {
-			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt) + executor.systemPromptExtra()
+			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt)
 			req.Tools = executor.Definitions()
 		} else {
 			req.SystemPrompt = baseSystemPrompt
-			req.Tools = a.Tools.Definitions()
+			req.Tools = nil
 		}
 		traceEvent(ctx, trace, TraceEvent{Stage: TraceRequest})
 
@@ -352,11 +379,6 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 
 		commitResponse(session, resp)
 		if len(resp.ToolCalls) == 0 {
-			if executor != nil && executor.HasIncomplete() && !executor.IsClosed() && planNudges < maxPlanIncompleteNudges {
-				planNudges++
-				session.Append(executor.planReminderTurn())
-				continue
-			}
 			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
 			return resp, nil
 		}
@@ -364,10 +386,7 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 			for _, call := range resp.ToolCalls {
 				callCopy := cloneToolCall(call)
 				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolRunning, ToolCall: callCopy})
-				result := a.Tools.Execute(ctx, call)
-				if result.ID == "" {
-					result.ID = call.ID
-				}
+				result := ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
 				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolResult, ToolCall: callCopy, ToolResult: cloneToolResult(result)})
 				resultCopy := result
 				if entry != nil {
@@ -403,5 +422,122 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 				session.Append(Turn{Role: RoleToolResult, ToolResult: &resultCopy})
 			}
 		}
+	}
+}
+
+func settleInterruptedTurn(session *Session, before []Turn) {
+	if session == nil {
+		return
+	}
+	history := session.History()
+	start := len(before)
+	if start > len(history) {
+		start = len(history)
+	}
+	pending := make(map[string]string)
+	var order []string
+	for _, turn := range history[start:] {
+		if turn.Role == RoleToolCall && turn.ToolCall != nil && turn.ToolCall.ID != "" {
+			if _, dup := pending[turn.ToolCall.ID]; !dup {
+				pending[turn.ToolCall.ID] = turn.ToolCall.Name
+				order = append(order, turn.ToolCall.ID)
+			}
+		}
+		if turn.Role == RoleToolResult && turn.ToolResult != nil {
+			delete(pending, turn.ToolResult.ID)
+		}
+	}
+	for _, id := range order {
+		name, ok := pending[id]
+		if !ok {
+			continue
+		}
+		if name == "" {
+			name = "tool"
+		}
+		session.Append(Turn{Role: RoleToolResult, ToolResult: &ToolResult{ID: id, Content: "tool `" + name + "` was interrupted by the user; it may have partially run, not run at all, or already finished - verify the actual state before retrying.", IsError: true}})
+	}
+}
+
+func traceEvent(ctx context.Context, trace TraceFunc, event TraceEvent) {
+	if trace != nil {
+		trace(ctx, event)
+	}
+}
+
+func cloneResponseContent(in Response) *Response {
+	return &Response{Provider: in.Provider, Model: in.Model, Content: append([]ContentPart(nil), in.Content...), Reasoning: in.Reasoning, Usage: in.Usage}
+}
+
+func cloneToolCall(in ToolCall) *ToolCall       { out := in; return &out }
+func cloneToolResult(in ToolResult) *ToolResult { out := in; return &out }
+
+func retryableAgentError(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+func isRateLimitError(err error) bool {
+	statusErr, ok := err.(HTTPStatusError)
+	return ok && statusErr.HTTPStatusCode() == 429
+}
+
+type retryBackoff struct{ consecutive int }
+
+func (b *retryBackoff) Reset() { b.consecutive = 0 }
+
+func (b *retryBackoff) Delay(err error) time.Duration {
+	b.consecutive++
+	return retryDelay(err, b.consecutive)
+}
+
+func retryAfterAbort(err error) bool {
+	if !isRateLimitError(err) {
+		return false
+	}
+	ra, ok := err.(RetryAfterError)
+	if !ok {
+		return false
+	}
+	return ra.RetryAfter() > maxRetryCooldown
+}
+
+func retryDelay(err error, attempt int) time.Duration {
+	if isRateLimitError(err) {
+		if retryAfter, ok := err.(RetryAfterError); ok {
+			if d := retryAfter.RetryAfter(); d > 0 {
+				if d > maxRetryCooldown {
+					return maxRetryCooldown
+				}
+				return d
+			}
+		}
+	}
+	if attempt <= 1 {
+		return 3 * time.Second
+	}
+	d := 3 * time.Second
+	for i := 1; i < attempt; i++ {
+		if d >= maxRetryCooldown {
+			return maxRetryCooldown
+		}
+		d *= 2
+		if d > maxRetryCooldown {
+			return maxRetryCooldown
+		}
+	}
+	return d
+}
+
+func waitRetry(ctx context.Context, delay time.Duration) error {
+	t := time.NewTimer(delay)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }

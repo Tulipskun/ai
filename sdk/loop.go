@@ -3,6 +3,8 @@ package sdk
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -11,14 +13,14 @@ type SessionResolver func(context.Context, Input) (*Session, error)
 type RequestResolver func(context.Context, Input, *Session) (Request, error)
 
 type HarnessLoop struct {
-	Client          *RouterClient
-	Agent           *Agent
-	Source          InputSource
-	ResolveSession  SessionResolver
-	BuildRequest    RequestResolver
-	Displays        []Display
-	DisplayTimeout  time.Duration
-	OnTurnError     func(Input, error)
+	Client         *RouterClient
+	Agent          *Agent
+	Source         InputSource
+	ResolveSession SessionResolver
+	BuildRequest   RequestResolver
+	Displays       []Display
+	DisplayTimeout time.Duration
+	OnTurnError    func(Input, error)
 
 	sessionLocks sync.Map
 }
@@ -26,6 +28,22 @@ type HarnessLoop struct {
 func (h *HarnessLoop) Run(ctx context.Context) error {
 	if h == nil || (h.Client == nil && h.Agent == nil) || h.Source == nil || h.ResolveSession == nil {
 		return errors.New("sdk: incomplete harness loop configuration")
+	}
+	if h.Agent != nil {
+		h.Agent.SetSubAgentEventSink(func(event SubAgentEvent) {
+			if event.Parent == nil {
+				return
+			}
+			stepLabel := "investigation"
+			if event.PlanStep.Index > 0 {
+				stepLabel = fmt.Sprintf("plan step %d", event.PlanStep.Index)
+			}
+			text := fmt.Sprintf("Sub-agent job %s %s for %s: %s", event.JobID, event.Status, stepLabel, event.Result)
+			source := inputSourceForSession(event.Parent.ID())
+			go func() {
+				_ = h.Entry(context.WithoutCancel(ctx), Input{Source: source, SessionID: event.Parent.ID(), Turn: Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: text}}}})
+			}()
+		})
 	}
 	inputs, err := h.Source.Receive(ctx)
 	if err != nil {
@@ -156,4 +174,11 @@ func cloneMetadata(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func inputSourceForSession(sessionID string) string {
+	if i := strings.IndexByte(sessionID, ':'); i > 0 {
+		return sessionID[:i]
+	}
+	return ""
 }

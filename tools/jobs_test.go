@@ -15,21 +15,44 @@ func TestBackgroundJobLifecycle(t *testing.T) {
 	root := t.TempDir()
 	m := NewJobManager(root, root+"/jobs.json")
 	id, err := m.Start("session-a", "sh", []string{"-c", "printf done"})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	var state JobState
-	for i := 0; i < 50; i++ { j, _ := m.Get(id); state = snapshotJob(j).Status; if state != JobRunning { break }; time.Sleep(10 * time.Millisecond) }
-	if state != JobCompleted { t.Fatalf("state=%s", state) }
+	for i := 0; i < 50; i++ {
+		j, _ := m.Get(id)
+		state = snapshotJob(j).Status
+		if state != JobRunning {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if state != JobCompleted {
+		t.Fatalf("state=%s", state)
+	}
 	j, _ := m.Get(id)
-	if !strings.Contains(snapshotJob(j).Output, "done") { t.Fatalf("output=%q", snapshotJob(j).Output) }
+	if !strings.Contains(snapshotJob(j).Output, "done") {
+		t.Fatalf("output=%q", snapshotJob(j).Output)
+	}
 }
 
 func TestCloseBackgroundJob(t *testing.T) {
 	root := t.TempDir()
 	m := NewJobManager(root, root+"/jobs.json")
 	id, err := m.Start("session-a", "sh", []string{"-c", "sleep 5"})
-	if err != nil { t.Fatal(err) }
-	if err := m.CloseForSession("session-a", id); err != nil { t.Fatal(err) }
-	for i := 0; i < 200; i++ { j, _ := m.Get(id); if snapshotJob(j).Status == JobCancelled { return }; time.Sleep(10 * time.Millisecond) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CloseForSession("session-a", id); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200; i++ {
+		j, _ := m.Get(id)
+		if snapshotJob(j).Status == JobCancelled {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	j, _ := m.Get(id)
 	t.Fatalf("state=%s", snapshotJob(j).Status)
 }
@@ -38,10 +61,18 @@ func TestSessionOwnership(t *testing.T) {
 	root := t.TempDir()
 	m := NewJobManager(root, root+"/jobs.json")
 	id, err := m.Start("session-a", "sh", []string{"-c", "sleep 1"})
-	if err != nil { t.Fatal(err) }
-	if _, err := m.GetForSession("session-b", id); err == nil { t.Fatal("expected ownership error") }
-	if err := m.CloseForSession("session-b", id); err == nil { t.Fatal("expected ownership error") }
-	if err := m.CloseForSession("session-a", id); err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.GetForSession("session-b", id); err == nil {
+		t.Fatal("expected ownership error")
+	}
+	if err := m.CloseForSession("session-b", id); err == nil {
+		t.Fatal("expected ownership error")
+	}
+	if err := m.CloseForSession("session-a", id); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestJobPersistenceStoresSession(t *testing.T) {
@@ -49,30 +80,58 @@ func TestJobPersistenceStoresSession(t *testing.T) {
 	statePath := root + "/jobs.json"
 	m := NewJobManager(root, statePath)
 	id, err := m.Start("session-a", "sh", []string{"-c", "printf ok"})
-	if err != nil { t.Fatal(err) }
-	for i := 0; i < 50; i++ { j, _ := m.Get(id); if snapshotJob(j).Status != JobRunning { break }; time.Sleep(10 * time.Millisecond) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		j, _ := m.Get(id)
+		if snapshotJob(j).Status != JobRunning {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	data, err := os.ReadFile(statePath)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	var file jobFile
-	if err := json.Unmarshal(data, &file); err != nil { t.Fatal(err) }
-	if len(file.Jobs) != 1 || file.Jobs[0].SessionID != "session-a" { t.Fatalf("jobs=%+v", file.Jobs) }
+	if err := json.Unmarshal(data, &file); err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Jobs) != 1 || file.Jobs[0].SessionID != "session-a" {
+		t.Fatalf("jobs=%+v", file.Jobs)
+	}
 }
 
 func TestRegistryJobToolsRequireSession(t *testing.T) {
 	root := t.TempDir()
 	r, err := NewRegistry(root)
-	if err != nil { t.Fatal(err) }
-	res := r.Execute(context.Background(), sdkCall("run_job", map[string]any{"command":"sh","args":[]string{"-c","printf ok"}}))
-	if !res.IsError { t.Fatal("expected missing session error") }
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := r.Execute(context.Background(), sdkCall("run_job", map[string]any{"command": "sh", "args": []string{"-c", "printf ok"}}))
+	if !res.IsError {
+		t.Fatal("expected missing session error")
+	}
 	ctx := sdk.WithSessionID(context.Background(), "session-a")
 	call := sdk.ToolCall{Name: "run_job", Arguments: `{"command":"sh","args":["-c","printf ok"]}`}
 	fn := r.handlers[call.Name]
 	content, err := fn(ctx, json.RawMessage(call.Arguments))
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	var payload map[string]string
-	if err := json.Unmarshal([]byte(content), &payload); err != nil { t.Fatal(err) }
-	if payload["job_id"] == "" { t.Fatal("missing job id") }
-	for i := 0; i < 50; i++ { j, _ := r.jobs.Get(payload["job_id"]); if j != nil && snapshotJob(j).Status != JobRunning { return }; time.Sleep(10 * time.Millisecond) }
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["job_id"] == "" {
+		t.Fatal("missing job id")
+	}
+	if err := r.jobs.Wait(payload["job_id"]); err != nil {
+		t.Fatal(err)
+	}
 	j, _ := r.jobs.Get(payload["job_id"])
-	if j != nil && snapshotJob(j).Status == JobRunning { t.Fatal("job still running") }
+	if j == nil || snapshotJob(j).Status == JobRunning {
+		t.Fatal("job still running")
+	}
 }

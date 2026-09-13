@@ -79,7 +79,7 @@ type JobManager struct {
 }
 
 type jobFile struct {
-	Version int          `json:"version"`
+	Version int         `json:"version"`
 	Jobs    []jobResult `json:"jobs"`
 }
 
@@ -217,6 +217,15 @@ func (m *JobManager) Get(id string) (*job, error) {
 		return nil, fmt.Errorf("unknown job: %s", id)
 	}
 	return j, nil
+}
+
+func (m *JobManager) Wait(id string) error {
+	j, err := m.Get(id)
+	if err != nil {
+		return err
+	}
+	<-j.done
+	return nil
 }
 
 func (m *JobManager) GetForSession(sessionID, id string) (*job, error) {

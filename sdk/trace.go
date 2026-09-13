@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -65,4 +66,14 @@ func TraceMessage(event TraceEvent) string {
 	default:
 		return ""
 	}
+}
+
+func ResponseText(resp Response) string {
+	var b strings.Builder
+	for _, part := range resp.Content {
+		if part.Type == ContentText {
+			b.WriteString(part.Text)
+		}
+	}
+	return b.String()
 }

@@ -221,6 +221,6 @@ The concrete transport is `transport/discord`. The authorized Discord owner is c
 
 ## Provider adapters
 
-The prototype contains OpenAI, Anthropic, and Gemini wire adapters. Each adapter supports session-selected API keys and provider-specific base URL injection without mutating the shared adapter instance. Each adapter also implements live model discovery.
+OpenAI Responses (`sdk/providers/openai`) is the central wire interface. `BuildResponsesRequest` produces the canonical request map, and `ParseResponsesResponse` / `ResponsesResponseFromParts` produce the canonical `sdk.Response`. Anthropic and Gemini adapters convert through it (`BuildFromOpenAI` on the request path, `ToOpenAIResponse` on the response path) instead of translating `sdk.Request` directly. Each adapter supports session-selected API keys and provider-specific base URL injection without mutating the shared adapter instance. Each adapter also implements live model discovery. Chat Completions is kept only as a fallback for providers that reject `/responses`.
 
 Key rotation is intentionally not implemented yet; retries reuse the same selected key.

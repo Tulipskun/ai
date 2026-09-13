@@ -99,13 +99,13 @@ func TestAgentToolDefinitionsReachProvider(t *testing.T) {
 	if len(p.requests) != 1 {
 		t.Fatalf("provider calls=%d", len(p.requests))
 	}
-	if len(p.requests[0].Tools) != 3 || p.requests[0].Tools[0].Name != "echo" || p.requests[0].Tools[1].Name != "plan" || p.requests[0].Tools[2].Name != "plan_check" {
+	if len(p.requests[0].Tools) != 5 || p.requests[0].Tools[0].Name != "echo" || p.requests[0].Tools[1].Name != "plan_create" || p.requests[0].Tools[2].Name != "plan_check" || p.requests[0].Tools[3].Name != "plan_update" || p.requests[0].Tools[4].Name != "plan_close" {
 		t.Fatalf("tools not sent: %#v", p.requests[0].Tools)
 	}
 }
 func TestAgentToolThenFinal(t *testing.T) {
 	p := &agentTestProvider{responses: []Response{
-		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan", Arguments: `{"steps":["use the echo tool and return the result"]}`}}},
+		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan_create", Arguments: `{"goal":"report the echo tool result back","steps":["use the echo tool and return the result"]}`}}},
 		{ToolCalls: []ToolCall{{ID: "1", Name: "echo", Arguments: "{}"}}},
 		{ToolCalls: []ToolCall{{ID: "check-1", Name: "plan_check", Arguments: `{"step":1}`}}},
 		{Content: []ContentPart{{Type: ContentText, Text: "finished"}}},
@@ -130,7 +130,7 @@ func TestAgentToolThenFinal(t *testing.T) {
 }
 func TestAgentPreservesReasoningAcrossToolContinuation(t *testing.T) {
 	p := &agentTestProvider{responses: []Response{
-		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan", Arguments: `{"steps":["use the echo tool"]}`}}},
+		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan_create", Arguments: `{"goal":"use the echo tool for the request","steps":["use the echo tool with empty arguments"]}`}}},
 		{Reasoning: &ReasoningState{ID: "rs_123", Text: "think before using the tool"}, ToolCalls: []ToolCall{{ID: "call_1", Name: "echo", Arguments: "{}"}}},
 		{ToolCalls: []ToolCall{{ID: "check-1", Name: "plan_check", Arguments: `{"step":1}`}}},
 		{Content: []ContentPart{{Type: ContentText, Text: "finished"}}},
@@ -161,7 +161,7 @@ func TestAgentPreservesReasoningAcrossToolContinuation(t *testing.T) {
 func TestAgentRunsBeyondPreviousIterationLimit(t *testing.T) {
 	loop := Response{ToolCalls: []ToolCall{{ID: "echo", Name: "echo", Arguments: "{}"}}}
 	responses := make([]Response, 23)
-	responses[0] = Response{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan", Arguments: `{"steps":["loop tools until finished"]}`}}}
+	responses[0] = Response{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan_create", Arguments: `{"goal":"loop the echo tool until finished","steps":["loop the echo tool until the work is finished"]}`}}}
 	for i := 1; i < len(responses)-2; i++ {
 		responses[i] = loop
 	}
@@ -357,7 +357,7 @@ func TestTerminalFailureEmitsTraceError(t *testing.T) {
 
 func TestAgentPlanKeepsRecoveryInCurrentStep(t *testing.T) {
 	p := &agentTestProvider{responses: []Response{
-		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan", Arguments: `{"steps":["build","fix"]}`}}},
+		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan_create", Arguments: `{"goal":"build the project and fix failures","steps":["build the project binary and capture failures","fix the failing code and rerun the checks"]}`}}},
 		{ToolCalls: []ToolCall{{ID: "1", Name: "run", Arguments: `{}`}}},
 		{ToolCalls: []ToolCall{{ID: "2", Name: "edit", Arguments: `{}`}}},
 		{ToolCalls: []ToolCall{
@@ -383,7 +383,7 @@ func TestAgentPlanKeepsRecoveryInCurrentStep(t *testing.T) {
 
 func TestAgentBlocksFinishUntilChecklistComplete(t *testing.T) {
 	p := &agentTestProvider{responses: []Response{
-		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan", Arguments: `{"steps":["first","second"]}`}}},
+		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan_create", Arguments: `{"goal":"finish the two ordered checklist items","steps":["inspect the target file and note the change","apply the fix and verify the output"]}`}}},
 		{Content: []ContentPart{{Type: ContentText, Text: "jumping ahead"}}},
 		{ToolCalls: []ToolCall{
 			{ID: "check-1", Name: "plan_check", Arguments: `{"step":1}`},
@@ -419,5 +419,42 @@ func TestAgentBlocksFinishUntilChecklistComplete(t *testing.T) {
 	}
 	if !reminded {
 		t.Fatal("no plan-incomplete reminder was injected")
+	}
+}
+
+func TestAgentPlanCloseFinishesEarly(t *testing.T) {
+	p := &agentTestProvider{responses: []Response{
+		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan_create", Arguments: `{"goal":"restart the stopped service now","steps":["inspect the stopped service logs for errors","restart the service and verify it responds"]}`}}},
+		{ToolCalls: []ToolCall{{ID: "close-1", Name: "plan_close", Arguments: `{"reason":"the service host is unreachable from this environment","next_steps":"retry when the host is reachable"}`}}},
+		{Content: []ContentPart{{Type: ContentText, Text: "Stopped: host unreachable, retry later"}}},
+	}}
+	c, s := newAgentTestSession(p)
+	tools := &agentTestTools{definitions: []Tool{{Name: "run"}}}
+	a := &Agent{Client: c, Tools: tools, MaxRetries: 0}
+	resp, err := a.RunTurn(context.Background(), s, Turn{Role: RoleUser}, Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ResponseText(resp) != "Stopped: host unreachable, retry later" {
+		t.Fatalf("final=%q", ResponseText(resp))
+	}
+	if p.calls != 3 {
+		t.Fatalf("provider calls=%d, want plan+close+final", p.calls)
+	}
+	var reminded bool
+	for _, turn := range s.History() {
+		if turn.Role == RoleUser {
+			for _, part := range turn.Content {
+				if strings.Contains(part.Text, "Plan incomplete") {
+					reminded = true
+				}
+			}
+		}
+	}
+	if reminded {
+		t.Fatal("closed plan must not inject incomplete reminders")
+	}
+	if !strings.Contains(p.requests[2].SystemPrompt, "Plan CLOSED") {
+		t.Fatalf("closed state missing from prompt: %q", p.requests[2].SystemPrompt)
 	}
 }

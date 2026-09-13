@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/Tulipskun/ai/sdk"
-	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -93,11 +92,48 @@ func TestToolTraceStateUpdateReplacesNewestMatch(t *testing.T) {
 }
 
 func TestTraceFlushDelaySpacesSnapshots(t *testing.T) {
-	if got := traceFlushDelay(time.Time{}); got != 0 { t.Fatalf("first snapshot should push immediately, got %v", got) }
-	if got := traceFlushDelay(time.Now().Add(-2 * traceFlushInterval)); got != 0 { t.Fatalf("overdue snapshot should push immediately, got %v", got) }
-	if got := traceFlushDelay(time.Now()); got <= 0 || got > traceFlushInterval {
+	if got := traceFlushDelay(0); got != 0 { t.Fatalf("first snapshot should push immediately, got %v", got) }
+	if got := traceFlushDelay(nowMillis() - 2000); got != 0 { t.Fatalf("overdue snapshot should push immediately, got %v", got) }
+	if got := traceFlushDelay(nowMillis()); got <= 0 || got > traceFlushInterval {
 		t.Fatalf("recent push should space the next snapshot by one interval, got %v", got)
 	}
+}
+
+func TestTimestampHelpersAlignToSecondBoundary(t *testing.T) {
+	now := nowMillis()
+	if sec := floorSecond(now); sec%1000 != 0 {
+		t.Fatalf("floorSecond(%d) = %d, remainder != 0", now, sec)
+	}
+	if sec := floorSecond(now); sec > now || now-sec >= millisPerSecond {
+		t.Fatalf("floorSecond(%d) = %d, out of range", now, sec)
+	}
+	for i := 0; i < 100; i++ {
+		if d := delayToNextSecond(); d <= 0 || d > traceFlushInterval {
+			t.Fatalf("delay to next second = %s, want (0, 1s]", d)
+		}
+	}
+}
+
+func TestTickTurnFooterPushesOncePerSecondBoundary(t *testing.T) {
+	g := &Gateway{toolTrace: map[string]*toolTraceState{}}
+	g.startTurnFooter("c1")
+	state := g.toolTrace["c1"]
+	state.lastFooterSecMs = floorSecond(nowMillis())
+	state.dirty = false
+	g.tickTurnFooter("c1")
+	if state.dirty {
+		t.Fatal("tick within the same second boundary must not push")
+	}
+	state.lastFooterSecMs = floorSecond(nowMillis()) - millisPerSecond
+	state.dirty = false
+	g.tickTurnFooter("c1")
+	if !state.dirty {
+		t.Fatal("tick on a new second boundary must push")
+	}
+	if state.lastFooterSecMs%1000 != 0 {
+		t.Fatalf("footer second = %d, remainder != 0", state.lastFooterSecMs)
+	}
+	g.stopTurnFooter("c1")
 }
 
 func TestAppendTraceItemStartsFreshEmbedOnModeSwitch(t *testing.T) {
@@ -182,7 +218,7 @@ func TestTurnFooterLifecycle(t *testing.T) {
 	g := &Gateway{toolTrace: map[string]*toolTraceState{}}
 	g.startTurnFooter("c1")
 	state := g.toolTrace["c1"]
-	if state == nil || !state.footerActive || state.turnStart.IsZero() {
+	if state == nil || !state.footerActive || state.turnStartMs == 0 {
 		t.Fatalf("footer not started: %+v", state)
 	}
 	if state.footerTimer == nil {
@@ -204,20 +240,20 @@ func TestTurnFooterLifecycle(t *testing.T) {
 func TestTurnFooterStartKeepsOriginalClock(t *testing.T) {
 	g := &Gateway{toolTrace: map[string]*toolTraceState{}}
 	g.startTurnFooter("c1")
-	first := g.toolTrace["c1"].turnStart
+	first := g.toolTrace["c1"].turnStartMs
 	g.updateTurnFooterUsage("c1", sdk.Usage{InputTokens: 50})
 	g.startTurnFooter("c1")
-	if !g.toolTrace["c1"].turnStart.Equal(first) {
+	if g.toolTrace["c1"].turnStartMs != first {
 		t.Fatal("retry attempts must not restart the turn clock")
 	}
 	g.stopTurnFooter("c1")
 }
 
 func TestTraceFlushDelayHonorsCooldown(t *testing.T) {
-	if d := traceFlushDelay(time.Now().Add(traceCooldownOnError)); d < traceCooldownOnError {
+	if d := traceFlushDelay(nowMillis() + traceCooldownOnError.Milliseconds()); d < traceCooldownOnError {
 		t.Fatalf("cooldown delay = %s, want >= %s", d, traceCooldownOnError)
 	}
-	if d := traceFlushDelay(time.Now().Add(-2 * time.Second)); d != 0 {
+	if d := traceFlushDelay(nowMillis() - 2000); d != 0 {
 		t.Fatalf("stale push delay = %s, want 0", d)
 	}
 }

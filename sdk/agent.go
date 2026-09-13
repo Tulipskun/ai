@@ -195,7 +195,7 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		}
 
 		if len(resp.ToolCalls) == 0 {
-			if executor != nil && executor.HasIncomplete() && planNudges < maxPlanIncompleteNudges {
+			if executor != nil && executor.HasIncomplete() && !executor.IsClosed() && planNudges < maxPlanIncompleteNudges {
 				planNudges++
 				session.Append(executor.planReminderTurn())
 				continue
@@ -342,7 +342,7 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 
 		commitResponse(session, resp)
 		if len(resp.ToolCalls) == 0 {
-			if executor != nil && executor.HasIncomplete() && planNudges < maxPlanIncompleteNudges {
+			if executor != nil && executor.HasIncomplete() && !executor.IsClosed() && planNudges < maxPlanIncompleteNudges {
 				planNudges++
 				session.Append(executor.planReminderTurn())
 				continue

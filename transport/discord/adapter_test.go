@@ -234,7 +234,7 @@ func TestFormatElapsed(t *testing.T) {
 }
 
 func TestTurnFooterText(t *testing.T) {
-	state := &toolTraceState{turnStart: time.Now().Add(-416 * time.Second), turnUsage: sdk.Usage{InputTokens: 7000000, CacheReadTokens: 6500000, OutputTokens: 15000}}
+	state := &toolTraceState{turnStartMs: nowMillis() - 416*millisPerSecond, turnUsage: sdk.Usage{InputTokens: 7000000, CacheReadTokens: 6500000, OutputTokens: 15000}}
 	got := turnFooterText(state)
 	want := "in: 7.0M/6.5M · out: 15k · ⏱ 6m 56s"
 	if got != want {

@@ -23,6 +23,8 @@ import (
 	discordtransport "github.com/Tulipskun/ai/transport/discord"
 )
 
+var version = "dev"
+
 func main() {
 	command, err := parseCommand(os.Args[1:])
 	if errors.Is(err, errHelp) {

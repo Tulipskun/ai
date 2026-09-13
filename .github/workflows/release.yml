@@ -19,6 +19,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.name }}
+      sha: ${{ steps.tag.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -26,14 +29,37 @@ jobs:
           go-version-file: go.mod
       - name: Test
         run: go test ./... -timeout 2m
+      - name: Resolve release tag
+        id: tag
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            tag="${{ github.ref_name }}"
+          elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            existing="$(git tag --points-at HEAD | grep -E '^v1\.[0-9]+$' | sort -V | tail -n 1 || true)"
+            if [[ -n "$existing" ]]; then
+              tag="$existing"
+            else
+              max="$(git tag -l 'v1.*' | sed -E 's/^v1\.//' | grep -E '^[0-9]+$' | sort -n | tail -n 1 || true)"
+              if [[ -z "$max" ]]; then next=0; else next=$((max + 1)); fi
+              tag="v1.$next"
+            fi
+          fi
+          echo "name=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
       - name: Build (linux arm64 only)
         env:
           GOOS: linux
           GOARCH: arm64
           CGO_ENABLED: '0'
+          VERSION: ${{ steps.tag.outputs.name }}
         run: |
           mkdir -p dist
-          go build -trimpath -ldflags '-s -w' -o dist/ai-linux-arm64 ./cmd/ai
+          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o dist/ai-linux-arm64 ./cmd/ai
+          printf '%s\n' "${VERSION}" > dist/release-version.txt
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
@@ -58,31 +84,11 @@ jobs:
           chmod 0755 dist/ai-linux-arm64
           (cd dist && sha256sum ai-linux-arm64 > checksums.txt)
           cat dist/checksums.txt
-      - name: Resolve release tag
-        id: tag
-        run: |
-          set -euo pipefail
-          git fetch --tags --force
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            echo "name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
-            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            existing="$(git tag --points-at HEAD | grep -E '^v1\.[0-9]+$' | sort -V | tail -n 1 || true)"
-            if [[ -n "$existing" ]]; then
-              echo "name=$existing" >> "$GITHUB_OUTPUT"
-            else
-              max="$(git tag -l 'v1.*' | sed -E 's/^v1\.//' | grep -E '^[0-9]+$' | sort -n | tail -n 1 || true)"
-              if [[ -z "$max" ]]; then next=0; else next=$((max + 1)); fi
-              echo "name=v1.$next" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-          echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.tag.outputs.name }}
-          SHA: ${{ steps.tag.outputs.sha }}
+          TAG: ${{ needs.build.outputs.tag }}
+          SHA: ${{ needs.build.outputs.sha }}
         run: |
           set -euo pipefail
           if ! git rev-parse "$TAG" >/dev/null 2>&1; then
@@ -102,4 +108,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view "${{ steps.tag.outputs.name }}" --repo "${{ github.repository }}"
+          gh release view "${{ needs.build.outputs.tag }}" --repo "${{ github.repository }}"

@@ -33,7 +33,7 @@ jobs:
           start = s.find('\nconst ReplyMarker = ')
           end = s.find('\ntype TraceFunc', start)
           if start >= 0 and end >= 0:
-              s = s[:start] + '\n' + s[s.find('\nfunc TraceMessage', start):end] + s[end:]
+              s = s[:start] + s[end:]
           p.write_text(s)
 
           p = Path('cmd/ai/main.go')
@@ -51,28 +51,27 @@ jobs:
           ]
           for name in names:
               marker = f'func {name}('
-              while True:
-                  pos = s.find(marker)
-                  if pos < 0:
-                      break
-                  i = s.find('{', pos)
-                  depth = 0
-                  while i < len(s):
-                      if s[i] == '{':
-                          depth += 1
-                      elif s[i] == '}':
-                          depth -= 1
-                          if depth == 0:
+              pos = s.find(marker)
+              if pos < 0:
+                  continue
+              i = s.find('{', pos)
+              depth = 0
+              while i < len(s):
+                  if s[i] == '{':
+                      depth += 1
+                  elif s[i] == '}':
+                      depth -= 1
+                      if depth == 0:
+                          i += 1
+                          while i < len(s) and s[i] in '\r\n':
                               i += 1
-                              while i < len(s) and s[i] in '\r\n':
-                                  i += 1
-                              s = s[:pos] + s[i:]
-                              break
-                      i += 1
+                          s = s[:pos] + s[i:]
+                          break
+                  i += 1
           p.write_text(s)
           PY
           gofmt -w sdk/agent.go sdk/trace.go cmd/ai/main.go sdk/agent_test.go
-          go test ./...
+          git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add sdk/agent.go sdk/trace.go cmd/ai/main.go sdk/agent_test.go

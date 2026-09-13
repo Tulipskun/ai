@@ -2,7 +2,6 @@ package sdk
 
 import (
 	"context"
-	"strings"
 	"time"
 )
 
@@ -18,7 +17,7 @@ const (
 	TraceToolResult      TraceStage = "tool_result"
 	TraceResponse        TraceStage = "response"
 	TraceRetryWait       TraceStage = "retry_wait"
-	TraceError           TraceStage = "error"
+	TraceError            TraceStage = "error"
 )
 
 type TraceEvent struct {
@@ -35,7 +34,6 @@ type TraceEvent struct {
 
 type TraceFunc func(context.Context, TraceEvent)
 
-// TraceMessage returns the canonical, transport-neutral description of a lifecycle event.
 func TraceMessage(event TraceEvent) string {
 	if event.Message != "" {
 		return event.Message

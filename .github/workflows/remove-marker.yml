@@ -20,19 +20,20 @@ jobs:
 
           p = Path('sdk/agent.go')
           s = p.read_text()
+          s = s.replace('\t"strings"\n', '')
           s = s.replace('\tmaxMarkerNudges        = 2\n', '')
           s = s.replace('\nfunc markerEnforced(req Request) bool { return strings.Contains(req.SystemPrompt, ReplyMarker) }\n', '\n')
           s = s.replace('\tnudges := 0\n', '')
-          s = s.replace('\t\tif len(resp.ToolCalls) == 0 {\n\t\t\tif nudges < maxMarkerNudges && markerEnforced(req) && len(resp.Content) > 0 && !HasReplyMarker(resp) {\n\t\t\t\tnudges++\n\t\t\t\tnudge := Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: markerNudgeText}}}\n\t\t\t\tsession.Append(nudge)\n\t\t\t\tcontinue\n\t\t\t}\n', '\t\tif len(resp.ToolCalls) == 0 {\n')
-          s = s.replace('\t\tif len(resp.ToolCalls) == 0 {\n\t\t\tif nudges < maxMarkerNudges && markerEnforced(req) && len(resp.Content) > 0 && !HasReplyMarker(resp) {\n\t\t\t\tnudges++\n\t\t\t\tnudge := Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: markerNudgeText}}}\n\t\t\t\tsession.Append(nudge)\n\t\t\t\tcontinue\n\t\t\t}\n', '\t\tif len(resp.ToolCalls) == 0 {\n')
+          block = '''\t\tif len(resp.ToolCalls) == 0 {\n\t\t\tif nudges < maxMarkerNudges && markerEnforced(req) && len(resp.Content) > 0 && !HasReplyMarker(resp) {\n\t\t\t\tnudges++\n\t\t\t\tnudge := Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: markerNudgeText}}}\n\t\t\t\tsession.Append(nudge)\n\t\t\t\tcontinue\n\t\t\t}\n'''
+          s = s.replace(block, '\t\tif len(resp.ToolCalls) == 0 {\n')
           p.write_text(s)
 
           p = Path('sdk/trace.go')
           s = p.read_text()
           start = s.find('\nconst ReplyMarker = ')
-          if start >= 0:
-              end = s.find('\ntype TraceFunc', start)
-              s = s[:start] + s[end:]
+          end = s.find('\ntype TraceFunc', start)
+          if start >= 0 and end >= 0:
+              s = s[:start] + '\n' + s[s.find('\nfunc TraceMessage', start):end] + s[end:]
           p.write_text(s)
 
           p = Path('cmd/ai/main.go')
@@ -50,31 +51,31 @@ jobs:
           ]
           for name in names:
               marker = f'func {name}('
-              pos = s.find(marker)
-              if pos < 0:
-                  continue
-              depth = 0
-              i = s.find('{', pos)
-              while i < len(s):
-                  if s[i] == '{': depth += 1
-                  elif s[i] == '}':
-                      depth -= 1
-                      if depth == 0:
-                          i += 1
-                          while i < len(s) and s[i] in '\\r\\n': i += 1
-                          s = s[:pos] + s[i:]
-                          break
-                  i += 1
+              while True:
+                  pos = s.find(marker)
+                  if pos < 0:
+                      break
+                  i = s.find('{', pos)
+                  depth = 0
+                  while i < len(s):
+                      if s[i] == '{':
+                          depth += 1
+                      elif s[i] == '}':
+                          depth -= 1
+                          if depth == 0:
+                              i += 1
+                              while i < len(s) and s[i] in '\r\n':
+                                  i += 1
+                              s = s[:pos] + s[i:]
+                              break
+                      i += 1
           p.write_text(s)
           PY
           gofmt -w sdk/agent.go sdk/trace.go cmd/ai/main.go sdk/agent_test.go
           go test ./...
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add sdk/agent.go sdk/trace.go cmd/ai/main.go sdk/agent_test.go .github/workflows/remove-marker.yml
+          git add sdk/agent.go sdk/trace.go cmd/ai/main.go sdk/agent_test.go
           git rm .github/workflows/remove-marker.yml
-          if git diff --cached --quiet; then
-            exit 0
-          fi
           git commit -m 'fix: remove reply marker protocol'
           git push origin HEAD:main

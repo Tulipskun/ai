@@ -13,43 +13,25 @@ const (
 	TraceProviderReady   TraceStage = "provider_ready"
 	TraceResponseText    TraceStage = "response_text"
 	TraceResponseContent TraceStage = "response_content"
-	TraceToolCall         TraceStage = "tool_call"
-	TraceToolRunning      TraceStage = "tool_running"
-	TraceToolResult       TraceStage = "tool_result"
-	TraceResponse         TraceStage = "response"
-	TraceRetryWait        TraceStage = "retry_wait"
-	TraceError            TraceStage = "error"
+	TraceToolCall        TraceStage = "tool_call"
+	TraceToolRunning     TraceStage = "tool_running"
+	TraceToolResult      TraceStage = "tool_result"
+	TraceResponse        TraceStage = "response"
+	TraceRetryWait       TraceStage = "retry_wait"
+	TraceError           TraceStage = "error"
 )
 
 type TraceEvent struct {
 	Stage      TraceStage    `json:"stage"`
 	Message    string        `json:"message,omitempty"`
 	Response   *Response     `json:"response,omitempty"`
-	ToolCall   *ToolCall    `json:"tool_call,omitempty"`
-	ToolResult *ToolResult  `json:"tool_result,omitempty"`
+	ToolCall   *ToolCall     `json:"tool_call,omitempty"`
+	ToolResult *ToolResult   `json:"tool_result,omitempty"`
 	Text       string        `json:"text,omitempty"`
 	Err        error         `json:"-"`
 	RetryAfter time.Duration `json:"retry_after,omitempty"`
 	Elapsed    time.Duration `json:"elapsed,omitempty"`
 }
-
-const ReplyMarker = "\u2728\u2728\u2728"
-
-func ResponseText(resp Response) string {
-	var b strings.Builder
-	for _, part := range resp.Content {
-		if part.Type == ContentText {
-			b.WriteString(part.Text)
-		}
-	}
-	return b.String()
-}
-
-func HasReplyMarker(resp Response) bool {
-	return strings.HasPrefix(strings.TrimSpace(ResponseText(resp)), ReplyMarker)
-}
-
-const markerNudgeText = "You stopped without calling any tool. Please continue the task now: call the tools you need in this response instead of only describing them. Start your reply with \u2728\u2728\u2728."
 
 type TraceFunc func(context.Context, TraceEvent)
 

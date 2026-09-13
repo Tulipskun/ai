@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 )
@@ -32,10 +31,7 @@ type Agent struct {
 const (
 	defaultAgentMaxRetries = 6
 	maxRetryCooldown       = 96 * time.Second
-	maxMarkerNudges        = 2
 )
-
-func markerEnforced(req Request) bool { return strings.Contains(req.SystemPrompt, ReplyMarker) }
 
 func (a *Agent) RunTurn(ctx context.Context, session *Session, user Turn, req Request) (Response, error) {
 	return a.runTurn(ctx, session, user, req, nil, nil)
@@ -159,7 +155,6 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 }
 
 func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
-	nudges := 0
 	executor := newPlanningToolExecutor(a.Tools)
 	session.Append(user)
 	if req.Stream {
@@ -199,12 +194,6 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		}
 
 		if len(resp.ToolCalls) == 0 {
-			if nudges < maxMarkerNudges && markerEnforced(req) && len(resp.Content) > 0 && !HasReplyMarker(resp) {
-				nudges++
-				nudge := Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: markerNudgeText}}}
-				session.Append(nudge)
-				continue
-			}
 			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
 			return resp, nil
 		}
@@ -257,7 +246,6 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 }
 
 func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
-	nudges := 0
 	executor := newPlanningToolExecutor(a.Tools)
 	baseSystemPrompt := req.SystemPrompt
 	for {
@@ -347,12 +335,6 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 
 		commitResponse(session, resp)
 		if len(resp.ToolCalls) == 0 {
-			if nudges < maxMarkerNudges && markerEnforced(req) && len(resp.Content) > 0 && !HasReplyMarker(resp) {
-				nudges++
-				nudge := Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: markerNudgeText}}}
-				session.Append(nudge)
-				continue
-			}
 			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
 			return resp, nil
 		}
@@ -443,7 +425,7 @@ func cloneResponseContent(in Response) *Response {
 	return &Response{Provider: in.Provider, Model: in.Model, Content: append([]ContentPart(nil), in.Content...), Reasoning: in.Reasoning, Usage: in.Usage}
 }
 
-func cloneToolCall(in ToolCall) *ToolCall { out := in; return &out }
+func cloneToolCall(in ToolCall) *ToolCall       { out := in; return &out }
 func cloneToolResult(in ToolResult) *ToolResult { out := in; return &out }
 
 func retryableAgentError(ctx context.Context, err error) bool {

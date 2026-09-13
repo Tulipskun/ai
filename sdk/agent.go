@@ -161,6 +161,7 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		return a.runStreamAttempt(ctx, session, req, trace, backoff, entry)
 	}
 	baseSystemPrompt := req.SystemPrompt
+	planNudges := 0
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -168,7 +169,7 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		}
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
 		if executor != nil {
-			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt)
+			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt) + executor.systemPromptExtra()
 			req.Tools = executor.Definitions()
 		} else {
 			req.SystemPrompt = baseSystemPrompt
@@ -194,6 +195,11 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		}
 
 		if len(resp.ToolCalls) == 0 {
+			if executor != nil && executor.HasIncomplete() && planNudges < maxPlanIncompleteNudges {
+				planNudges++
+				session.Append(executor.planReminderTurn())
+				continue
+			}
 			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
 			return resp, nil
 		}
@@ -248,13 +254,14 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
 	executor := newPlanningToolExecutor(a.Tools)
 	baseSystemPrompt := req.SystemPrompt
+	planNudges := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return Response{}, err
 		}
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
 		if executor != nil {
-			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt)
+			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt) + executor.systemPromptExtra()
 			req.Tools = executor.Definitions()
 		} else {
 			req.SystemPrompt = baseSystemPrompt
@@ -335,6 +342,11 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 
 		commitResponse(session, resp)
 		if len(resp.ToolCalls) == 0 {
+			if executor != nil && executor.HasIncomplete() && planNudges < maxPlanIncompleteNudges {
+				planNudges++
+				session.Append(executor.planReminderTurn())
+				continue
+			}
 			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
 			return resp, nil
 		}

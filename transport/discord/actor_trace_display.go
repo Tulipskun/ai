@@ -15,7 +15,7 @@ import (
 const (
 	mainAgentEmbedColor    = 0x5865F2
 	subAgentEmbedColor     = 0x57F287
-	traceFlushDelay        = 350 * time.Millisecond
+	actorTraceFlushDelay   = 350 * time.Millisecond
 	actorTraceMaxEmbedSize = 4000
 )
 
@@ -29,7 +29,7 @@ type actorTraceState struct {
 var actorTraceMu sync.Mutex
 var actorTraceStates = make(map[string]*actorTraceState)
 
-func (g *Gateway) Display(ctx context.Context, output sdk.Output) error {
+func (g *Gateway) displayActorOutput(ctx context.Context, output sdk.Output) error {
 	if g == nil {
 		return errors.New("discord: gateway is not initialized")
 	}
@@ -257,7 +257,7 @@ func (g *Gateway) scheduleActorTraceFlushLocked(channelID, key, actor, jobID str
 	if state.timer != nil {
 		return
 	}
-	state.timer = time.AfterFunc(traceFlushDelay, func() {
+	state.timer = time.AfterFunc(actorTraceFlushDelay, func() {
 		_ = g.actorTraceFlush(context.Background(), channelID, key, actor, jobID)
 	})
 }
@@ -324,5 +324,3 @@ func paginateActorText(text string, max int) []string {
 	}
 	return pages
 }
-
-var _ sdk.Display = (*Gateway)(nil)

@@ -98,7 +98,10 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, key, actor, 
 		if trace.ToolCall == nil {
 			return nil
 		}
-		return g.actorTraceAppend(ctx, channelID, key, actor, jobID, withElapsed(formatActorToolCall(trace.ToolCall), trace.Elapsed), false)
+		if err := g.actorTraceAppend(ctx, channelID, key, actor, jobID, withElapsed(formatActorToolCall(trace.ToolCall), trace.Elapsed), false); err != nil {
+			return err
+		}
+		return g.actorTraceFlush(ctx, channelID, key, actor, jobID)
 	case sdk.TraceToolRunning:
 		return nil
 	case sdk.TraceToolResult:
@@ -132,13 +135,13 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, key, actor, 
 
 func formatActorToolCall(call *sdk.ToolCall) string {
 	if call == nil {
-		return "tool()"
+		return "tool"
 	}
-	args := strings.TrimSpace(call.Arguments)
-	if args == "" {
-		return call.Name + "()"
+	name := strings.TrimSpace(call.Name)
+	if name == "" {
+		return "tool"
 	}
-	return truncateOneLine(fmt.Sprintf("%s(%s)", call.Name, args), maxToolTraceLength)
+	return truncateOneLine("tool: "+name, maxToolTraceLength)
 }
 
 func formatActorToolResult(call *sdk.ToolCall, result *sdk.ToolResult) string {

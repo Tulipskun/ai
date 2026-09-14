@@ -5,15 +5,6 @@ func (a *Agent) SetSubAgentSinks(completion func(SubAgentEvent), trace func(SubA
 		return
 	}
 	manager := a.subAgentManager()
-	manager.SetEventSink(func(event SubAgentEvent) {
-		if event.Trace != nil {
-			if trace != nil {
-				trace(event)
-			}
-			return
-		}
-		if completion != nil {
-			completion(event)
-		}
-	})
+	manager.SetEventSink(completion)
+	manager.SetTraceSink(trace)
 }

@@ -100,7 +100,7 @@ Project Requirements (repository source of truth):
 			t.Fatalf("Main Agent prompt still exposes execution instruction %q: %s", forbidden, got)
 		}
 	}
-	if !strings.Contains(got, "You are the Main Agent") || !strings.Contains(got, "do not have execution tools") {
+	if !strings.Contains(got, "You are the Main Agent") || !strings.Contains(got, "no execution tools") {
 		t.Fatalf("Main Agent role instruction missing: %s", got)
 	}
 }

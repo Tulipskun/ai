@@ -1,19 +1,19 @@
-# Product Requirements
+# ข้อกำหนดผลิตภัณฑ์
 
-## Purpose
+## วัตถุประสงค์
 
-`ai` is a Go-based AI Harness that provides a provider-neutral Agent runtime with CLI and Discord transports, persistent sessions, tools, browser automation, and provider routing.
+`ai` คือ AI Harness ที่พัฒนาด้วย Go ซึ่งให้ Agent runtime ที่ไม่ผูกกับ provider รายใดรายหนึ่ง พร้อม transport สำหรับ CLI และ Discord, session แบบถาวร, tools, browser automation และการ routing ไปยัง provider
 
-## Goals
+## เป้าหมาย
 
-- Keep the Harness core independent from any single transport.
-- Let the Agent reason through tool calls and continue execution from tool results.
-- Keep provider-specific wire formats behind adapters and a canonical request/response model.
-- Preserve session state so work can continue safely across turns and process restarts.
-- Make project behavior explicit and maintainable as requirements evolve.
+- ทำให้แกนกลางของ Harness ไม่ขึ้นกับ transport รายใดรายหนึ่ง
+- ให้ Agent สามารถประมวลผล tool call และทำงานต่อจากผลลัพธ์ของ tool ได้
+- ซ่อนรูปแบบ wire format เฉพาะของแต่ละ provider ไว้หลัง adapter และแปลงผ่าน request/response model กลาง
+- รักษาสถานะของ session เพื่อให้สามารถทำงานต่อได้อย่างปลอดภัยเมื่อเปลี่ยน turn หรือ process ถูก restart
+- ทำให้พฤติกรรมของโปรเจคมีข้อกำหนดที่ชัดเจนและดูแลรักษาได้เมื่อ requirements เปลี่ยนแปลง
 
-## Non-goals
+## สิ่งที่ไม่ใช่เป้าหมาย
 
-- Treating AI memory or chat history as the authoritative project specification.
-- Storing project requirements only inside a system prompt.
-- Coupling the core Agent to Discord, CLI, or one provider.
+- ใช้ memory หรือ chat history ของ AI เป็น specification หลักของโปรเจค
+- เก็บ project requirements ไว้เฉพาะใน system prompt
+- ผูก core Agent เข้ากับ Discord, CLI หรือ provider รายใดรายหนึ่ง

@@ -19,19 +19,47 @@ type ToolExecutor interface {
 }
 
 type Agent struct {
-	Client     *RouterClient
-	Tools      ToolExecutor
-	MaxRetries int
+	Client          *RouterClient
+	Tools           ToolExecutor
+	MaxRetries      int
+	DisablePlanning bool
+	SubAgentConfig  SubAgentConfig
 
-	interruptMu sync.Mutex
-	interrupts  map[string]context.CancelFunc
-	interrupted map[string]bool
+	subAgentMu        sync.Mutex
+	subAgents         *subAgentManager
+	subAgentEventSink func(SubAgentEvent)
+	interruptMu       sync.Mutex
+	interrupts        map[string]context.CancelFunc
+	interrupted       map[string]bool
 }
 
 const (
 	defaultAgentMaxRetries = 6
 	maxRetryCooldown       = 96 * time.Second
 )
+
+func (a *Agent) SetSubAgentEventSink(sink func(SubAgentEvent)) {
+	if a == nil {
+		return
+	}
+	a.subAgentMu.Lock()
+	a.subAgentEventSink = sink
+	manager := a.subAgents
+	a.subAgentMu.Unlock()
+	if manager != nil {
+		manager.SetEventSink(sink)
+	}
+}
+
+func (a *Agent) subAgentManager() *subAgentManager {
+	a.subAgentMu.Lock()
+	defer a.subAgentMu.Unlock()
+	if a.subAgents == nil {
+		a.subAgents = newSubAgentManager(a, a.SubAgentConfig)
+		a.subAgents.SetEventSink(a.subAgentEventSink)
+	}
+	return a.subAgents
+}
 
 func (a *Agent) RunTurn(ctx context.Context, session *Session, user Turn, req Request) (Response, error) {
 	return a.runTurn(ctx, session, user, req, nil, nil)
@@ -155,13 +183,20 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 }
 
 func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
-	executor := newPlanningToolExecutor(a.Tools)
+	var executor ToolExecutor
+	if !a.DisablePlanning {
+		executor = newPlanningToolExecutor(a.Tools, session)
+	} else {
+		executor = a.Tools
+	}
+	if planner, ok := executor.(*planningToolExecutor); ok && a.SubAgentConfig.Enabled {
+		planner.ConfigureSubAgent(&subAgentRunner{manager: a.subAgentManager(), parent: session})
+	}
 	session.Append(user)
 	if req.Stream {
 		return a.runStreamAttempt(ctx, session, req, trace, backoff, entry)
 	}
 	baseSystemPrompt := req.SystemPrompt
-	planNudges := 0
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -169,7 +204,7 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		}
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
 		if executor != nil {
-			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt) + executor.systemPromptExtra()
+			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt)
 			req.Tools = executor.Definitions()
 		} else {
 			req.SystemPrompt = baseSystemPrompt
@@ -195,11 +230,6 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		}
 
 		if len(resp.ToolCalls) == 0 {
-			if executor != nil && executor.HasIncomplete() && !executor.IsClosed() && planNudges < maxPlanIncompleteNudges {
-				planNudges++
-				session.Append(executor.planReminderTurn())
-				continue
-			}
 			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
 			return resp, nil
 		}
@@ -252,16 +282,23 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 }
 
 func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
-	executor := newPlanningToolExecutor(a.Tools)
+	var executor ToolExecutor
+	if !a.DisablePlanning {
+		executor = newPlanningToolExecutor(a.Tools, session)
+	} else {
+		executor = a.Tools
+	}
+	if planner, ok := executor.(*planningToolExecutor); ok && a.SubAgentConfig.Enabled {
+		planner.ConfigureSubAgent(&subAgentRunner{manager: a.subAgentManager(), parent: session})
+	}
 	baseSystemPrompt := req.SystemPrompt
-	planNudges := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return Response{}, err
 		}
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
 		if executor != nil {
-			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt) + executor.systemPromptExtra()
+			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt)
 			req.Tools = executor.Definitions()
 		} else {
 			req.SystemPrompt = baseSystemPrompt
@@ -342,11 +379,6 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 
 		commitResponse(session, resp)
 		if len(resp.ToolCalls) == 0 {
-			if executor != nil && executor.HasIncomplete() && !executor.IsClosed() && planNudges < maxPlanIncompleteNudges {
-				planNudges++
-				session.Append(executor.planReminderTurn())
-				continue
-			}
 			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
 			return resp, nil
 		}

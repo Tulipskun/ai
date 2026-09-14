@@ -167,13 +167,8 @@ func runSystemConfig(args []string) error {
 		return err
 	}
 	path := filepath.Join(state, runtime.DefaultSystemConfigPath)
-	current, err := runtime.LoadSystemConfig(path)
-	if err != nil {
-		return err
-	}
 	if len(args) >= 1 && args[0] == "clear" {
-		current.SystemPrompt = ""
-		if err := runtime.SaveSystemConfig(path, current); err != nil {
+		if err := runtime.SaveSystemConfig(path, runtime.SystemConfig{}); err != nil {
 			return err
 		}
 		fmt.Printf("System prompt cleared, using built-in default. Config: %s\n", path)
@@ -184,8 +179,7 @@ func runSystemConfig(args []string) error {
 		if text == "" {
 			return errors.New("system: usage is 'ai system set <prompt>'")
 		}
-		current.SystemPrompt = text
-		if err := runtime.SaveSystemConfig(path, current); err != nil {
+		if err := runtime.SaveSystemConfig(path, runtime.SystemConfig{SystemPrompt: text}); err != nil {
 			return err
 		}
 		fmt.Printf("System prompt saved to %s\n", path)
@@ -537,17 +531,16 @@ func run(ctx context.Context, cliOnly bool) error {
 		return err
 	}
 	providerManager := runtime.NewProviderManager(providerConfigPath, rt, providerFile)
-	sysCfg, err := runtime.LoadSystemConfig(filepath.Join(state, runtime.DefaultSystemConfigPath))
+	maxOutputTokens, err := envInt("AI_MAX_OUTPUT_TOKENS")
 	if err != nil {
 		return err
 	}
-	maxOutputTokens := sysCfg.MaxOutputTokens
 	sessionDB := filepath.Join(state, "data", "sessions.db")
-	providerID := sysCfg.Provider
+	providerID := strings.TrimSpace(os.Getenv("AI_PROVIDER"))
 	if providerID == "" && len(rt.ProviderConfigs) == 1 {
 		providerID = string(rt.ProviderConfigs[0].ID)
 	}
-	modelID := sysCfg.Model
+	modelID := strings.TrimSpace(os.Getenv("AI_MODEL"))
 	sessions := runtime.NewSessionManagerWithProviders(sessionDB, sdk.SessionConfig{Provider: sdk.ProviderID(providerID), Model: modelID}, rt.ProviderConfigs)
 	defer sessions.Close()
 	browserConfig, err := runtime.LoadBrowserConfig(filepath.Join(state, runtime.DefaultBrowserConfigPath))
@@ -568,7 +561,7 @@ func run(ctx context.Context, cliOnly bool) error {
 	if !cliOnly && !transportConfig.Discord.Enabled {
 		log.Printf("no Discord transport enabled; configure config/entry.json")
 	}
-	workspace, err := resolveWorkspace(sysCfg.Workspace)
+	workspace, err := resolveWorkspace()
 	if err != nil {
 		return err
 	}
@@ -684,35 +677,60 @@ func newAgent(client *sdk.RouterClient, workspace string, browser *tools.Browser
 	if err != nil {
 		return nil, err
 	}
-	return &sdk.Agent{Client: client, Tools: registry}, nil
+	agent := &sdk.Agent{Client: client, Tools: registry}
+	state := filepath.Dir(filepath.Dir(jobsPath))
+	cfg, err := runtime.LoadSystemConfig(filepath.Join(state, runtime.DefaultSystemConfigPath))
+	if err != nil {
+		return nil, err
+	}
+	agent.SubAgentConfig = sdk.SubAgentConfig{
+		Enabled:         cfg.SubAgent.Enabled,
+		Provider:        cfg.SubAgent.Provider,
+		Model:           cfg.SubAgent.Model,
+		MaxOutputTokens: cfg.SubAgent.MaxOutputTokens,
+		Temperature:     cfg.SubAgent.Temperature,
+		ThinkingLevel:   cfg.SubAgent.ThinkingLevel,
+		SystemPrompt:    cfg.SubAgent.SystemPrompt,
+		Workspace:       workspace,
+	}
+	if agent.SubAgentConfig.SystemPrompt == "" {
+		agent.SubAgentConfig.SystemPrompt = "You are the worker sub-agent. Execute only the task assigned by the planner inside the current project workspace. Do not communicate with the end user. Do not change project scope. Inspect, implement, validate, and report the result back to the planner."
+	}
+	return agent, nil
+}
+func envOr(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
 }
 func systemPrompt(agent *sdk.Agent) string {
-	state, err := stateRoot()
-	if err != nil {
-		return defaultSystemPrompt(agent)
+	base := ""
+	if value := strings.TrimSpace(os.Getenv("AI_SYSTEM_PROMPT")); value != "" {
+		base = value
+	} else if state, err := stateRoot(); err == nil {
+		if cfg, err := runtime.LoadSystemConfig(filepath.Join(state, runtime.DefaultSystemConfigPath)); err == nil {
+			base = cfg.SystemPrompt
+		}
 	}
-	return systemPromptWithState(state, agent)
-}
-
-func systemPromptWithState(state string, agent *sdk.Agent) string {
-	if cfg, err := runtime.LoadSystemConfig(filepath.Join(state, runtime.DefaultSystemConfigPath)); err == nil && cfg.SystemPrompt != "" {
-		return cfg.SystemPrompt
+	if base == "" {
+		base = defaultSystemPrompt(agent)
 	}
-	return defaultSystemPrompt(agent)
+	workspace, err := resolveWorkspace()
+	if err == nil {
+		if requirements := projectRequirements(workspace); requirements != "" {
+			base += "\n\nProject Requirements (repository source of truth):\n" + requirements
+		}
+	}
+	return base
 }
 
 func systemPromptSource() string {
-	state, err := stateRoot()
-	if err != nil {
-		return "built-in default"
-	}
-	return systemPromptSourceWithState(state)
-}
-
-func systemPromptSourceWithState(state string) string {
-	path := filepath.Join(state, runtime.DefaultSystemConfigPath)
-	if cfg, err := runtime.LoadSystemConfig(path); err == nil && cfg.SystemPrompt != "" {
-		return path
+	if state, err := stateRoot(); err == nil {
+		path := filepath.Join(state, runtime.DefaultSystemConfigPath)
+		if cfg, err := runtime.LoadSystemConfig(path); err == nil && cfg.SystemPrompt != "" {
+			return path
+		}
 	}
 	return "built-in default"
 }
@@ -721,14 +739,16 @@ func defaultSystemPrompt(agent *sdk.Agent) string {
 	var b strings.Builder
 	b.WriteString("You are an AI assistant that gets things done with tools.\n")
 	b.WriteString("Stay strictly within the user's requested goal and scope. Do not start unrelated improvements, features, cleanup, or investigations.\n")
-	b.WriteString("Before using any tool, record the work with the `plan_create` tool: state the original goal plus ordered concrete steps (what to do, where, and the expected outcome).\n")
-	b.WriteString("Follow the recorded plan step by step. Mark each finished step with `plan_check`. If new information requires different steps, revise with `plan_update` and a reason without changing the original goal. If the rest cannot be done, stop with `plan_close`, a reason, and a user-facing report.\n")
+	b.WriteString("Before creating the plan, use the sub-agent to inspect relevant source code and repository requirements, then use its summary to understand the current system. Do not read repository source directly when the sub-agent can inspect it.\n")
+	b.WriteString("Create one ordered execution plan. The plan is the authoritative sequence of steps. Execute only the current step at a time.\n")
 	b.WriteString("When a tool, command, build, test, or edit fails, diagnose the failure and fix it within the current step. A failure is not a reason to abandon the task or move to an unrelated step.\n")
+	b.WriteString("For implementation work, delegate the current plan step to `delegate_to_subagent`. When the sub-agent loop ends, the orchestration system notifies you. If the step failed, inspect the status/history and analyze the problem, then retry or revise that same step. Do not advance to the next step until the current step succeeds. When it succeeds, delegate the next step. The worker has a separate session and never communicates with the user.\n")
 	b.WriteString("Only mark a step complete after verifying that its intended result is actually achieved. After the final goal is complete, stop and send the final result.\n")
 	b.WriteString("When the user asks to do, check, change, create, or fetch anything, CALL the matching tool instead of only describing what to do.\n")
 	b.WriteString("Prefer acting first: inspect with read_file, list_directory, or search_files, then act. Batch independent tool calls together.\n")
 	b.WriteString("Use run_command for shell work (it supports chains, pipes, and redirects). Use web_fetch for URLs. Use browser_* tools to operate web pages.\n")
 	b.WriteString("After tool results, summarize briefly what you did. Match the user's language.\n")
+	b.WriteString("Only when the task is complete and you are sending the final message to the user, start that final message with \u2728\u2728\u2728. Do not use \u2728\u2728\u2728 in intermediate progress, tool-related, or continuation messages.\n")
 	b.WriteString("Never stop at a promise: if you say you will fetch, check, or run something, call the tool in the SAME response instead of ending your turn.\n")
 	if agent != nil && agent.Tools != nil {
 		if defs := agent.Tools.Definitions(); len(defs) > 0 {
@@ -740,19 +760,20 @@ func defaultSystemPrompt(agent *sdk.Agent) string {
 	}
 	return b.String()
 }
-func resolveWorkspace(configured string) (string, error) {
-	if raw := strings.TrimSpace(configured); raw != "" {
-		path := expandHome(raw)
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			return "", fmt.Errorf("workspace: %w", err)
+func resolveWorkspace() (string, error) {
+	raw := strings.TrimSpace(os.Getenv("AI_WORKSPACE"))
+	if raw == "" {
+		home, err := os.UserHomeDir()
+		if err != nil || strings.TrimSpace(home) == "" {
+			return ".", nil
 		}
-		return path, nil
+		return home, nil
 	}
-	home, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(home) == "" {
-		return ".", nil
+	path := expandHome(raw)
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return "", fmt.Errorf("AI_WORKSPACE: %w", err)
 	}
-	return home, nil
+	return path, nil
 }
 func expandHome(path string) string {
 	if path == "~" {
@@ -767,4 +788,15 @@ func expandHome(path string) string {
 		}
 	}
 	return path
+}
+func envInt(name string) (int, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", name, err)
+	}
+	return parsed, nil
 }

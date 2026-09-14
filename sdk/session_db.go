@@ -14,8 +14,9 @@ import (
 )
 
 type SessionDB struct {
-	mu sync.Mutex
-	db *sql.DB
+	mu   sync.Mutex
+	db   *sql.DB
+	path string
 }
 
 func OpenSessionDB(path string) (*SessionDB, error) {
@@ -36,7 +37,7 @@ func OpenSessionDB(path string) (*SessionDB, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	s := &SessionDB{db: db}
+	s := &SessionDB{db: db, path: path}
 	if err := s.init(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -576,4 +577,11 @@ func errorText(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func (s *SessionDB) Dir() string {
+	if s == nil || s.path == "" {
+		return ""
+	}
+	return filepath.Dir(s.path)
 }

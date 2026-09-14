@@ -11,7 +11,7 @@ const planningToolName = "plan"
 
 const planningToolDescription = "Create the execution plan for the user's goal before using any execution tool. Describe the intended work in concise, ordered steps. This is a planning action, not the final answer."
 
-const planningSystemInstruction = "For implementation tasks, first investigate the repository through the sub-agent: have it read the relevant source code and repository requirements and return a concise summary. Use that information to create one ordered plan with concrete steps. After the plan exists, delegate exactly one current plan step at a time to `delegate_to_subagent`. Wait for the orchestration event that reports whether that step completed or failed. On failure, analyze the report and retry or revise the current step; do not advance until it succeeds. Only then delegate the next step. Use `subagent_status` or `subagent_history` when more information is needed. Never read repository source code directly when the sub-agent can inspect it. Do not expose internal planning or orchestration details to the user."
+const planningSystemInstruction = "You are the Main Agent. You do not have execution tools and must never attempt to inspect, read, edit, write, search, build, test, run commands, browse, or otherwise operate on the project directly. Use the Sub-agent as the only worker. First delegate repository investigation so the Sub-agent can inspect source code and repository requirements and return a concise summary. Use that summary to create one ordered plan with concrete steps. After the plan exists, delegate exactly one current plan step at a time with `delegate_to_subagent`. Wait for the orchestration lifecycle event reporting that step's completion or failure. On failure, analyze the report and retry or revise the same current step. Do not advance until it succeeds. After success, delegate the next step. Use `subagent_status` or `subagent_history` when more information is needed. Never communicate directly with the user about Sub-agent work until the overall task is complete. Do not expose internal planning or orchestration details to the user."
 
 type planningToolInput struct {
 	Plan string `json:"plan"`
@@ -38,7 +38,19 @@ func (e *planningToolExecutor) ConfigureSubAgent(runner SubAgentRunner) {
 }
 
 func (e *planningToolExecutor) Definitions() []Tool {
-	if e == nil || e.base == nil {
+	if e == nil {
+		return nil
+	}
+	if e.subAgent != nil {
+		defs := []Tool{{
+			Name: planningToolName, Description: planningToolDescription, InputSchema: map[string]any{
+				"type": "object", "properties": map[string]any{"plan": map[string]any{"type": "string"}}, "required": []string{"plan"},
+			},
+		}}
+		defs = append(defs, (&subAgentTool{runner: e.subAgent}).Definitions()...)
+		return defs
+	}
+	if e.base == nil {
 		return nil
 	}
 	defs := append([]Tool(nil), e.base.Definitions()...)
@@ -47,22 +59,54 @@ func (e *planningToolExecutor) Definitions() []Tool {
 			"type": "object", "properties": map[string]any{"plan": map[string]any{"type": "string"}}, "required": []string{"plan"},
 		},
 	})
-	if e.subAgent != nil {
-		defs = append(defs, (&subAgentTool{runner: e.subAgent}).Definitions()...)
-	}
 	return defs
 }
 
 func planningSystemPrompt(base string) string {
-	base = strings.TrimSpace(base)
+	base = sanitizeMainAgentPrompt(base)
 	if base == "" {
 		return planningSystemInstruction
 	}
 	return base + "\n\n" + planningSystemInstruction
 }
 
+func sanitizeMainAgentPrompt(base string) string {
+	lines := strings.Split(strings.TrimSpace(base), "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
+		if strings.HasPrefix(lower, "project requirements (repository source of truth):") || strings.HasPrefix(lower, "available tools:") {
+			break
+		}
+		if containsMainAgentExecutionInstruction(lower) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+func containsMainAgentExecutionInstruction(line string) bool {
+	forbidden := []string{
+		"call the matching tool",
+		"inspect with read_file",
+		"list_directory",
+		"search_files",
+		"use run_command",
+		"use web_fetch",
+		"use browser_",
+	}
+	for _, token := range forbidden {
+		if strings.Contains(line, token) {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *planningToolExecutor) Execute(ctx context.Context, call ToolCall) ToolResult {
-	if e == nil || e.base == nil {
+	if e == nil {
 		return ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
 	}
 	if call.Name == "delegate_to_subagent" || call.Name == "subagent_status" || call.Name == "subagent_history" || call.Name == "stop_subagent" {
@@ -94,7 +138,10 @@ func (e *planningToolExecutor) Execute(ctx context.Context, call ToolCall) ToolR
 		return ToolResult{ID: call.ID, Content: "call the `plan` tool before using execution tools", IsError: true}
 	}
 	if e.subAgent != nil {
-		return ToolResult{ID: call.ID, Content: "Main Agent execution must be delegated to `delegate_to_subagent` one plan step at a time", IsError: true}
+		return ToolResult{ID: call.ID, Content: "Main Agent has no execution tools; delegate the current plan step to `delegate_to_subagent`", IsError: true}
+	}
+	if e.base == nil {
+		return ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
 	}
 	return e.base.Execute(ctx, call)
 }

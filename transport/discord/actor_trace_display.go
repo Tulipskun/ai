@@ -26,6 +26,9 @@ type actorTraceState struct {
 	timer     *time.Timer
 }
 
+var actorTraceMu sync.Mutex
+var actorTraceStates = make(map[string]*actorTraceState)
+
 func (g *Gateway) Display(ctx context.Context, output sdk.Output) error {
 	if g == nil {
 		return errors.New("discord: gateway is not initialized")
@@ -43,7 +46,7 @@ func (g *Gateway) Display(ctx context.Context, output sdk.Output) error {
 	}
 	actor := actorFromMetadata(output.Metadata)
 	jobID := strings.TrimSpace(output.Metadata["trace_job_id"])
-	key := actor + "\x00" + jobID + "\x00" + channelID
+	key := fmt.Sprintf("%p\x00%s\x00%s\x00%s", g, channelID, actor, jobID)
 	return g.displayActorTrace(ctx, channelID, key, actor, jobID, *output.Trace)
 }
 
@@ -72,7 +75,6 @@ func actorTraceColor(actor string) int {
 }
 
 func (g *Gateway) displayActorTrace(ctx context.Context, channelID, key, actor, jobID string, trace sdk.TraceEvent) error {
-	label := actorTraceLabel(actor, jobID)
 	switch trace.Stage {
 	case sdk.TraceRequest:
 		g.actorTraceReset(key)
@@ -124,7 +126,6 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, key, actor, 
 		}
 		return g.actorTraceFlush(ctx, channelID, key, actor, jobID)
 	default:
-		_ = label
 		return nil
 	}
 }
@@ -152,15 +153,15 @@ func formatActorToolResult(call *sdk.ToolCall, result *sdk.ToolResult) string {
 }
 
 func (g *Gateway) actorTraceAppend(ctx context.Context, channelID, key, actor, jobID, item string, replacePending bool) error {
-	g.toolTraceMu.Lock()
-	defer g.toolTraceMu.Unlock()
-	state := g.actorTraceState(key)
+	actorTraceMu.Lock()
+	state := actorTraceStateForKeyLocked(key)
 	if replacePending {
 		for i := len(state.items) - 1; i >= 0; i-- {
 			if state.items[i] == "sending request to provider" {
 				state.items[i] = item
 				state.dirty = true
 				g.scheduleActorTraceFlushLocked(channelID, key, actor, jobID, state)
+				actorTraceMu.Unlock()
 				return nil
 			}
 		}
@@ -169,18 +170,19 @@ func (g *Gateway) actorTraceAppend(ctx context.Context, channelID, key, actor, j
 	trimActorTraceItems(state)
 	state.dirty = true
 	g.scheduleActorTraceFlushLocked(channelID, key, actor, jobID, state)
+	actorTraceMu.Unlock()
 	return nil
 }
 
 func (g *Gateway) actorTraceUpdate(ctx context.Context, channelID, key, actor, jobID, item string, match func(string) bool) error {
-	g.toolTraceMu.Lock()
-	defer g.toolTraceMu.Unlock()
-	state := g.actorTraceState(key)
+	actorTraceMu.Lock()
+	state := actorTraceStateForKeyLocked(key)
 	for i := len(state.items) - 1; i >= 0; i-- {
 		if match != nil && match(state.items[i]) {
 			state.items[i] = item
 			state.dirty = true
 			g.scheduleActorTraceFlushLocked(channelID, key, actor, jobID, state)
+			actorTraceMu.Unlock()
 			return nil
 		}
 	}
@@ -188,65 +190,66 @@ func (g *Gateway) actorTraceUpdate(ctx context.Context, channelID, key, actor, j
 	trimActorTraceItems(state)
 	state.dirty = true
 	g.scheduleActorTraceFlushLocked(channelID, key, actor, jobID, state)
+	actorTraceMu.Unlock()
 	return nil
 }
 
 func (g *Gateway) actorTraceFlush(ctx context.Context, channelID, key, actor, jobID string) error {
-	g.toolTraceMu.Lock()
-	defer g.toolTraceMu.Unlock()
-	state := g.actorTraceState(key)
+	actorTraceMu.Lock()
+	state := actorTraceStateForKeyLocked(key)
 	if state.timer != nil {
 		state.timer.Stop()
 		state.timer = nil
 	}
 	if !state.dirty || len(state.items) == 0 {
+		actorTraceMu.Unlock()
 		return nil
 	}
-	embed := actorTraceEmbed(actor, jobID, state.items)
-	if state.messageID != "" {
-		if err := g.EditEmbed(ctx, channelID, state.messageID, embed); err == nil {
-			state.dirty = false
+	items := append([]string(nil), state.items...)
+	messageID := state.messageID
+	actorTraceMu.Unlock()
+
+	embed := actorTraceEmbed(actor, jobID, items)
+	if messageID != "" {
+		if err := g.EditEmbed(ctx, channelID, messageID, embed); err == nil {
+			actorTraceMu.Lock()
+			if state := actorTraceStates[key]; state != nil {
+				state.dirty = false
+			}
+			actorTraceMu.Unlock()
 			return nil
 		} else if !isUnknownMessage(err) {
 			return err
 		}
-		state.messageID = ""
 	}
 	id, err := g.SendEmbed(ctx, channelID, embed)
 	if err != nil {
 		return err
 	}
-	state.messageID = id
-	state.dirty = false
+	actorTraceMu.Lock()
+	if state := actorTraceStates[key]; state != nil {
+		state.messageID = id
+		state.dirty = false
+	}
+	actorTraceMu.Unlock()
 	return nil
 }
 
 func (g *Gateway) actorTraceReset(key string) {
-	g.toolTraceMu.Lock()
-	defer g.toolTraceMu.Unlock()
-	if g.toolTrace != nil {
-		if state := g.toolTrace[key]; state != nil && state.timer != nil {
-			state.timer.Stop()
-		}
-		delete(g.toolTrace, key)
+	actorTraceMu.Lock()
+	defer actorTraceMu.Unlock()
+	if state := actorTraceStates[key]; state != nil && state.timer != nil {
+		state.timer.Stop()
 	}
+	delete(actorTraceStates, key)
 }
 
-func (g *Gateway) actorTraceState(key string) *actorTraceState {
-	state, ok := g.toolTrace[key]
-	if ok {
-		return (*actorTraceState)(state)
+func actorTraceStateForKeyLocked(key string) *actorTraceState {
+	state := actorTraceStates[key]
+	if state == nil {
+		state = &actorTraceState{}
+		actorTraceStates[key] = state
 	}
-	state := &actorTraceState{}
-	return g.storeActorTraceState(key, state)
-}
-
-func (g *Gateway) storeActorTraceState(key string, state *actorTraceState) *actorTraceState {
-	if g.toolTrace == nil {
-		g.toolTrace = make(map[string]*toolTraceState)
-	}
-	converted := &toolTraceState{messageID: state.messageID, items: append([]string(nil), state.items...), dirty: state.dirty}
-	g.toolTrace[key] = converted
 	return state
 }
 
@@ -283,8 +286,7 @@ func actorTraceEmbed(actor, jobID string, items []string) *discordgo.MessageEmbe
 }
 
 func (g *Gateway) sendActorResponse(ctx context.Context, channelID, actor, jobID, text string) error {
-	pages := paginateActorText(text, actorTraceMaxEmbedSize)
-	for _, page := range pages {
+	for _, page := range paginateActorText(text, actorTraceMaxEmbedSize) {
 		if _, err := g.SendEmbed(ctx, channelID, actorTraceEmbed(actor, jobID, []string{page})); err != nil {
 			return err
 		}
@@ -322,3 +324,5 @@ func paginateActorText(text string, max int) []string {
 	}
 	return pages
 }
+
+var _ sdk.Display = (*Gateway)(nil)

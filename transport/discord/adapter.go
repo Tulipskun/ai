@@ -87,6 +87,9 @@ func (d Display) Display(ctx context.Context, output sdk.Output) error {
 	if d.Sender == nil {
 		return errors.New("discord: display has no sender")
 	}
+	if gateway, ok := d.Sender.(*Gateway); ok && output.Metadata["trace_actor"] != "" {
+		return gateway.displayActorOutput(ctx, output)
+	}
 	channelID := output.Metadata["channel_id"]
 	if channelID == "" {
 		return errors.New("discord: output has no channel_id")
@@ -124,7 +127,6 @@ func (d Display) displayTrace(ctx context.Context, channelID string, trace sdk.T
 		}
 		return sender.updateToolTrace(ctx, channelID, withElapsed(message, trace.Elapsed), pendingRequestLine)
 	case sdk.TraceResponseText:
-		// Reasoning and custom trace messages are not user-facing progress.
 		return nil
 	case sdk.TraceResponseContent:
 		if trace.Response != nil && footer != nil {
@@ -179,7 +181,6 @@ func (d Display) displayTrace(ctx context.Context, channelID string, trace sdk.T
 		}
 		return d.Sender.SendMessage(ctx, channelID, text)
 	case sdk.TraceError:
-		// Attempt all terminal operations, even when the error line or flush fails.
 		text := "❌ Request failed: " + safeErrorSummary(trace.Err)
 		var err error
 		if hasTrace {
@@ -270,12 +271,10 @@ func formatToolResult(call *sdk.ToolCall, result *sdk.ToolResult) string {
 	return truncateOneLine(prefix+formatToolTraceCall(call), maxToolTraceLength)
 }
 
-// pendingRequestText is the placeholder line shown while a provider request is in flight.
 var pendingRequestText = sdk.TraceMessage(sdk.TraceEvent{Stage: sdk.TraceRequest})
 
 func pendingRequestLine(item string) bool { return item == pendingRequestText }
 
-// toolLineFor matches the trace line of one tool call so its result rewrites that line in place.
 func toolLineFor(call *sdk.ToolCall) func(string) bool {
 	prefix := formatToolTraceCall(call)
 	return func(item string) bool { return item == prefix || strings.HasPrefix(item, prefix+" · ") }
@@ -307,9 +306,6 @@ func responseContent(response *sdk.Response) string {
 	}
 	return b.String()
 }
-
-// Never echo arbitrary provider errors: they may include request bodies, URLs,
-// credentials or delegated instructions. Preserve actionable categories instead.
 func safeErrorSummary(err error) string {
 	if err == nil {
 		return "please try again"
@@ -335,7 +331,6 @@ func safeErrorSummary(err error) string {
 	}
 	return "service unavailable; please try again"
 }
-
 func (d Display) finishTrace(ctx context.Context, channelID string) error {
 	if footer, ok := d.Sender.(turnFooterTracker); ok {
 		footer.stopTurnFooter(channelID)

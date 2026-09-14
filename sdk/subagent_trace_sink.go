@@ -1,15 +1,19 @@
 package sdk
 
-func (a *Agent) SetSubAgentTraceSink(sink func(SubAgentEvent)) {
+func (a *Agent) SetSubAgentSinks(completion func(SubAgentEvent), trace func(SubAgentEvent)) {
 	if a == nil {
 		return
 	}
-	a.subAgentMu.Lock()
-	manager := a.subAgents
-	if manager == nil {
-		manager = newSubAgentManager(a, a.SubAgentConfig)
-		a.subAgents = manager
-	}
-	a.subAgentMu.Unlock()
-	manager.SetTraceSink(sink)
+	manager := a.subAgentManager()
+	manager.SetEventSink(func(event SubAgentEvent) {
+		if event.Trace != nil {
+			if trace != nil {
+				trace(event)
+			}
+			return
+		}
+		if completion != nil {
+			completion(event)
+		}
+	})
 }

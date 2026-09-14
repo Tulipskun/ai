@@ -46,7 +46,7 @@ func (p *lifecycleProvider) Generate(_ context.Context, req Request) (Response, 
 	}
 	for _, turn := range req.Messages {
 		for _, part := range turn.Content {
-			if strings.Contains(part.Text, "Sub-agent job") {
+			if strings.Contains(part.Text, "<sub agent id ") {
 				return Response{Content: []ContentPart{{Type: ContentText, Text: "reviewed lifecycle result"}}}, nil
 			}
 		}
@@ -59,7 +59,6 @@ func TestLoopLifecyclePreservesCanonicalRouteAndReportsErrors(t *testing.T) {
 		for _, fail := range []bool{false, true} {
 			t.Run(fmt.Sprintf("stream=%v/%s", stream, map[bool]string{false: "mapped-discord", true: "continuation-error"}[fail]), func(t *testing.T) {
 				agent, parent := newSubAgentTest(t, &lifecycleProvider{})
-				// Neither the stored parent ID nor the input alias encodes the transport.
 				input := Input{Source: "discord", SessionID: "mapped-project-session", Metadata: map[string]string{"channel_id": "channel-123", "original": "preserve"}, Turn: Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: "new task"}}}}
 				outputs := make(chan Output, 64)
 				continuations := make(chan Input, 2)
@@ -71,7 +70,7 @@ func TestLoopLifecyclePreservesCanonicalRouteAndReportsErrors(t *testing.T) {
 					}
 					return parent, nil
 				}, BuildRequest: func(_ context.Context, in Input, _ *Session) (Request, error) {
-					if len(in.Turn.Content) > 0 && strings.Contains(in.Turn.Content[0].Text, "Sub-agent job") {
+					if len(in.Turn.Content) > 0 && strings.Contains(in.Turn.Content[0].Text, "<sub agent id ") {
 						continuations <- in
 						if fail {
 							return Request{}, expectedErr
@@ -87,7 +86,6 @@ func TestLoopLifecyclePreservesCanonicalRouteAndReportsErrors(t *testing.T) {
 				if err := loop.Run(context.Background()); err != nil {
 					t.Fatal(err)
 				}
-				// Original caller metadata must not alias the job's captured route.
 				input.Metadata["channel_id"] = "mutated"
 				select {
 				case in := <-continuations:
@@ -144,7 +142,6 @@ func TestSubAgentFollowUpPreservesOriginalLifecycleMetadata(t *testing.T) {
 	if event.Input.Source != "custom-transport" || event.Input.Metadata["channel_id"] != "original" {
 		t.Fatalf("route not captured: %+v", event.Input)
 	}
-	// Mutating a delivered event also must not alter the retained job route.
 	event.Input.Metadata["channel_id"] = "event-mutated"
 	ctx = context.WithValue(context.Background(), lifecycleInputKey{}, Input{Source: "wrong", Metadata: map[string]string{"channel_id": "wrong"}})
 	_, err = r.FollowUp(ctx, id, "clarify findings")

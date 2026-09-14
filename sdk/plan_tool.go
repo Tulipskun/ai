@@ -9,9 +9,9 @@ import (
 
 const planningToolName = "plan"
 
-const planningToolDescription = "Create the execution plan for the user's goal before using any execution tool. Describe the intended work in concise, ordered steps. This is a planning action, not the final answer."
+const planningToolDescription = "Create the execution plan for the user's goal before delegating execution. Describe the intended work in concise, ordered steps. This is a planning action, not the final answer."
 
-const planningSystemInstruction = "You are the Main Agent. You do not have execution tools and must never attempt to inspect, read, edit, write, search, build, test, run commands, browse, or otherwise operate on the project directly. Use the Sub-agent as the only worker. First delegate repository investigation so the Sub-agent can inspect source code and repository requirements and return a concise summary. Use that summary to create one ordered plan with concrete steps. After the plan exists, delegate exactly one current plan step at a time with `delegate_to_subagent`. Wait for the orchestration lifecycle event reporting that step's completion or failure. On failure, analyze the report and retry or revise the same current step. Do not advance until it succeeds. After success, delegate the next step. Use `subagent_status` or `subagent_history` when more information is needed. Never communicate directly with the user about Sub-agent work until the overall task is complete. Do not expose internal planning or orchestration details to the user."
+const planningSystemInstruction = "You are the Main Agent. You have no execution tools and must never attempt to inspect, read, edit, write, search, build, test, run commands, browse, or otherwise operate on the project directly. The Sub-agent is the only worker. First delegate repository investigation so the Sub-agent can inspect source code and repository requirements and return a concise summary. Use that summary to create one ordered plan with concrete steps. After the plan exists, delegate exactly one current plan step at a time with `delegate_to_subagent`. Wait for the orchestration lifecycle event reporting that step's completion or failure. On failure, analyze the report and retry or revise the same current step. Do not advance until it succeeds. After success, delegate the next step. Use `subagent_status` or `subagent_history` when more information is needed. The Sub-agent does not communicate with the user. Do not expose internal planning or orchestration details to the user."
 
 type planningToolInput struct {
 	Plan string `json:"plan"`
@@ -25,9 +25,6 @@ type planningToolExecutor struct {
 }
 
 func newPlanningToolExecutor(base ToolExecutor, session *Session) *planningToolExecutor {
-	if base == nil {
-		return nil
-	}
 	return &planningToolExecutor{base: base, session: session}
 }
 
@@ -41,24 +38,14 @@ func (e *planningToolExecutor) Definitions() []Tool {
 	if e == nil {
 		return nil
 	}
-	if e.subAgent != nil {
-		defs := []Tool{{
-			Name: planningToolName, Description: planningToolDescription, InputSchema: map[string]any{
-				"type": "object", "properties": map[string]any{"plan": map[string]any{"type": "string"}}, "required": []string{"plan"},
-			},
-		}}
-		defs = append(defs, (&subAgentTool{runner: e.subAgent}).Definitions()...)
-		return defs
-	}
-	if e.base == nil {
-		return nil
-	}
-	defs := append([]Tool(nil), e.base.Definitions()...)
-	defs = append(defs, Tool{
+	defs := []Tool{{
 		Name: planningToolName, Description: planningToolDescription, InputSchema: map[string]any{
 			"type": "object", "properties": map[string]any{"plan": map[string]any{"type": "string"}}, "required": []string{"plan"},
 		},
-	})
+	}}
+	if e.subAgent != nil {
+		defs = append(defs, (&subAgentTool{runner: e.subAgent}).Definitions()...)
+	}
 	return defs
 }
 
@@ -134,16 +121,7 @@ func (e *planningToolExecutor) Execute(ctx context.Context, call ToolCall) ToolR
 		e.planned = true
 		return ToolResult{ID: call.ID, Content: "Execution plan recorded with " + fmt.Sprint(len(steps)) + " ordered step(s). Start with step 1 and advance only after successful completion."}
 	}
-	if !e.planned {
-		return ToolResult{ID: call.ID, Content: "call the `plan` tool before using execution tools", IsError: true}
-	}
-	if e.subAgent != nil {
-		return ToolResult{ID: call.ID, Content: "Main Agent has no execution tools; delegate the current plan step to `delegate_to_subagent`", IsError: true}
-	}
-	if e.base == nil {
-		return ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
-	}
-	return e.base.Execute(ctx, call)
+	return ToolResult{ID: call.ID, Content: "Main Agent has no execution tools; delegate project work to `delegate_to_subagent`", IsError: true}
 }
 
 func parsePlanSteps(plan string) []string {

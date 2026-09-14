@@ -80,12 +80,13 @@ func (e SubAgentEvent) Message() string {
 }
 
 type subAgentManager struct {
-	mu      sync.RWMutex
-	jobs    map[string]*subAgentJob
-	agent   *Agent
-	cfg     SubAgentConfig
-	eventMu sync.RWMutex
-	sink    func(SubAgentEvent)
+	mu        sync.RWMutex
+	jobs      map[string]*subAgentJob
+	agent     *Agent
+	cfg       SubAgentConfig
+	eventMu   sync.RWMutex
+	sink      func(SubAgentEvent)
+	traceSink func(SubAgentEvent)
 }
 
 func newSubAgentManager(agent *Agent, cfg SubAgentConfig) *subAgentManager {
@@ -163,7 +164,7 @@ func (m *subAgentManager) emitTrace(job *subAgentJob, event TraceEvent) {
 		return
 	}
 	m.eventMu.RLock()
-	sink := m.sink
+	sink := m.traceSink
 	m.eventMu.RUnlock()
 	if sink == nil {
 		return
@@ -221,13 +222,7 @@ func (m *subAgentManager) runWorker(ctx context.Context, job *subAgentJob) (Resp
 	if requirements := projectRequirements(m.cfg.Workspace); requirements != "" {
 		prompt += "\n\nProject requirements from the repository:\n" + requirements
 	}
-	workerAgent := &Agent{
-		Client:          m.agent.Client,
-		Tools:           m.agent.Tools,
-		MaxRetries:      m.agent.MaxRetries,
-		DisablePlanning: true,
-		SubAgentConfig:  SubAgentConfig{Enabled: false},
-	}
+	workerAgent := &Agent{Client: m.agent.Client, Tools: m.agent.Tools, MaxRetries: m.agent.MaxRetries, DisablePlanning: true, SubAgentConfig: SubAgentConfig{Enabled: false}}
 	req := Request{Provider: ProviderID(provider), Model: model, SystemPrompt: prompt, MaxOutputTokens: m.cfg.MaxOutputTokens, ThinkingLevel: worker.Config().ThinkingLevel, Temperature: worker.Config().Temperature}
 	trace := func(_ context.Context, event TraceEvent) {
 		message := TraceMessage(event)
@@ -236,10 +231,8 @@ func (m *subAgentManager) runWorker(ctx context.Context, job *subAgentJob) (Resp
 		if message != "" {
 			job.events = append(job.events, message)
 		}
-		status := job.status
 		m.mu.Unlock()
 		m.emitTrace(job, TraceEvent{Stage: event.Stage, Message: event.Message, Response: cloneResponsePtr(event.Response), ToolCall: cloneToolCallPtr(event.ToolCall), ToolResult: cloneToolResultPtr(event.ToolResult), Text: event.Text, Err: event.Err, RetryAfter: event.RetryAfter, Elapsed: event.Elapsed})
-		_ = status
 	}
 	return workerAgent.runTurn(ctx, worker, Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: job.task}}}, req, trace, nil)
 }
@@ -334,6 +327,12 @@ func (m *subAgentManager) SetEventSink(sink func(SubAgentEvent)) {
 	m.eventMu.Unlock()
 }
 
+func (m *subAgentManager) SetTraceSink(sink func(SubAgentEvent)) {
+	m.eventMu.Lock()
+	m.traceSink = sink
+	m.eventMu.Unlock()
+}
+
 func formatPlan(plan PlanState) string {
 	var b strings.Builder
 	for _, step := range plan.Steps {
@@ -406,7 +405,7 @@ type subAgentTool struct{ runner SubAgentRunner }
 func (t *subAgentTool) Definitions() []Tool {
 	return []Tool{
 		{Name: "follow_up_subagent", Description: "Retry or clarify a terminal, unaccepted job in the same worker session. Returns a new job ID; wait for its completion event.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}, "task": map[string]any{"type": "string"}}, "required": []string{"job_id", "task"}}},
-		{Name: "accept_subagent_result", Description: "Explicitly accept verified success of the current plan step, advancing exactly one step. First read its terminal result using subagent_history/status. A completed worker loop is not proof of success: blocked/incomplete reports require follow_up_subagent instead. Provide verification evidence.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}, "verification": map[string]any{"type": "string"}}, "required": []string{"job_id", "verification"}}},
+		{Name: "accept_subagent_result", Description: "Explicitly accept verified success of the current plan step, advancing exactly one step. First read the terminal result/history and provide verified success evidence.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}, "verification": map[string]any{"type": "string"}}, "required": []string{"job_id", "verification"}}},
 		{Name: "delegate_to_subagent", Description: "Start a background worker task. Returns immediately with a job id; the worker runs in a separate session and reports completion, failure, or stop to the planner.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"task": map[string]any{"type": "string"}}, "required": []string{"task"}}},
 		{Name: "subagent_status", Description: "Read progress/result on explicit request or when needed for review. Wait for completion events rather than repeatedly polling.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}}, "required": []string{"job_id"}}},
 		{Name: "subagent_history", Description: "Read the execution history and final result of a sub-agent job without reading repository source directly.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}}, "required": []string{"job_id"}}},

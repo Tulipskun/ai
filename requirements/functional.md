@@ -1,49 +1,49 @@
-# Functional Requirements
+# ข้อกำหนดด้านการทำงาน
 
-REQ-001 — The Harness accepts canonical input independently of transport.
+REQ-001 — Harness รับ canonical input ได้โดยไม่ขึ้นกับ transport
 
-REQ-002 — CLI and Discord can share the same Harness/Agent runtime.
+REQ-002 — CLI และ Discord สามารถใช้ Harness/Agent runtime เดียวกันได้
 
-REQ-003 — Each session has isolated persistent state and can be restored after process restart.
+REQ-003 — แต่ละ session มี state แบบถาวรที่แยกจากกัน และสามารถกู้คืนได้หลัง process restart
 
-REQ-004 — The Agent can perform a model → tool call → tool result → model loop until no tool call remains.
+REQ-004 — Agent สามารถทำลูป model → tool call → tool result → model จนกว่าจะไม่มี tool call เหลือ
 
-REQ-005 — Tool failures are represented as tool results so the Agent can recover without crashing the whole turn.
+REQ-005 — ความล้มเหลวของ tool ต้องถูกส่งกลับมาในรูปแบบ tool result เพื่อให้ Agent สามารถกู้คืนได้โดยไม่ทำให้ทั้ง turn ล้มเหลว
 
-REQ-006 — Provider-specific request/response formats are isolated behind adapters and converted through the canonical SDK model.
+REQ-006 — รูปแบบ request/response เฉพาะของ provider ต้องถูกแยกไว้หลัง adapter และแปลงผ่าน canonical SDK model
 
-REQ-007 — Provider model discovery uses the live provider catalogue; a successful refresh replaces stale catalogue entries.
+REQ-007 — การค้นหา provider model ต้องใช้ catalogue ของ provider ที่ดึงจากระบบจริง และเมื่อ refresh สำเร็จต้องแทนที่ข้อมูล catalogue เดิมที่ค้างอยู่
 
-REQ-008 — Retries reuse the selected session API key and do not rotate keys implicitly.
+REQ-008 — การ retry ต้องใช้ API key ของ session ที่เลือกไว้ และห้ามเปลี่ยน key โดยอัตโนมัติ
 
-REQ-009 — Streaming output is not automatically replayed after output has started.
+REQ-009 — output แบบ streaming จะต้องไม่ถูก replay โดยอัตโนมัติหลังจากเริ่มส่ง output แล้ว
 
-REQ-010 — Browser automation is available through the built-in Go CDP implementation without Playwright or a Node.js worker.
+REQ-010 — Browser automation ต้องใช้งานได้ผ่าน Go CDP implementation ที่อยู่ในตัว โดยไม่ใช้ Playwright หรือ Node.js worker
 
-REQ-011 — Runtime configuration is file-based under the configured `~/.local/share/ai` layout and does not require environment-variable configuration.
+REQ-011 — Runtime configuration ต้องเป็นแบบไฟล์ภายใต้ layout `~/.local/share/ai` ที่กำหนดไว้ และไม่ต้องใช้ environment variable ในการตั้งค่า
 
-REQ-012 — Project requirements are stored in the repository and treated as the source of truth for project work.
+REQ-012 — Project requirements ต้องเก็บอยู่ใน repository และถือเป็น source of truth สำหรับงานของโปรเจค
 
-REQ-013 — Before implementing a new request, the AI checks the repository requirements and records any specification change required by the request.
+REQ-013 — ก่อน implement request ใหม่ AI ต้องตรวจสอบ repository requirements และบันทึก specification change ที่ request นั้นทำให้เกิดขึ้น
 
-REQ-014 — When creating a new software project, the AI creates and populates that project's `requirements/` directory before substantial implementation.
+REQ-014 — เมื่อสร้าง software project ใหม่ AI ต้องสร้างและเติมข้อมูลใน `requirements/` ของ project นั้นก่อนเริ่ม implementation ในส่วนสำคัญ
 
-REQ-015 — Code changes should preserve clear module responsibility and add or modify functionality in the module that owns the responsibility unless a documented architecture change is required.
+REQ-015 — การเปลี่ยนแปลงโค้ดต้องรักษาความรับผิดชอบของแต่ละ module ให้ชัดเจน และต้องเพิ่มหรือแก้ functionality ใน module ที่รับผิดชอบโดยตรง เว้นแต่มีการเปลี่ยน architecture ที่บันทึกไว้อย่างชัดเจน
 
-REQ-016 — With planning enabled, the Main Agent receives only planning and configured sub-agent orchestration tools and rejects direct execution calls, including after a plan is recorded. Main-agent default instructions delegate project investigation and execution rather than directing the main agent to use worker tools.
+REQ-016 — เมื่อเปิด planning, Main Agent จะได้รับเฉพาะ planning tools และ tools สำหรับ orchestration ของ sub-agent และต้องปฏิเสธ execution call โดยตรง รวมถึงหลังจากบันทึกแผนแล้วด้วย ค่าเริ่มต้นของคำสั่ง Main Agent ต้องมอบหมายการตรวจสอบโปรเจคและการดำเนินงาน แทนการสั่งให้ Main Agent ใช้ worker tools โดยตรง
 
-REQ-017 — With `DisablePlanning: true`, an execution/worker agent retains its supplied system prompt and execution tool definitions in both normal and streaming turns, including tool-result continuations; the Harness does not inject main-agent restrictions or planning/delegation tools. Default sub-agent instructions limit work to the assigned scope, prohibit further delegation and end-user communication, and require reporting findings/results to the planner.
+REQ-017 — เมื่อ `DisablePlanning: true`, execution/worker agent ต้องคง system prompt และ execution tool definitions ที่ได้รับมาไว้ทั้งใน turn ปกติและ streaming turn รวมถึงตอนทำต่อหลัง tool result; Harness ห้ามแทรกข้อจำกัดของ Main Agent หรือ planning/delegation tools เข้าไป ค่าเริ่มต้นของคำสั่ง sub-agent ต้องจำกัดงานให้อยู่ใน scope ที่ได้รับ ห้าม delegation ต่อ และห้ามสื่อสารกับ end user โดยตรง และต้องรายงานสิ่งที่ตรวจพบ/ผลลัพธ์ให้ planner
 
-REQ-018 — Role prompt composition preserves repository requirements and custom context rather than truncating sections or removing arbitrary lines by tool-name matching. Main-agent role boundaries take precedence over conflicting direct-execution instructions in supplied context; built-in CLI and SDK defaults must not contradict their assigned role.
+REQ-018 — การประกอบ role prompt ต้องรักษา repository requirements และ custom context ไว้ ไม่ตัด section หรือบรรทัดที่ไม่เกี่ยวข้องออกด้วยการจับคู่ชื่อ tool แบบ heuristic ขอบเขต role ของ Main Agent ต้องมีผลเหนือคำสั่ง direct-execution ที่ขัดแย้งกันใน context ที่ได้รับมา และค่าเริ่มต้นของ CLI/SDK ที่สร้างในตัวต้องไม่ขัดแย้งกับ role ที่ได้รับมอบหมาย
 
-REQ-019 — A worker loop ending only produces a result for main-agent review; it never accepts or advances a plan. The main agent reads the terminal result/history, verifies success, and explicitly accepts the captured step through orchestration. Failed, stopped, or incomplete results remain retryable through follow-up in the same worker session. Planner guidance waits for lifecycle completion events rather than repeatedly polling; explicit status requests remain available.
+REQ-019 — เมื่อ worker loop จบลง ต้องสร้างเพียงผลลัพธ์เพื่อให้ Main Agent ตรวจสอบ และห้ามรับหรือเลื่อนแผนต่อโดยอัตโนมัติ Main Agent ต้องอ่านผลลัพธ์/ประวัติสุดท้าย ตรวจสอบความสำเร็จ และยอมรับ step ที่บันทึกไว้อย่างชัดเจนผ่าน orchestration ผลลัพธ์ที่ล้มเหลว หยุด หรือยังไม่สมบูรณ์ต้องสามารถ retry ต่อใน worker session เดิมได้ Planner guidance ต้องรอ lifecycle completion event แทนการ polling ซ้ำ ๆ และยังต้องมี explicit status request ให้ใช้ได้
 
-REQ-020 — Delegation atomically reserves at most one running job per parent session across investigation, planned work, and follow-up. Jobs capture plan revision and step identity; completion, retry, and acceptance validate transitions and cannot mutate a replacement plan. History, status, stop, follow-up, and acceptance enforce parent ownership. A completed plan permits investigation for a new task without clearing or bypassing active work.
+REQ-020 — การ delegation ต้องจอง running job ได้พร้อมกันไม่เกินหนึ่งรายการต่อ parent session โดยครอบคลุม investigation, planned work และ follow-up Job ต้องเก็บ plan revision และ step identity การ completion, retry และ acceptance ต้องตรวจสอบ transition และห้ามเปลี่ยนแผนใหม่ที่เข้ามาแทนที่ History, status, stop, follow-up และ acceptance ต้องตรวจสอบ ownership ของ parent เมื่อแผนเสร็จแล้วต้องยังสามารถทำ investigation สำหรับงานใหม่ได้โดยไม่ล้างหรือข้ามงานที่กำลังทำอยู่
 
-REQ-021 — Lifecycle continuations preserve the initiating input's canonical source, session routing identity, and original metadata (including Discord channel_id), independently of session-ID spelling. Continuation failures use the existing turn-error reporting path. Existing cancellation behavior and session persistence boundaries remain unchanged; orchestration reservations/revisions are process-local.
+REQ-021 — Lifecycle continuation ต้องรักษา canonical source ของ input ที่เริ่มต้น, session routing identity และ metadata เดิมทั้งหมด (รวม `channel_id` ของ Discord) โดยไม่ขึ้นกับรูปแบบการเขียน session ID หาก continuation ล้มเหลวต้องใช้เส้นทางรายงาน turn-error เดิม พฤติกรรม cancellation และขอบเขตการ persist session เดิมต้องไม่เปลี่ยน และ reservation/revision ของ orchestration เป็นแบบ process-local
 
-REQ-022 — Discord renders canonical response text as readable Markdown, not serialized SDK output. Progress is concise and excludes raw tool arguments/results, delegated task text, reasoning text and internal planning/review chatter; safe operation labels, failure indicators, retry timing, usage and elapsed time remain useful. Transport rendering stays in the Discord module.
+REQ-022 — Discord ต้องแสดง canonical response text เป็น Markdown ที่อ่านง่าย ไม่ใช่ SDK output ที่ serialize เป็นข้อมูลดิบ Progress ต้องกระชับ และไม่แสดง raw tool arguments/results, delegated task text, reasoning text หรือ internal planning/review chatter แต่ยังคงแสดง operation label ที่ปลอดภัย, ตัวบ่งชี้ความล้มเหลว, เวลา retry, usage และเวลาที่ใช้ได้อย่างมีประโยชน์ การ render ของ transport ต้องอยู่ใน Discord module
 
-REQ-023 — Discord final and streamed response text is paginated losslessly at Unicode code-point boundaries within message/embed limits (counting supplementary characters conservatively as UTF-16 units). Boundary whitespace is retained; fenced code blocks are closed/reopened for page display without removing source content. Streaming updates existing pages and terminal response traces do not replay already streamed content. Progress may remain a bounded summary; response text must not be truncated.
+REQ-023 — Discord final และ streamed response text ต้องแบ่งหน้าแบบ lossless ที่ขอบเขต Unicode code point ภายในข้อจำกัด message/embed โดยนับ supplementary characters เป็น UTF-16 units อย่างระมัดระวัง ต้องคง whitespace ที่ขอบเขตไว้ และเมื่อมี fenced code block ต้องปิด/เปิด fence สำหรับการแสดงแต่ละหน้าโดยไม่ลบ content ต้นฉบับ Streaming update ต้องแก้ไขหน้าที่มีอยู่ และ terminal response trace ต้องไม่ replay content ที่ถูก stream ไปแล้ว Progress สามารถเป็น summary ที่มีขอบเขตได้ แต่ response text ต้องไม่ถูกตัดทอน
 
-REQ-024 — Discord text/progress transitions propagate flush failures and retain the unsent buffered state for retry instead of resetting it. Successful page sends are tracked so retries do not duplicate them. Success/error terminal paths stop live footer updates, attempt buffered flushing and retry-status cleanup even if another operation fails, and surface display errors. Existing trace throttling/cooldown remains; reset/close cancels pending timers.
+REQ-024 — Discord text/progress transition ต้องส่งต่อ flush failure และเก็บ buffered state ที่ยังไม่ได้ส่งไว้เพื่อ retry แทนการ reset เมื่อส่ง page สำเร็จต้องบันทึกไว้เพื่อไม่ให้ retry ส่งซ้ำ Success/error terminal path ต้องหยุด live footer update, พยายาม flush buffer ที่ค้าง และล้าง retry-status แม้ operation อื่นจะล้มเหลว และต้องแสดง display error ให้ผู้ใช้เห็น โดยยังคงใช้ trace throttling/cooldown เดิม และ reset/close ต้องยกเลิก timer ที่รออยู่

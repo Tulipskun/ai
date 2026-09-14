@@ -76,7 +76,9 @@ func sanitizeMainAgentPrompt(base string) string {
 
 func containsMainAgentExecutionInstruction(line string) bool {
 	forbidden := []string{
+		"gets things done with tools",
 		"call the matching tool",
+		"call the tool in the same response",
 		"inspect with read_file",
 		"list_directory",
 		"search_files",

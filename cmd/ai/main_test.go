@@ -67,7 +67,12 @@ func TestDefaultSystemPromptUsesPlanAndSubagent(t *testing.T) {
 	client := sdk.NewRouterClient(sdk.NewRouter())
 	agent := &sdk.Agent{Client: client, Tools: &testPromptTools{}}
 	got := defaultSystemPrompt(agent)
-	for _, want := range []string{"Before creating the plan", "ordered execution plan", "delegate the current plan step to `delegate_to_subagent`", "Do not advance to the next step until the current step succeeds"} {
+	for _, forbidden := range []string{"gets things done with tools", "CALL the matching tool", "Prefer acting first", "run_command", "read_file", "Available tools:", "call the tool in the SAME response", "Execute only the current step"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("main default contains execution instruction %q: %s", forbidden, got)
+		}
+	}
+	for _, want := range []string{"Before creating the plan", "ordered execution plan", "delegate the current plan step to `delegate_to_subagent`", "Call `accept_subagent_result` with verification evidence before delegating the next step"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("prompt missing %q", want)
 		}
@@ -81,4 +86,13 @@ func (testPromptTools) Definitions() []sdk.Tool {
 }
 func (testPromptTools) Execute(_ context.Context, _ sdk.ToolCall) sdk.ToolResult {
 	return sdk.ToolResult{}
+}
+
+func TestDefaultPromptRequiresSameSessionRetryAndAcceptance(t *testing.T) {
+	prompt := defaultSystemPrompt(nil)
+	for _, name := range []string{"subagent_history", "subagent_status", "follow_up_subagent", "accept_subagent_result"} {
+		if !strings.Contains(prompt, "`"+name+"`") {
+			t.Fatalf("missing orchestration tool %s", name)
+		}
+	}
 }

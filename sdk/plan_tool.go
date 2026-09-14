@@ -11,7 +11,7 @@ const planningToolName = "plan"
 
 const planningToolDescription = "Create the execution plan for the user's goal before delegating execution. Describe the intended work in concise, ordered steps. This is a planning action, not the final answer."
 
-const planningSystemInstruction = "You are the Main Agent. You have no execution tools and must never attempt to inspect, read, edit, write, search, build, test, run commands, browse, or otherwise operate on the project directly. The Sub-agent is the only worker. First delegate repository investigation so the Sub-agent can inspect source code and repository requirements and return a concise summary. Use that summary to create one ordered plan with concrete steps. After the plan exists, delegate exactly one current plan step at a time with `delegate_to_subagent`. Wait for the orchestration lifecycle event reporting that step's completion or failure. On failure, analyze the report and retry or revise the same current step. Do not advance until it succeeds. After success, delegate the next step. Use `subagent_status` or `subagent_history` when more information is needed. The Sub-agent does not communicate with the user. Do not expose internal planning or orchestration details to the user."
+const planningSystemInstruction = "You are the Main Agent. These role boundaries take precedence over any conflicting direct-execution instructions in the supplied context; delegate such work to the Sub-agent. You do not have execution tools and must never attempt to inspect, read, edit, write, search, build, test, run commands, browse, or otherwise operate on the project directly. The Sub-agent is the only worker. First delegate repository investigation so the Sub-agent can inspect source code and repository requirements and return a concise summary. Use that summary to create one ordered plan with concrete steps. After the plan exists, delegate exactly one current plan step at a time with `delegate_to_subagent`. Wait for the orchestration lifecycle event reporting that step's completion or failure. Do not repeatedly poll status: wait for completion events; use `subagent_status` for explicit status requests. A worker loop ending, including a textual blocked or incomplete report, is NOT verified success and never advances the plan. Read the terminal result with `subagent_history` or `subagent_status`, verify the assigned work and validation, then call `accept_subagent_result` with verification evidence to advance exactly one step. For failed, stopped, blocked, or incomplete work use `follow_up_subagent` with the job ID to retry in the same worker session, and wait for its new completion event. After acceptance, delegate the next step. Stale events from replacement plans must not be accepted. A completed plan allows investigation for the next user task. The Sub-agent does not communicate with the user. Do not expose internal planning or orchestration details to the user."
 
 type planningToolInput struct {
 	Plan string `json:"plan"`
@@ -50,55 +50,20 @@ func (e *planningToolExecutor) Definitions() []Tool {
 }
 
 func planningSystemPrompt(base string) string {
-	base = sanitizeMainAgentPrompt(base)
+	// Keep repository requirements and custom context intact. The appended role
+	// boundary and executor allowlist supersede conflicting execution guidance.
+	base = strings.TrimSpace(base)
 	if base == "" {
 		return planningSystemInstruction
 	}
 	return base + "\n\n" + planningSystemInstruction
 }
 
-func sanitizeMainAgentPrompt(base string) string {
-	lines := strings.Split(strings.TrimSpace(base), "\n")
-	kept := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		lower := strings.ToLower(trimmed)
-		if strings.HasPrefix(lower, "project requirements (repository source of truth):") || strings.HasPrefix(lower, "available tools:") {
-			break
-		}
-		if containsMainAgentExecutionInstruction(lower) {
-			continue
-		}
-		kept = append(kept, line)
-	}
-	return strings.TrimSpace(strings.Join(kept, "\n"))
-}
-
-func containsMainAgentExecutionInstruction(line string) bool {
-	forbidden := []string{
-		"gets things done with tools",
-		"call the matching tool",
-		"call the tool in the same response",
-		"inspect with read_file",
-		"list_directory",
-		"search_files",
-		"use run_command",
-		"use web_fetch",
-		"use browser_",
-	}
-	for _, token := range forbidden {
-		if strings.Contains(line, token) {
-			return true
-		}
-	}
-	return false
-}
-
 func (e *planningToolExecutor) Execute(ctx context.Context, call ToolCall) ToolResult {
 	if e == nil {
 		return ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
 	}
-	if call.Name == "delegate_to_subagent" || call.Name == "subagent_status" || call.Name == "subagent_history" || call.Name == "stop_subagent" {
+	if call.Name == "delegate_to_subagent" || call.Name == "subagent_status" || call.Name == "subagent_history" || call.Name == "stop_subagent" || call.Name == "follow_up_subagent" || call.Name == "accept_subagent_result" {
 		if e.subAgent == nil {
 			return ToolResult{ID: call.ID, Content: "sub-agent is not configured", IsError: true}
 		}
@@ -121,7 +86,7 @@ func (e *planningToolExecutor) Execute(ctx context.Context, call ToolCall) ToolR
 			e.session.cleanPlan(steps)
 		}
 		e.planned = true
-		return ToolResult{ID: call.ID, Content: "Execution plan recorded with " + fmt.Sprint(len(steps)) + " ordered step(s). Start with step 1 and advance only after successful completion."}
+		return ToolResult{ID: call.ID, Content: "Execution plan recorded with " + fmt.Sprint(len(steps)) + " ordered step(s). Start with step 1 and advance only after reviewing and explicitly accepting verified success with accept_subagent_result."}
 	}
 	return ToolResult{ID: call.ID, Content: "Main Agent has no execution tools; delegate project work to `delegate_to_subagent`", IsError: true}
 }

@@ -87,13 +87,21 @@ func TestToolTraceStateUpdateReplacesNewestMatch(t *testing.T) {
 	if state.items[1] != `❌ tool_a("{}") · 1s` || state.items[2] != `tool_b("{}")` {
 		t.Fatalf("items = %q", state.items)
 	}
-	if state.update("x", nil) { t.Fatal("nil matcher must not update") }
-	if state.update("x", func(string) bool { return false }) { t.Fatal("unmatched item must not update") }
+	if state.update("x", nil) {
+		t.Fatal("nil matcher must not update")
+	}
+	if state.update("x", func(string) bool { return false }) {
+		t.Fatal("unmatched item must not update")
+	}
 }
 
 func TestTraceFlushDelaySpacesSnapshots(t *testing.T) {
-	if got := traceFlushDelay(0); got != 0 { t.Fatalf("first snapshot should push immediately, got %v", got) }
-	if got := traceFlushDelay(nowMillis() - 2000); got != 0 { t.Fatalf("overdue snapshot should push immediately, got %v", got) }
+	if got := traceFlushDelay(0); got != 0 {
+		t.Fatalf("first snapshot should push immediately, got %v", got)
+	}
+	if got := traceFlushDelay(nowMillis() - 2000); got != 0 {
+		t.Fatalf("overdue snapshot should push immediately, got %v", got)
+	}
 	if got := traceFlushDelay(nowMillis()); got <= 0 || got > traceFlushInterval {
 		t.Fatalf("recent push should space the next snapshot by one interval, got %v", got)
 	}
@@ -137,22 +145,34 @@ func TestTickTurnFooterPushesOncePerSecondBoundary(t *testing.T) {
 }
 
 func TestAppendTraceItemStartsFreshEmbedOnModeSwitch(t *testing.T) {
-	g := &Gateway{toolTrace: map[string]*toolTraceState{}}
-	if err := g.appendToolTrace(context.Background(), "c1", "tool_call"); err != nil { t.Fatal(err) }
-	if err := g.appendTextTrace(context.Background(), "c1", "hello"); err != nil { t.Fatal(err) }
-	g.toolTraceMu.Lock(); defer g.toolTraceMu.Unlock()
+	g, _ := mockGateway(t)
+	if err := g.appendToolTrace(context.Background(), "c1", "tool_call"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.appendTextTrace(context.Background(), "c1", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	g.toolTraceMu.Lock()
+	defer g.toolTraceMu.Unlock()
 	state := g.toolTrace["c1"]
 	if state == nil || len(state.items) != 1 || state.items[0] != "hello" {
 		t.Fatalf("items = %q", state.items)
 	}
-	if state.messageID != "" { t.Fatalf("mode switch should reset messageID, got %q", state.messageID) }
+	if state.messageID != "" {
+		t.Fatalf("mode switch should reset messageID, got %q", state.messageID)
+	}
 }
 
 func TestUpdateToolTraceReplacesPendingRequestLine(t *testing.T) {
 	g := &Gateway{toolTrace: map[string]*toolTraceState{}}
-	if err := g.updateToolTrace(context.Background(), "c1", "sending request to provider", pendingRequestLine); err != nil { t.Fatal(err) }
-	if err := g.updateToolTrace(context.Background(), "c1", "provider accepted request; processing · 1s", pendingRequestLine); err != nil { t.Fatal(err) }
-	g.toolTraceMu.Lock(); defer g.toolTraceMu.Unlock()
+	if err := g.updateToolTrace(context.Background(), "c1", "sending request to provider", pendingRequestLine); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.updateToolTrace(context.Background(), "c1", "provider accepted request; processing · 1s", pendingRequestLine); err != nil {
+		t.Fatal(err)
+	}
+	g.toolTraceMu.Lock()
+	defer g.toolTraceMu.Unlock()
 	state := g.toolTrace["c1"]
 	if state == nil || len(state.items) != 1 || state.items[0] != "provider accepted request; processing · 1s" {
 		t.Fatalf("items = %q", state.items)
@@ -161,7 +181,9 @@ func TestUpdateToolTraceReplacesPendingRequestLine(t *testing.T) {
 
 func TestFlushToolTraceWithoutStateIsNoop(t *testing.T) {
 	g := &Gateway{toolTrace: map[string]*toolTraceState{}}
-	if err := g.flushToolTrace(context.Background(), "missing"); err != nil { t.Fatal(err) }
+	if err := g.flushToolTrace(context.Background(), "missing"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestToolTraceStateTrimsOldestOverBudget(t *testing.T) {

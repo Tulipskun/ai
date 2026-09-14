@@ -26,6 +26,10 @@ func TestPlanningToolRequiresPlanFirst(t *testing.T) {
 	if planned.IsError {
 		t.Fatalf("plan failed: %s", planned.Content)
 	}
+	blocked = e.Execute(context.Background(), ToolCall{ID: "after-plan", Name: "run_command", Arguments: `{}`})
+	if !blocked.IsError || base.called {
+		t.Fatal("main executed a worker tool after planning")
+	}
 	state := session.Plan()
 	if len(state.Steps) != 3 || state.Current != 0 {
 		t.Fatalf("unexpected plan: %+v", state)
@@ -43,6 +47,10 @@ func TestPlanningToolRequiresPlanFirst(t *testing.T) {
 
 type subAgentStub struct{ called bool }
 
+func (s *subAgentStub) FollowUp(context.Context, string, string) (string, error) {
+	return "followup", nil
+}
+func (s *subAgentStub) Accept(string, string) error { return nil }
 func (s *subAgentStub) Delegate(context.Context, string) (string, error) {
 	s.called = true
 	return "sa-test", nil
@@ -77,31 +85,28 @@ func TestMainAgentDefinitionsContainNoExecutionTools(t *testing.T) {
 	defs := e.Definitions()
 	for _, d := range defs {
 		switch d.Name {
-		case planningToolName, "delegate_to_subagent", "subagent_status", "subagent_history", "stop_subagent":
+		case planningToolName, "delegate_to_subagent", "subagent_status", "subagent_history", "stop_subagent", "follow_up_subagent", "accept_subagent_result":
 		default:
 			t.Fatalf("Main Agent exposed non-orchestration tool %q", d.Name)
 		}
 	}
 }
 
-func TestPlanningSystemPromptRemovesExecutionInstructions(t *testing.T) {
-	base := `You are an assistant.
-Before creating the plan, use the sub-agent.
-When the user asks to do something, CALL the matching tool.
-Prefer acting first: inspect with read_file, list_directory, or search_files, then act.
-Use run_command for shell work. Use web_fetch for URLs. Use browser_* tools to operate web pages.
+func TestPlanningSystemPromptPreservesContext(t *testing.T) {
+	base := `Custom instruction: preserve this context.
 Available tools:
-- run_command: execute commands
+- run_command: legacy execution description
 Project Requirements (repository source of truth):
-- must not expose this directly`
+- search_files must respect workspace boundaries.
+Unrelated custom instructions after the requirements must survive.`
 	got := planningSystemPrompt(base)
-	for _, forbidden := range []string{"CALL the matching tool", "read_file", "list_directory", "search_files", "run_command", "web_fetch", "browser_*", "Available tools:", "Project Requirements (repository source of truth)"} {
-		if strings.Contains(strings.ToLower(got), strings.ToLower(forbidden)) {
-			t.Fatalf("Main Agent prompt still exposes execution instruction %q: %s", forbidden, got)
-		}
+	if !strings.HasPrefix(got, base+"\n\n") {
+		t.Fatalf("context was modified: %s", got)
 	}
-	if !strings.Contains(got, "You are the Main Agent") || !strings.Contains(got, "do not have execution tools") {
-		t.Fatalf("Main Agent role instruction missing: %s", got)
+	for _, want := range []string{"You are the Main Agent", "do not have execution tools", "take precedence over any conflicting direct-execution instructions"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("role boundary missing %q: %s", want, got)
+		}
 	}
 }
 

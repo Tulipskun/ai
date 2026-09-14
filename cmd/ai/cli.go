@@ -51,11 +51,7 @@ func runInteractiveCLI(ctx context.Context, sessions *runtime.SessionManager, ag
 		}
 	}()
 	agent.SetSubAgentEventSink(func(event sdk.SubAgentEvent) {
-		step := "investigation"
-		if event.PlanStep.Index > 0 {
-			step = fmt.Sprintf("plan step %d", event.PlanStep.Index)
-		}
-		text := fmt.Sprintf("Sub-agent job %s %s for %s: %s", event.JobID, event.Status, step, event.Result)
+		text := event.Message()
 		go func() {
 			turnMu.Lock()
 			defer turnMu.Unlock()

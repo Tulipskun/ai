@@ -203,11 +203,13 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 			return Response{}, err
 		}
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
-		if executor != nil {
+		req.SystemPrompt = baseSystemPrompt
+		if !a.DisablePlanning {
 			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt)
+		}
+		if executor != nil {
 			req.Tools = executor.Definitions()
 		} else {
-			req.SystemPrompt = baseSystemPrompt
 			req.Tools = nil
 		}
 		traceEvent(ctx, trace, TraceEvent{Stage: TraceRequest})
@@ -297,11 +299,13 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 			return Response{}, err
 		}
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
-		if executor != nil {
+		req.SystemPrompt = baseSystemPrompt
+		if !a.DisablePlanning {
 			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt)
+		}
+		if executor != nil {
 			req.Tools = executor.Definitions()
 		} else {
-			req.SystemPrompt = baseSystemPrompt
 			req.Tools = nil
 		}
 		traceEvent(ctx, trace, TraceEvent{Stage: TraceRequest})
@@ -372,6 +376,11 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 		}
 		if resp.Reasoning == nil {
 			resp.Reasoning = reasoning
+		}
+		// Some providers return canonical content only in EventDone. Emit it
+		// once when no text deltas were received, never replay a streamed body.
+		if len(text) == 0 && len(resp.Content) > 0 {
+			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponseContent, Response: cloneResponseContent(resp)})
 		}
 		if backoff != nil {
 			backoff.Reset()

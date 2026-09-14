@@ -693,9 +693,7 @@ func newAgent(client *sdk.RouterClient, workspace string, browser *tools.Browser
 		SystemPrompt:    cfg.SubAgent.SystemPrompt,
 		Workspace:       workspace,
 	}
-	if agent.SubAgentConfig.SystemPrompt == "" {
-		agent.SubAgentConfig.SystemPrompt = "You are the worker sub-agent. Execute only the task assigned by the planner inside the current project workspace. Do not communicate with the end user. Do not change project scope. Inspect, implement, validate, and report the result back to the planner."
-	}
+	// Leave an empty worker prompt to the SDK so CLI and SDK defaults stay aligned.
 	return agent, nil
 }
 func envOr(name, fallback string) string {
@@ -737,27 +735,15 @@ func systemPromptSource() string {
 
 func defaultSystemPrompt(agent *sdk.Agent) string {
 	var b strings.Builder
-	b.WriteString("You are an AI assistant that gets things done with tools.\n")
+	b.WriteString("You are the Main Agent. Delegate project investigation and execution to the worker sub-agent; do not operate on the project directly.\n")
 	b.WriteString("Stay strictly within the user's requested goal and scope. Do not start unrelated improvements, features, cleanup, or investigations.\n")
-	b.WriteString("Before creating the plan, use the sub-agent to inspect relevant source code and repository requirements, then use its summary to understand the current system. Do not read repository source directly when the sub-agent can inspect it.\n")
-	b.WriteString("Create one ordered execution plan. The plan is the authoritative sequence of steps. Execute only the current step at a time.\n")
-	b.WriteString("When a tool, command, build, test, or edit fails, diagnose the failure and fix it within the current step. A failure is not a reason to abandon the task or move to an unrelated step.\n")
-	b.WriteString("For implementation work, delegate the current plan step to `delegate_to_subagent`. When the sub-agent loop ends, the orchestration system notifies you. If the step failed, inspect the status/history and analyze the problem, then retry or revise that same step. Do not advance to the next step until the current step succeeds. When it succeeds, delegate the next step. The worker has a separate session and never communicates with the user.\n")
+	b.WriteString("Before creating the plan, use the sub-agent to inspect relevant source code and repository requirements, then use its summary to understand the current system. Do not read repository source directly.\n")
+	b.WriteString("Create one ordered execution plan. The plan is the authoritative sequence of steps. Delegate only the current step at a time.\n")
+	b.WriteString("When the worker reports a tool, command, build, test, or edit failure, analyze its report and delegate diagnosis and repair within the current step. A failure is not a reason to abandon the task or move to an unrelated step.\n")
+	b.WriteString("For implementation work, delegate the current plan step to `delegate_to_subagent`. When the sub-agent loop ends, the orchestration system notifies you. Read the terminal result with `subagent_history` or `subagent_status` and verify the assigned work. Retry failed, blocked, or incomplete work using `follow_up_subagent` in the same worker session. Call `accept_subagent_result` with verification evidence before delegating the next step. Wait for completion events rather than polling. The worker has a separate session and never communicates with the user.\n")
 	b.WriteString("Only mark a step complete after verifying that its intended result is actually achieved. After the final goal is complete, stop and send the final result.\n")
-	b.WriteString("When the user asks to do, check, change, create, or fetch anything, CALL the matching tool instead of only describing what to do.\n")
-	b.WriteString("Prefer acting first: inspect with read_file, list_directory, or search_files, then act. Batch independent tool calls together.\n")
-	b.WriteString("Use run_command for shell work (it supports chains, pipes, and redirects). Use web_fetch for URLs. Use browser_* tools to operate web pages.\n")
 	b.WriteString("After tool results, summarize briefly what you did. Match the user's language.\n")
 	b.WriteString("Only when the task is complete and you are sending the final message to the user, start that final message with \u2728\u2728\u2728. Do not use \u2728\u2728\u2728 in intermediate progress, tool-related, or continuation messages.\n")
-	b.WriteString("Never stop at a promise: if you say you will fetch, check, or run something, call the tool in the SAME response instead of ending your turn.\n")
-	if agent != nil && agent.Tools != nil {
-		if defs := agent.Tools.Definitions(); len(defs) > 0 {
-			b.WriteString("Available tools:\n")
-			for _, d := range defs {
-				b.WriteString("- " + d.Name + ": " + strings.TrimSpace(d.Description) + "\n")
-			}
-		}
-	}
 	return b.String()
 }
 func resolveWorkspace() (string, error) {

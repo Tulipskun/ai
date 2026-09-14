@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const defaultSubAgentSystemPrompt = "You are the worker sub-agent. Execute only the task assigned by the planner inside the current project workspace. Do not communicate with the end user. Do not delegate to another agent. Do not change project scope. Inspect, implement, validate, and report the result to the planner."
+
 type SubAgentConfig struct {
 	Enabled         bool
 	Provider        string
@@ -26,30 +28,56 @@ type SubAgentRunner interface {
 	Status(string) string
 	History(string) string
 	Stop(string) bool
+	FollowUp(context.Context, string, string) (string, error)
+	Accept(string, string) error
 }
 
 type subAgentJob struct {
-	id       string
-	parent   *Session
-	task     string
-	status   string
-	started  time.Time
-	finished time.Time
-	result   string
-	progress string
-	events   []string
-	plan     string
-	step     PlanStep
-	planned  bool
-	cancel   context.CancelFunc
+	id         string
+	workerID   string
+	revision   uint64
+	reviewed   bool
+	superseded bool
+	accepted   bool
+	input      Input
+	parent     *Session
+	task       string
+	status     string
+	started    time.Time
+	finished   time.Time
+	result     string
+	progress   string
+	events     []string
+	plan       string
+	step       PlanStep
+	planned    bool
+	cancel     context.CancelFunc
 }
 
 type SubAgentEvent struct {
-	Parent   *Session
-	JobID    string
-	Status   string
-	Result   string
-	PlanStep PlanStep
+	Parent       *Session
+	JobID        string
+	Status       string
+	Result       string
+	PlanStep     PlanStep
+	PlanRevision uint64
+	Input        Input
+}
+
+// Message is the planner-facing lifecycle report shared by transports. It
+// identifies the captured revision and makes clear that completion is not acceptance.
+func (e SubAgentEvent) Message() string {
+	label := "investigation"
+	if e.PlanStep.Index > 0 {
+		label = fmt.Sprintf("plan revision %d step %d", e.PlanRevision, e.PlanStep.Index)
+	}
+	guidance := "Read the terminal result using `subagent_history` or `subagent_status`. Use `follow_up_subagent` with this job ID for failed, blocked, or incomplete work in the same worker session; wait for its completion event rather than polling."
+	if e.PlanStep.Index > 0 {
+		guidance += " Worker completion is not plan acceptance: call `accept_subagent_result` with verification evidence only after verifying success. Ignore stale results for replacement plans."
+	} else {
+		guidance += " Investigation results do not require plan-step acceptance; use the reviewed findings to create the execution plan."
+	}
+	return fmt.Sprintf("Sub-agent job %s %s for %s: %s\n%s", e.JobID, e.Status, label, e.Result, guidance)
 }
 
 type subAgentManager struct {
@@ -66,47 +94,47 @@ func newSubAgentManager(agent *Agent, cfg SubAgentConfig) *subAgentManager {
 }
 
 func (m *subAgentManager) Delegate(parent *Session, task string) (string, error) {
+	return m.start(parent, task, "", Input{})
+}
+
+// start reserves the parent before starting any worker. Each attempt gets a new
+// job ID, while follow-ups reopen the original worker's persistent conversation.
+func (m *subAgentManager) start(parent *Session, task, previous string, input Input) (string, error) {
 	if m == nil || m.agent == nil || parent == nil {
 		return "", errors.New("sdk: sub-agent is not configured")
 	}
 	task = strings.TrimSpace(task)
-	planState := parent.Plan()
-	step, planned := PlanStep{}, len(planState.Steps) > 0
-	if planned {
-		var ok bool
-		step, ok = parent.StartCurrentPlanStep()
-		if !ok {
-			return "", errors.New("sdk: no current plan step is ready for delegation")
-		}
-	}
 	if task == "" {
-		if !planned {
-			return "", errors.New("sdk: sub-agent task is required for investigation")
-		}
-		task = step.Text
-	}
-	m.mu.RLock()
-	for _, existing := range m.jobs {
-		if existing.parent == parent && existing.status == "running" && existing.planned == planned && (!planned || existing.step.Index == step.Index) {
-			m.mu.RUnlock()
-			return "", fmt.Errorf("sdk: plan step %s already has a running sub-agent", func() string {
-				if planned {
-					return fmt.Sprintf("%d", step.Index)
-				}
-				return "investigation"
-			}())
-		}
-	}
-	m.mu.RUnlock()
-	id := fmt.Sprintf("sa-%d", time.Now().UnixNano())
-	ctx, cancel := context.WithCancel(context.Background())
-	job := &subAgentJob{id: id, parent: parent, task: task, status: "running", started: time.Now(), cancel: cancel, step: step, planned: planned}
-	if planned {
-		job.plan = formatPlan(planState)
+		return "", errors.New("sdk: sub-agent task is required")
 	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	var retry *subAgentJob
+	if previous != "" {
+		retry = m.jobs[previous]
+		if retry == nil || retry.parent != parent {
+			return "", errors.New("sdk: sub-agent job not found")
+		}
+		if retry.status == "running" || retry.accepted || retry.superseded {
+			return "", errors.New("sdk: job is not retryable")
+		}
+	}
+	id := fmt.Sprintf("sa-%d", time.Now().UnixNano())
+	plan, step, planned, err := parent.reserveSubAgent(id, retry)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	job := &subAgentJob{id: id, workerID: parent.ID() + ":subagent:" + id, parent: parent, task: task, status: "running", started: time.Now(), cancel: cancel, step: step, planned: planned, revision: plan.Revision, input: cloneInputRoute(input)}
+	if retry != nil {
+		job.workerID = retry.workerID
+		job.input = cloneInputRoute(retry.input)
+		retry.superseded = true
+	}
+	if planned {
+		job.plan = formatPlan(plan)
+	}
 	m.jobs[id] = job
-	m.mu.Unlock()
 	go m.run(ctx, job)
 	return id, nil
 }
@@ -123,19 +151,13 @@ func (m *subAgentManager) run(ctx context.Context, job *subAgentJob) {
 	}
 	m.mu.Lock()
 	job.status, job.result, job.finished, job.cancel = status, result, time.Now(), nil
+	job.parent.finishSubAgent(job, status)
 	m.mu.Unlock()
-	if job.planned {
-		if status == "completed" {
-			job.parent.CompleteCurrentPlanStep()
-		} else {
-			job.parent.FailCurrentPlanStep()
-		}
-	}
 	m.eventMu.RLock()
 	sink := m.sink
 	m.eventMu.RUnlock()
 	if sink != nil {
-		sink(SubAgentEvent{Parent: job.parent, JobID: job.id, Status: status, Result: result, PlanStep: job.step})
+		sink(SubAgentEvent{Parent: job.parent, JobID: job.id, Status: status, Result: result, PlanStep: job.step, PlanRevision: job.revision, Input: cloneInputRoute(job.input)})
 	}
 }
 
@@ -160,7 +182,7 @@ func (m *subAgentManager) runWorker(ctx context.Context, job *subAgentJob) (Resp
 			return Response{}, fmt.Errorf("sdk: sub-agent provider %q has no key pool", provider)
 		}
 	}
-	workerID := job.parent.ID() + ":subagent:" + job.id
+	workerID := job.workerID
 	store := job.parent.store
 	if store == nil {
 		return Response{}, errors.New("sdk: parent session is not persistent")
@@ -177,7 +199,7 @@ func (m *subAgentManager) runWorker(ctx context.Context, job *subAgentJob) (Resp
 	}
 	prompt := strings.TrimSpace(m.cfg.SystemPrompt)
 	if prompt == "" {
-		prompt = "You are the worker sub-agent. Execute only the task assigned by the planner inside the current project workspace. Do not communicate with the end user. Do not delegate to another agent. Inspect, implement, validate, and report the result to the planner."
+		prompt = defaultSubAgentSystemPrompt
 	}
 	if job.planned {
 		prompt += "\n\nCurrent plan:\n" + job.plan
@@ -215,20 +237,21 @@ func chooseThinking(value, fallback ThinkingLevel) ThinkingLevel {
 	return fallback
 }
 
-func (m *subAgentManager) Status(id string) string {
-	m.mu.RLock()
+func (m *subAgentManager) Status(parent *Session, id string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	job := m.jobs[id]
-	m.mu.RUnlock()
-	if job == nil {
+	if job == nil || job.parent != parent {
 		return "sub-agent job not found: " + id
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	if job.status != "running" {
+		job.reviewed = true
+	}
 	stepLabel := "investigation"
 	if job.planned {
 		stepLabel = fmt.Sprintf("%d", job.step.Index)
 	}
-	text := fmt.Sprintf("job=%s status=%s step=%s task=%s", job.id, job.status, stepLabel, job.task)
+	text := fmt.Sprintf("job=%s status=%s step=%s revision=%d accepted=%t superseded=%t task=%s", job.id, job.status, stepLabel, job.revision, job.accepted, job.superseded, job.task)
 	if job.progress != "" {
 		text += " progress=" + job.progress
 	}
@@ -238,16 +261,19 @@ func (m *subAgentManager) Status(id string) string {
 	return text
 }
 
-func (m *subAgentManager) History(id string) string {
-	m.mu.RLock()
+func (m *subAgentManager) History(parent *Session, id string) string {
+	m.mu.Lock()
 	job := m.jobs[id]
-	if job == nil {
-		m.mu.RUnlock()
+	if job == nil || job.parent != parent {
+		m.mu.Unlock()
 		return "sub-agent job not found: " + id
+	}
+	if job.status != "running" {
+		job.reviewed = true
 	}
 	events := append([]string(nil), job.events...)
 	result := job.result
-	m.mu.RUnlock()
+	m.mu.Unlock()
 	var b strings.Builder
 	for _, event := range events {
 		if strings.TrimSpace(event) != "" {
@@ -276,19 +302,33 @@ func formatPlan(plan PlanState) string {
 	return strings.TrimSpace(b.String())
 }
 
-func (m *subAgentManager) Stop(id string) bool {
+func (m *subAgentManager) Stop(parent *Session, id string) bool {
 	m.mu.RLock()
+	defer m.mu.RUnlock()
 	job := m.jobs[id]
-	cancel := func() {}
-	if job != nil && job.cancel != nil {
-		cancel = job.cancel
-	}
-	m.mu.RUnlock()
-	if job == nil || job.cancel == nil {
+	if job == nil || job.parent != parent || job.cancel == nil {
 		return false
 	}
-	cancel()
+	job.cancel()
 	return true
+}
+
+func (m *subAgentManager) Accept(parent *Session, id, verification string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job := m.jobs[id]
+	if job == nil || job.parent != parent {
+		return errors.New("sdk: sub-agent job not found")
+	}
+	if job.status != "completed" || !job.reviewed || job.accepted || job.superseded || strings.TrimSpace(verification) == "" {
+		return errors.New("sdk: read the terminal result/history and provide verified success before acceptance; failed/incomplete work needs follow-up")
+	}
+	if err := parent.acceptSubAgent(job); err != nil {
+		return err
+	}
+	job.accepted = true
+	job.events = append(job.events, "Main accepted verified success: "+verification)
+	return nil
 }
 
 type subAgentRunner struct {
@@ -300,18 +340,35 @@ func (r *subAgentRunner) Delegate(ctx context.Context, task string) (string, err
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	return r.manager.Delegate(r.parent, task)
+	input, _ := ctx.Value(lifecycleInputKey{}).(Input)
+	return r.manager.start(r.parent, task, "", input)
 }
-func (r *subAgentRunner) Status(id string) string  { return r.manager.Status(id) }
-func (r *subAgentRunner) History(id string) string { return r.manager.History(id) }
-func (r *subAgentRunner) Stop(id string) bool      { return r.manager.Stop(id) }
+func (r *subAgentRunner) Status(id string) string  { return r.manager.Status(r.parent, id) }
+func (r *subAgentRunner) History(id string) string { return r.manager.History(r.parent, id) }
+func (r *subAgentRunner) Stop(id string) bool      { return r.manager.Stop(r.parent, id) }
+
+func (r *subAgentRunner) FollowUp(ctx context.Context, id, task string) (string, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", errors.New("sdk: follow-up job_id is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return r.manager.start(r.parent, task, id, Input{})
+}
+func (r *subAgentRunner) Accept(id, verification string) error {
+	return r.manager.Accept(r.parent, id, verification)
+}
 
 type subAgentTool struct{ runner SubAgentRunner }
 
 func (t *subAgentTool) Definitions() []Tool {
 	return []Tool{
+		{Name: "follow_up_subagent", Description: "Retry or clarify a terminal, unaccepted job in the same worker session. Returns a new job ID; wait for its completion event.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}, "task": map[string]any{"type": "string"}}, "required": []string{"job_id", "task"}}},
+		{Name: "accept_subagent_result", Description: "Explicitly accept verified success of the current plan step, advancing exactly one step. First read its terminal result using subagent_history/status. A completed worker loop is not proof of success: blocked/incomplete reports require follow_up_subagent instead. Provide verification evidence.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}, "verification": map[string]any{"type": "string"}}, "required": []string{"job_id", "verification"}}},
 		{Name: "delegate_to_subagent", Description: "Start a background worker task. Returns immediately with a job id; the worker runs in a separate session and reports completion, failure, or stop to the planner.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"task": map[string]any{"type": "string"}}, "required": []string{"task"}}},
-		{Name: "subagent_status", Description: "Check progress or result of a background sub-agent job.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}}, "required": []string{"job_id"}}},
+		{Name: "subagent_status", Description: "Read progress/result on explicit request or when needed for review. Wait for completion events rather than repeatedly polling.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}}, "required": []string{"job_id"}}},
 		{Name: "subagent_history", Description: "Read the execution history and final result of a sub-agent job without reading repository source directly.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}}, "required": []string{"job_id"}}},
 		{Name: "stop_subagent", Description: "Stop a running background sub-agent job when the user changes direction or the task should be cancelled.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}}, "required": []string{"job_id"}}},
 	}
@@ -319,8 +376,9 @@ func (t *subAgentTool) Definitions() []Tool {
 func (t *subAgentTool) Execute(ctx context.Context, call ToolCall) ToolResult {
 	result := ToolResult{ID: call.ID}
 	var input struct {
-		Task  string `json:"task"`
-		JobID string `json:"job_id"`
+		Task         string `json:"task"`
+		JobID        string `json:"job_id"`
+		Verification string `json:"verification"`
 	}
 	if err := json.Unmarshal([]byte(call.Arguments), &input); err != nil {
 		result.Content = "invalid sub-agent arguments: " + err.Error()
@@ -333,6 +391,19 @@ func (t *subAgentTool) Execute(ctx context.Context, call ToolCall) ToolResult {
 		return result
 	}
 	switch call.Name {
+	case "follow_up_subagent":
+		id, err := t.runner.FollowUp(ctx, strings.TrimSpace(input.JobID), input.Task)
+		if err != nil {
+			return ToolResult{ID: call.ID, Content: err.Error(), IsError: true}
+		}
+		result.Content = "sub-agent follow-up started: " + id
+		return result
+	case "accept_subagent_result":
+		if err := t.runner.Accept(strings.TrimSpace(input.JobID), input.Verification); err != nil {
+			return ToolResult{ID: call.ID, Content: err.Error(), IsError: true}
+		}
+		result.Content = "Verified result accepted; the next plan step is now ready, if any."
+		return result
 	case "delegate_to_subagent":
 		id, err := t.runner.Delegate(ctx, input.Task)
 		if err != nil {

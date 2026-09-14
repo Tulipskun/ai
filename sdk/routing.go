@@ -161,17 +161,19 @@ type PlanStep struct {
 	Status string
 }
 type PlanState struct {
-	Steps   []PlanStep
-	Current int
+	Revision uint64
+	Steps    []PlanStep
+	Current  int
 }
 
 type Session struct {
-	mu      sync.RWMutex
-	config  SessionConfig
-	keys    *KeyPool
-	history []Turn
-	store   *SessionDB
-	plan    PlanState
+	mu        sync.RWMutex
+	config    SessionConfig
+	keys      *KeyPool
+	history   []Turn
+	store     *SessionDB
+	plan      PlanState
+	activeJob string
 }
 
 func NewSession(config SessionConfig, keys *KeyPool) *Session {
@@ -250,7 +252,7 @@ func (s *Session) SetPlan(steps []string) error {
 func (s *Session) cleanPlan(steps []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.plan = PlanState{}
+	s.plan = PlanState{Revision: s.plan.Revision + 1}
 	for _, step := range steps {
 		step = strings.TrimSpace(step)
 		if step == "" {
@@ -267,7 +269,7 @@ func (s *Session) Plan() PlanState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	steps := append([]PlanStep(nil), s.plan.Steps...)
-	return PlanState{Steps: steps, Current: s.plan.Current}
+	return PlanState{Revision: s.plan.Revision, Steps: steps, Current: s.plan.Current}
 }
 
 func (s *Session) CurrentPlanStep() (PlanStep, bool) {
@@ -279,37 +281,74 @@ func (s *Session) CurrentPlanStep() (PlanStep, bool) {
 	return s.plan.Steps[s.plan.Current], true
 }
 
-func (s *Session) StartCurrentPlanStep() (PlanStep, bool) {
+// reserveSubAgent binds a reservation to a snapshot under the plan lock. A
+// replacement plan does not clear activeJob: cancellation must finish first.
+func (s *Session) reserveSubAgent(id string, retry *subAgentJob) (PlanState, PlanStep, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.plan.Current < 0 || s.plan.Current >= len(s.plan.Steps) {
-		return PlanStep{}, false
+	if s.activeJob != "" {
+		return PlanState{}, PlanStep{}, false, errors.New("sdk: parent already has a running sub-agent")
 	}
-	s.plan.Steps[s.plan.Current].Status = "running"
-	return s.plan.Steps[s.plan.Current], true
+	planned := s.plan.Current < len(s.plan.Steps)
+	step := PlanStep{}
+	if planned {
+		step = s.plan.Steps[s.plan.Current]
+	}
+	if retry != nil {
+		if retry.revision != s.plan.Revision || retry.planned != planned || (planned && retry.step.Index != step.Index) {
+			return PlanState{}, PlanStep{}, false, errors.New("sdk: stale sub-agent result belongs to another plan or step")
+		}
+	}
+	if planned {
+		allowed := step.Status == "ready"
+		if retry != nil {
+			allowed = step.Status == "awaiting_review" || step.Status == "failed"
+		}
+		if !allowed {
+			return PlanState{}, PlanStep{}, false, errors.New("sdk: current step requires review/acceptance or follow-up of its existing job")
+		}
+		s.plan.Steps[s.plan.Current].Status = "running"
+	}
+	s.activeJob = id
+	snapshot := s.plan
+	snapshot.Steps = append([]PlanStep(nil), s.plan.Steps...)
+	return snapshot, step, planned, nil
 }
 
-func (s *Session) CompleteCurrentPlanStep() (PlanStep, bool) {
+func (s *Session) finishSubAgent(job *subAgentJob, status string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.plan.Current < 0 || s.plan.Current >= len(s.plan.Steps) {
-		return PlanStep{}, false
+	if s.activeJob != job.id {
+		return
+	}
+	s.activeJob = ""
+	if !s.matchesJob(job) {
+		return
+	}
+	if status == "completed" {
+		s.plan.Steps[s.plan.Current].Status = "awaiting_review"
+	} else {
+		s.plan.Steps[s.plan.Current].Status = "failed"
+	}
+}
+
+// matchesJob requires s.mu. The revision protects even identically worded replacement plans.
+func (s *Session) matchesJob(job *subAgentJob) bool {
+	return job.planned && s.plan.Revision == job.revision && s.plan.Current < len(s.plan.Steps) && s.plan.Steps[s.plan.Current].Index == job.step.Index
+}
+
+func (s *Session) acceptSubAgent(job *subAgentJob) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeJob != "" || !s.matchesJob(job) || s.plan.Steps[s.plan.Current].Status != "awaiting_review" {
+		return errors.New("sdk: result is not awaiting acceptance for the current plan step")
 	}
 	s.plan.Steps[s.plan.Current].Status = "completed"
-	completed := s.plan.Steps[s.plan.Current]
 	s.plan.Current++
 	if s.plan.Current < len(s.plan.Steps) {
 		s.plan.Steps[s.plan.Current].Status = "ready"
 	}
-	return completed, true
-}
-
-func (s *Session) FailCurrentPlanStep() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.plan.Current >= 0 && s.plan.Current < len(s.plan.Steps) {
-		s.plan.Steps[s.plan.Current].Status = "failed"
-	}
+	return nil
 }
 
 func (s *Session) Append(turns ...Turn) {

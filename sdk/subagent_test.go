@@ -79,7 +79,7 @@ func TestSubAgentInvestigationWorksBeforePlan(t *testing.T) {
 	}
 }
 
-func TestSubAgentReceivesFullPlanAndAdvancesOneStep(t *testing.T) {
+func TestSubAgentReceivesFullPlanAndRequiresAcceptance(t *testing.T) {
 	provider := &subAgentCaptureProvider{}
 	agent, parent := newSubAgentTest(t, provider)
 	manager := newSubAgentManager(agent, agent.SubAgentConfig)
@@ -94,6 +94,14 @@ func TestSubAgentReceivesFullPlanAndAdvancesOneStep(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	state := parent.Plan()
+	if state.Current != 0 || state.Steps[0].Status != "awaiting_review" || state.Steps[1].Status != "pending" {
+		t.Fatalf("worker must await review: %+v", state)
+	}
+	_ = runner.History(job)
+	if err := runner.Accept(job, "Reviewed worker changes and validation"); err != nil {
+		t.Fatal(err)
+	}
+	state = parent.Plan()
 	if state.Current != 1 || state.Steps[0].Status != "completed" || state.Steps[1].Status != "ready" {
 		t.Fatalf("unexpected plan state: %+v", state)
 	}

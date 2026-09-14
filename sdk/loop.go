@@ -3,8 +3,7 @@ package sdk
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strings"
+	"log"
 	"sync"
 	"time"
 )
@@ -34,14 +33,20 @@ func (h *HarnessLoop) Run(ctx context.Context) error {
 			if event.Parent == nil {
 				return
 			}
-			stepLabel := "investigation"
-			if event.PlanStep.Index > 0 {
-				stepLabel = fmt.Sprintf("plan step %d", event.PlanStep.Index)
+			text := event.Message()
+			input := cloneInputRoute(event.Input)
+			if input.SessionID == "" {
+				input.SessionID = event.Parent.ID()
 			}
-			text := fmt.Sprintf("Sub-agent job %s %s for %s: %s", event.JobID, event.Status, stepLabel, event.Result)
-			source := inputSourceForSession(event.Parent.ID())
+			input.Turn = Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: text}}}
 			go func() {
-				_ = h.Entry(context.WithoutCancel(ctx), Input{Source: source, SessionID: event.Parent.ID(), Turn: Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: text}}}})
+				if err := h.Entry(context.WithoutCancel(ctx), input); err != nil {
+					if h.OnTurnError != nil {
+						h.OnTurnError(input, err)
+					} else {
+						log.Printf("sdk: sub-agent continuation failed source=%s session=%s: %v", input.Source, input.SessionID, err)
+					}
+				}
 			}()
 		})
 	}
@@ -86,10 +91,7 @@ func (h *HarnessLoop) Entry(ctx context.Context, input Input) error {
 		return nil
 	}
 
-	lockKey := input.SessionID
-	if lockKey == "" {
-		lockKey = session.ID()
-	}
+	lockKey := session.ID()
 	if lockKey != "" {
 		lock := h.sessionLock(lockKey)
 		lock.Lock()
@@ -124,6 +126,7 @@ func (h *HarnessLoop) Entry(ctx context.Context, input Input) error {
 	}
 
 	ctx = WithSessionID(ctx, session.ID())
+	ctx = context.WithValue(ctx, lifecycleInputKey{}, cloneInputRoute(input))
 	var resp Response
 	if h.Agent != nil {
 		resp, err = h.Agent.RunTurnWithTraceAndEntry(ctx, session, input.Turn, req, dispatchTrace, h.Entry)
@@ -176,9 +179,10 @@ func cloneMetadata(in map[string]string) map[string]string {
 	return out
 }
 
-func inputSourceForSession(sessionID string) string {
-	if i := strings.IndexByte(sessionID, ':'); i > 0 {
-		return sessionID[:i]
-	}
-	return ""
+// lifecycleInputKey carries the original canonical route through tool calls.
+// It is captured on delegation, not reconstructed from session identifiers.
+type lifecycleInputKey struct{}
+
+func cloneInputRoute(input Input) Input {
+	return Input{Source: input.Source, SessionID: input.SessionID, Metadata: cloneMetadata(input.Metadata)}
 }

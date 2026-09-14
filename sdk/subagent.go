@@ -29,6 +29,46 @@ type SubAgentRunner interface {
 	Stop(string) bool
 }
 
+// orchestrationToolNames are Main Agent tools. Workers must never see or
+// execute them: a worker that can plan or delegate stops being a worker.
+var orchestrationToolNames = map[string]bool{
+	planningToolName:       true,
+	"delegate_to_subagent": true,
+	"subagent_status":      true,
+	"subagent_history":     true,
+	"send_to_subagent":     true,
+	"stop_subagent":        true,
+}
+
+// workerToolExecutor exposes only execution tools to a worker sub-agent.
+// Even if the underlying registry ever contained an orchestration tool,
+// the worker can neither see it nor execute it.
+type workerToolExecutor struct{ base ToolExecutor }
+
+func (w *workerToolExecutor) Definitions() []Tool {
+	if w == nil || w.base == nil {
+		return nil
+	}
+	var out []Tool
+	for _, def := range w.base.Definitions() {
+		if orchestrationToolNames[def.Name] {
+			continue
+		}
+		out = append(out, def)
+	}
+	return out
+}
+
+func (w *workerToolExecutor) Execute(ctx context.Context, call ToolCall) ToolResult {
+	if orchestrationToolNames[call.Name] {
+		return ToolResult{ID: call.ID, Content: "worker sub-agents cannot delegate or plan; execute the assigned task directly", IsError: true}
+	}
+	if w == nil || w.base == nil {
+		return ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
+	}
+	return w.base.Execute(ctx, call)
+}
+
 type subAgentJob struct {
 	id       string
 	parent   *Session
@@ -264,7 +304,7 @@ func (m *subAgentManager) openWorker(job *subAgentJob) (*Session, *Agent, Reques
 	}
 	workerAgent := &Agent{
 		Client:          m.agent.Client,
-		Tools:           m.agent.Tools,
+		Tools:           &workerToolExecutor{base: m.agent.Tools},
 		MaxRetries:      m.agent.MaxRetries,
 		DisablePlanning: true,
 		SubAgentConfig:  SubAgentConfig{Enabled: false},

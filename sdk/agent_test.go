@@ -97,6 +97,22 @@ func TestAgentToolDefinitionsReachProvider(t *testing.T) {
 		t.Fatalf("tools not sent: %#v", p.requests[0].Tools)
 	}
 }
+func TestMainAgentReceivesPlanningPrompt(t *testing.T) {
+	p := &agentTestProvider{responses: []Response{{Content: []ContentPart{{Type: ContentText, Text: "done"}}}}}
+	c, s := newAgentTestSession(p)
+	tools := &agentTestTools{definitions: []Tool{{Name: "echo"}}}
+	a := &Agent{Client: c, Tools: tools, MaxRetries: 0}
+	_, err := a.RunTurn(context.Background(), s, Turn{Role: RoleUser}, Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.requests) != 1 {
+		t.Fatalf("provider calls=%d", len(p.requests))
+	}
+	if !strings.Contains(p.requests[0].SystemPrompt, "Main Agent") {
+		t.Fatalf("main agent lost its planning prompt: %q", p.requests[0].SystemPrompt)
+	}
+}
 func TestAgentToolThenFinal(t *testing.T) {
 	p := &agentTestProvider{responses: []Response{
 		{ToolCalls: []ToolCall{{ID: "plan-1", Name: "plan_create", Arguments: `{"goal":"report the echo tool result back","steps":["use the echo tool and return the result"]}`}}},

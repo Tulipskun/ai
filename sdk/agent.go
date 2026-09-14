@@ -200,8 +200,14 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 			return Response{}, err
 		}
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
-		if executor != nil {
+		if _, ok := executor.(*planningToolExecutor); ok {
+			// Main Agent planning mode only. Workers run with a raw
+			// executor and must keep their own system prompt; giving
+			// them the Main Agent instruction turns them into planners.
 			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt)
+			req.Tools = executor.Definitions()
+		} else if executor != nil {
+			req.SystemPrompt = baseSystemPrompt
 			req.Tools = executor.Definitions()
 		} else {
 			req.SystemPrompt = baseSystemPrompt

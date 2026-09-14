@@ -256,3 +256,59 @@ func TestSubAgentUsesSeparateSession(t *testing.T) {
 		t.Fatalf("worker changed parent history: %#v", parent.History())
 	}
 }
+
+type workerRoleTools struct{}
+
+func (workerRoleTools) Definitions() []Tool {
+	return []Tool{{Name: "read_file"}, {Name: "plan"}, {Name: "delegate_to_subagent"}, {Name: "subagent_history"}, {Name: "send_to_subagent"}, {Name: "stop_subagent"}, {Name: "subagent_status"}}
+}
+
+func (workerRoleTools) Execute(_ context.Context, call ToolCall) ToolResult {
+	return ToolResult{ID: call.ID, Content: "ok"}
+}
+
+func TestWorkerKeepsWorkerPrompt(t *testing.T) {
+	provider := &subAgentCaptureProvider{}
+	agent, parent := newSubAgentTest(t, provider)
+	manager := newSubAgentManager(agent, agent.SubAgentConfig)
+	runner := &subAgentRunner{manager: manager, parent: parent}
+	job, err := runner.Delegate(context.Background(), "do the task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && strings.Contains(runner.Status(job), "status=running") {
+		time.Sleep(10 * time.Millisecond)
+	}
+	prompt := provider.lastRequest().SystemPrompt
+	if !strings.Contains(prompt, "worker sub-agent") {
+		t.Fatalf("worker lost its role prompt: %s", prompt)
+	}
+	if strings.Contains(prompt, "You are the Main Agent") {
+		t.Fatalf("worker received the Main Agent instruction: %s", prompt)
+	}
+}
+
+func TestWorkerExecutorHidesOrchestrationTools(t *testing.T) {
+	executor := &workerToolExecutor{base: workerRoleTools{}}
+	var names []string
+	for _, def := range executor.Definitions() {
+		names = append(names, def.Name)
+	}
+	if len(names) != 1 || names[0] != "read_file" {
+		t.Fatalf("worker definitions = %v, want only execution tools", names)
+	}
+	for _, name := range []string{"plan", "delegate_to_subagent", "subagent_status", "subagent_history", "send_to_subagent", "stop_subagent"} {
+		result := executor.Execute(context.Background(), ToolCall{ID: "1", Name: name})
+		if !result.IsError {
+			t.Fatalf("worker executed orchestration tool %q", name)
+		}
+	}
+	result := executor.Execute(context.Background(), ToolCall{ID: "2", Name: "read_file"})
+	if result.IsError || result.Content != "ok" {
+		t.Fatalf("worker execution tool failed: %+v", result)
+	}
+	if defs := (&workerToolExecutor{}).Definitions(); len(defs) != 0 {
+		t.Fatalf("nil worker executor must expose nothing, got %+v", defs)
+	}
+}

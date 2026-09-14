@@ -1,17 +1,17 @@
-# Architecture Decisions
+# การตัดสินใจด้านสถาปัตยกรรม
 
-DEC-001 — Requirements live in the project repository rather than in AI memory.
+DEC-001 — Requirement ต้องอยู่ใน repository ของโปรเจค ไม่ใช่ใน AI memory
 
-Reason: specifications must remain available to every future agent, contributor, branch, and clone of the project.
+เหตุผล: specification ต้องพร้อมใช้งานสำหรับ agent, contributor, branch และ clone ของโปรเจคในอนาคตทุกตัว
 
-DEC-002 — Project requirements are separated into product goals, functional requirements, constraints, decisions, and change history.
+DEC-002 — Project requirements แยกเป็นเป้าหมายผลิตภัณฑ์, ข้อกำหนดด้านการทำงาน, ข้อจำกัด, การตัดสินใจ และประวัติการเปลี่ยนแปลง
 
-Reason: separate stable intent from implementation constraints and historical changes so agents can reason about impact without rewriting the whole specification.
+เหตุผล: แยกเจตนาที่คงที่ออกจาก implementation constraints และประวัติ เพื่อให้ agent สามารถวิเคราะห์ผลกระทบได้โดยไม่ต้องเขียน specification ทั้งหมดใหม่
 
-DEC-003 — A conflicting user request is handled as a requirement change before implementation.
+DEC-003 — หาก user request ขัดแย้งกับ requirement เดิม ต้องจัดการเป็น requirement change ก่อน implementation
 
-Reason: silently implementing conflicting behavior creates undocumented drift between requirements and code.
+เหตุผล: การ implement พฤติกรรมที่ขัดแย้งโดยไม่บันทึกจะทำให้ specification ของโปรเจคกับโค้ดเกิด drift โดยไม่มีเอกสารกำกับ
 
-DEC-004 — New software projects created by the AI receive a `requirements/` directory in the project repository before substantial implementation.
+DEC-004 — Software project ใหม่ที่ AI สร้างต้องมี `requirements/` อยู่ใน repository ของโปรเจคก่อนเริ่ม implementation ในส่วนสำคัญ
 
-Reason: the project repository must carry its own specification from its first implementation onward.
+เหตุผล: repository ของโปรเจคต้องมี specification ของตัวเองตั้งแต่เริ่ม implementation

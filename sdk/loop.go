@@ -29,26 +29,7 @@ func (h *HarnessLoop) Run(ctx context.Context) error {
 		return errors.New("sdk: incomplete harness loop configuration")
 	}
 	if h.Agent != nil {
-		h.Agent.SetSubAgentTraceSink(func(event SubAgentEvent) {
-			if event.Parent == nil || event.Trace == nil {
-				return
-			}
-			input := cloneInputRoute(event.Input)
-			if input.SessionID == "" {
-				input.SessionID = event.Parent.ID()
-			}
-			metadata := cloneMetadata(input.Metadata)
-			if metadata == nil {
-				metadata = map[string]string{}
-			}
-			metadata["trace_actor"] = "subagent"
-			metadata["trace_job_id"] = event.JobID
-			traceCopy := *event.Trace
-			for _, display := range h.Displays {
-				DispatchDisplay(context.WithoutCancel(ctx), display, Output{Source: input.Source, SessionID: input.SessionID, Trace: &traceCopy, Metadata: metadata}, h.DisplayTimeout)
-			}
-		})
-		h.Agent.SetSubAgentEventSink(func(event SubAgentEvent) {
+		h.Agent.SetSubAgentSinks(func(event SubAgentEvent) {
 			if event.Parent == nil {
 				return
 			}
@@ -66,6 +47,24 @@ func (h *HarnessLoop) Run(ctx context.Context) error {
 					}
 				}
 			}()
+		}, func(event SubAgentEvent) {
+			if event.Parent == nil || event.Trace == nil {
+				return
+			}
+			input := cloneInputRoute(event.Input)
+			if input.SessionID == "" {
+				input.SessionID = event.Parent.ID()
+			}
+			metadata := cloneMetadata(input.Metadata)
+			if metadata == nil {
+				metadata = map[string]string{}
+			}
+			metadata["trace_actor"] = "subagent"
+			metadata["trace_job_id"] = event.JobID
+			traceCopy := *event.Trace
+			for _, display := range h.Displays {
+				DispatchDisplay(context.WithoutCancel(ctx), display, Output{Source: input.Source, SessionID: input.SessionID, Trace: &traceCopy, Metadata: metadata}, h.DisplayTimeout)
+			}
 		})
 	}
 	inputs, err := h.Source.Receive(ctx)
@@ -98,19 +97,16 @@ func (h *HarnessLoop) Entry(ctx context.Context, input Input) error {
 	if session == nil {
 		return errors.New("sdk: session resolver returned nil session")
 	}
-
 	if input.Turn.Role == RoleToolResult || input.Turn.ToolResult != nil {
 		session.Append(input.Turn)
 		return nil
 	}
-
 	lockKey := session.ID()
 	if lockKey != "" {
 		lock := h.sessionLock(lockKey)
 		lock.Lock()
 		defer lock.Unlock()
 	}
-
 	var req Request
 	if h.BuildRequest != nil {
 		req, err = h.BuildRequest(ctx, input, session)
@@ -120,7 +116,6 @@ func (h *HarnessLoop) Entry(ctx context.Context, input Input) error {
 	}
 	req.Messages = cloneTurns(session.History())
 	req.Messages = append(req.Messages, cloneTurn(input.Turn))
-
 	var responseTraced bool
 	dispatchTrace := func(traceCtx context.Context, event TraceEvent) {
 		switch event.Stage {
@@ -137,7 +132,6 @@ func (h *HarnessLoop) Entry(ctx context.Context, input Input) error {
 			DispatchDisplay(traceCtx, display, Output{Source: input.Source, SessionID: input.SessionID, Trace: &traceCopy, Metadata: metadata}, h.DisplayTimeout)
 		}
 	}
-
 	ctx = WithSessionID(ctx, session.ID())
 	ctx = context.WithValue(ctx, lifecycleInputKey{}, cloneInputRoute(input))
 	var resp Response
@@ -149,11 +143,9 @@ func (h *HarnessLoop) Entry(ctx context.Context, input Input) error {
 	if err != nil {
 		return err
 	}
-
 	if responseTraced {
 		return nil
 	}
-
 	output := Output{Source: input.Source, SessionID: input.SessionID, Content: append([]ContentPart(nil), resp.Content...), Response: resp, Metadata: cloneMetadata(input.Metadata)}
 	if output.Metadata == nil {
 		output.Metadata = map[string]string{}

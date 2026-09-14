@@ -25,3 +25,40 @@ func TestFormatActorToolResultKeepsToolName(t *testing.T) {
 		t.Fatalf("tool result=%q", got)
 	}
 }
+
+func TestActorTraceRequestKeepsSameStateDuringToolContinuation(t *testing.T) {
+	key := "same-turn"
+	actorTraceStates = make(map[string]*actorTraceState)
+	g := (*Gateway)(nil)
+	g.actorTraceBeginTurn(key)
+	state := actorTraceStates[key]
+	state.messageID = "message-1"
+	state.items = []string{"provider accepted request; processing", "tool: read_file", "✅ tool: read_file"}
+	g.actorTraceBeginTurn(key)
+	state = actorTraceStates[key]
+	if state.messageID != "message-1" {
+		t.Fatalf("message id changed during tool continuation: %q", state.messageID)
+	}
+	if len(state.items) != 3 || state.items[1] != "tool: read_file" {
+		t.Fatalf("trace items were reset: %#v", state.items)
+	}
+}
+
+func TestActorTraceRequestStartsNewStateAfterCompletedTurn(t *testing.T) {
+	key := "new-turn"
+	actorTraceStates = make(map[string]*actorTraceState)
+	g := (*Gateway)(nil)
+	g.actorTraceBeginTurn(key)
+	state := actorTraceStates[key]
+	state.messageID = "old-message"
+	state.items = []string{"provider accepted request; processing", "✅ tool: read_file"}
+	g.actorTraceComplete(key)
+	g.actorTraceBeginTurn(key)
+	state = actorTraceStates[key]
+	if state.messageID != "" {
+		t.Fatalf("completed turn reused old message: %q", state.messageID)
+	}
+	if len(state.items) != 0 {
+		t.Fatalf("completed turn reused old items: %#v", state.items)
+	}
+}

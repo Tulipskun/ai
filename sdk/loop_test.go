@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -116,6 +117,66 @@ func (tracedLoopTestProvider) Generate(context.Context, Request) (Response, erro
 	return Response{Content: []ContentPart{{Type: ContentText, Text: "response"}}}, nil
 }
 func (tracedLoopTestProvider) WithAPIKey(string) Provider { return tracedLoopTestProvider{} }
+
+func TestLoopSubAgentEventDisplaysStatusWithMetadata(t *testing.T) {
+	keys := NewKeyPool("test-key")
+	session := NewSession(SessionConfig{ID: "s1", Provider: ProviderOpenRouter, Model: "model", KeyIndex: 0}, keys)
+	seen := make(chan Output, 8)
+	display := DisplayFunc(func(_ context.Context, output Output) error { seen <- output; return nil })
+	loop := &HarnessLoop{Client: newLoopTestClient(), ResolveSession: func(context.Context, Input) (*Session, error) { return session, nil }, Displays: []Display{display}, DisplayTimeout: time.Second}
+	meta := map[string]string{"channel_id": "C1"}
+	if err := loop.Handle(context.Background(), Input{Source: "discord", SessionID: "s1", Turn: Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: "input"}}}, Metadata: meta}); err != nil {
+		t.Fatal(err)
+	}
+	// Drain the normal turn output; the status assertion below is what matters.
+	select {
+	case <-seen:
+	case <-time.After(time.Second):
+		t.Fatal("turn output was not displayed")
+	}
+	loop.handleSubAgentEvent(context.Background(), SubAgentEvent{Parent: session, JobID: "sa-1", Status: "completed", Result: "done"})
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case output := <-seen:
+			if output.Trace != nil {
+				continue
+			}
+			text := ""
+			for _, part := range output.Content {
+				text += part.Text
+			}
+			if !strings.Contains(text, "sub agent id sa-1") {
+				continue
+			}
+			if output.Metadata["channel_id"] != "C1" {
+				t.Fatalf("status lost channel metadata: %+v", output.Metadata)
+			}
+			if output.SessionID != "s1" {
+				t.Fatalf("status session = %q", output.SessionID)
+			}
+			goto injected
+		case <-timeout:
+			t.Fatal("sub-agent status was not displayed")
+		}
+	}
+injected:
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, turn := range session.History() {
+			if turn.Role != RoleUser {
+				continue
+			}
+			for _, part := range turn.Content {
+				if strings.Contains(part.Text, "sub agent id sa-1") {
+					return
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("completion prompt was not injected into the parent session")
+}
 
 func TestLoopContinuesWhenDisplayFails(t *testing.T) {
 	keys := NewKeyPool("test-key")

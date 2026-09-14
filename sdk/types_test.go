@@ -7,7 +7,7 @@ func TestCanonicalToolHistory(t *testing.T) {
 		{Role:RoleUser, Content:[]ContentPart{{Type:ContentText, Text:"run pwd"}}},
 		{Role:RoleToolCall, ToolCall:&ToolCall{ID:"call-1", Name:"bash", Arguments:`{"command":"pwd"}`}},
 		{Role:RoleToolResult, ToolResult:&ToolResult{ID:"call-1", Content:"/workspace"}},
-	}, ThinkingLevel:ThinkingMedium, Stream:true}
+	}, ThinkingLevel:ThinkingMedium}
 	if req.Messages[1].ToolCall.ID != req.Messages[2].ToolResult.ID { t.Fatal("tool call/result IDs must match") }
-	if !req.Stream || req.ThinkingLevel != ThinkingMedium { t.Fatal("request controls were not preserved") }
+	if req.ThinkingLevel != ThinkingMedium { t.Fatal("request controls were not preserved") }
 }

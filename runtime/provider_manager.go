@@ -47,7 +47,7 @@ func (m *ProviderManager) Upsert(ctx context.Context, name, adapter, endpoint, a
 	for _, config := range configs { if string(config.ID) == name { selected = config; break } }
 	if selected.ID == "" { return fmt.Errorf("provider %q was not converted to an SDK config", name) }
 	if err := m.persist(file); err != nil { return err }
-	if err := m.ensureAdapter(selected.Adapter); err != nil { return err }
+	if err := m.ensureAdapter(selected.ID, selected.Adapter); err != nil { return err }
 	m.rt.Router.RegisterProvider(selected)
 	m.rt.ProviderConfigs = configs
 	m.rt.Providers = providerIDs(configs)
@@ -56,9 +56,9 @@ func (m *ProviderManager) Upsert(ctx context.Context, name, adapter, endpoint, a
 	return nil
 }
 
-func (m *ProviderManager) ensureAdapter(id sdk.AdapterID) error {
-	if _, ok := m.rt.Client.Adapters[id]; ok { return nil }
-	switch id { case sdk.AdapterOpenAI: m.rt.Client.RegisterAdapter(id, openai.New("")); case sdk.AdapterAnthropic: m.rt.Client.RegisterAdapter(id, anthropic.New("")); case sdk.AdapterGemini: m.rt.Client.RegisterAdapter(id, gemini.New("")); default: return fmt.Errorf("runtime: unsupported adapter %q", id) }
+func (m *ProviderManager) ensureAdapter(provider sdk.ProviderID, id sdk.AdapterID) error {
+	if _, ok := m.rt.Client.Adapters[sdk.AdapterBinding{Provider: provider, Adapter: id}]; ok { return nil }
+	switch id { case sdk.AdapterOpenAI: m.rt.Client.RegisterAdapter(provider, id, openai.New("")); case sdk.AdapterAnthropic: m.rt.Client.RegisterAdapter(provider, id, anthropic.New("")); case sdk.AdapterGemini: m.rt.Client.RegisterAdapter(provider, id, gemini.New("")); default: return fmt.Errorf("runtime: unsupported adapter %q", id) }
 	return nil
 }
 func (m *ProviderManager) persist(config ProviderFileConfig) error {

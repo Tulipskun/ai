@@ -4,7 +4,7 @@
 
 ## Interactive UX
 
-The CLI provides persistent input history in `.data/cli.history`, arrow-key history navigation, cursor editing, Home/End, Ctrl+U/Ctrl+K, Ctrl+C turn cancellation, and Ctrl+D exit. Normal input is streamed to the active model when the provider supports streaming. Tool activity and retry waits are rendered as compact status lines.
+The CLI provides persistent input history in `.data/cli.history`, arrow-key history navigation, cursor editing, Home/End, Ctrl+U/Ctrl+K, Ctrl+C turn cancellation, and Ctrl+D exit. Normal input is sent to the active model with a single non-streaming Generate call. Tool activity and retry waits are rendered as compact status lines.
 
 The CLI never prints raw model chain-of-thought. The `/thinking` command changes the session thinking setting and the UI only reports the selected level.
 

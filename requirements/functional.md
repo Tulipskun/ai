@@ -16,7 +16,7 @@ REQ-007 — Provider model discovery uses the live provider catalogue; a success
 
 REQ-008 — Retries reuse the selected session API key and do not rotate keys implicitly.
 
-REQ-009 — Streaming output is not automatically replayed after output has started.
+REQ-009 — The Harness uses non-streaming Generate only; streaming mode is not supported.
 
 REQ-010 — Browser automation is available through the built-in Go CDP implementation without Playwright or a Node.js worker.
 

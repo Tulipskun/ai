@@ -31,9 +31,6 @@ func (p *agentTestProvider) Generate(_ context.Context, req Request) (Response, 
 	p.calls++
 	return r, nil
 }
-func (p *agentTestProvider) Stream(context.Context, Request) (<-chan Event, error) {
-	return nil, errors.New("not implemented")
-}
 func (p *agentTestProvider) WithAPIKey(string) Provider { return p }
 
 type agentTestTools struct {
@@ -59,16 +56,13 @@ func (p *blockingAgentProvider) Generate(ctx context.Context, _ Request) (Respon
 	<-ctx.Done()
 	return Response{}, ctx.Err()
 }
-func (p *blockingAgentProvider) Stream(context.Context, Request) (<-chan Event, error) {
-	return nil, errors.New("not implemented")
-}
 func (p *blockingAgentProvider) WithAPIKey(string) Provider { return p }
 func newAgentTestSession(p Provider) (*RouterClient, *Session) {
 	r := NewRouter()
 	r.RegisterProvider(ProviderConfig{ID: "test", BaseURL: "http://test", Keys: NewKeyPool("key"), Adapter: AdapterOpenAI})
 	r.Register(ModelRoute{Provider: "test", Model: "model", Adapter: AdapterOpenAI})
 	c := NewRouterClient(r)
-	c.RegisterAdapter(AdapterOpenAI, p)
+	c.RegisterAdapter("test", AdapterOpenAI, p)
 	s := NewSession(SessionConfig{ID: "s", Provider: "test", Model: "model", KeyIndex: 0}, NewKeyPool("key"))
 	return c, s
 }

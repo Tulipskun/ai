@@ -492,7 +492,7 @@ func (s *SessionDB) RecordRequest(sessionID string, attempt int, req Request) (i
 		nullableFloat(req.Temperature),
 		req.ThinkingLevel,
 		req.MaxOutputTokens,
-		boolInt(req.Stream),
+		boolInt(false),
 	)
 	if err != nil {
 		return 0, err

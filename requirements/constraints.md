@@ -17,3 +17,5 @@ CON-007 — Requirement files in the repository are authoritative for that proje
 CON-008 — Do not silently weaken or remove an existing requirement to make a new implementation easier. Record intentional changes as specification changes.
 
 CON-009 — Avoid unrelated refactors while implementing a requirement change.
+
+CON-010 — Do not reintroduce streaming model-call paths; Generate is the only model call path.

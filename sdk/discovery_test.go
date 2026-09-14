@@ -16,7 +16,6 @@ func (f *discoveryTestAdapter) WithAPIKey(key string) Provider { cp := *f; cp.ke
 func (f *discoveryTestAdapter) WithBaseURL(base string) Provider { cp := *f; cp.base = base; return &cp }
 func (f *discoveryTestAdapter) ListModels(_ context.Context, _ string) ([]Model, error) { return f.models, nil }
 func (f *discoveryTestAdapter) Generate(_ context.Context, req Request) (Response, error) { return Response{Model: req.Model}, nil }
-func (f *discoveryTestAdapter) Stream(_ context.Context, _ Request) (<-chan Event, error) { ch := make(chan Event); close(ch); return ch, nil }
 
 func TestRouterRefreshModelsReplacesStaleCatalogue(t *testing.T) {
 	r := NewRouter()

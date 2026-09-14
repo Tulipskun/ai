@@ -12,8 +12,9 @@ import (
 //	    --anthropic.BuildFromOpenAI / gemini.BuildFromOpenAI--> provider-native payload
 //
 // Native provider responses are converted back through the same OpenAI
-// Responses shape (see anthropic.ToOpenAIResponse / gemini.ToOpenAIResponse)
-// before becoming sdk.Response via ParseResponsesResponse.
+// Responses shape (see anthropic.ToOpenAIResponse /
+// gemini.ToInteractionResponse) before becoming sdk.Response via
+// ParseResponsesResponse.
 //
 // Chat Completions (BuildChatRequest/ParseChatResponse) is kept only as a
 // fallback for providers that reject /responses.
@@ -28,14 +29,13 @@ type Request struct {
 	Temperature     *float64       `json:"temperature,omitempty"`
 	MaxOutputTokens int            `json:"max_output_tokens,omitempty"`
 	Reasoning       map[string]any `json:"reasoning,omitempty"`
-	Stream          bool           `json:"stream,omitempty"`
 }
 
 // Canonical converts an sdk.Request into the canonical OpenAI struct form.
 // BuildResponsesRequest remains the map-based wire form used for HTTP.
 func Canonical(req sdk.Request) Request {
 	wire := BuildResponsesRequest(req)
-	out := Request{Stream: req.Stream}
+	out := Request{}
 	if v, _ := wire["model"].(string); v != "" {
 		out.Model = v
 	}
@@ -156,52 +156,16 @@ func ResponsesResponseFromParts(model, status string, texts []string, toolCalls 
 	r.Usage.TotalTokens = usage.TotalTokens
 	r.Usage.InputDetails.Cached = usage.CacheReadTokens
 	if reasoning != nil && reasoning.Text != "" {
-		r.Output = append(r.Output, struct {
-			Type      string `json:"type"`
-			ID        string `json:"id"`
-			CallID    string `json:"call_id"`
-			Name      string `json:"name"`
-			Arguments string `json:"arguments"`
-			Content   []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		}{Type: "reasoning", ID: reasoning.ID, Content: []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}{{Type: "reasoning_text", Text: reasoning.Text}}})
+		r.Output = append(r.Output, outputItem{Type: "reasoning", ID: reasoning.ID, Content: []outputContent{{Type: "reasoning_text", Text: reasoning.Text}}})
 	}
 	for _, text := range texts {
 		if text == "" {
 			continue
 		}
-		r.Output = append(r.Output, struct {
-			Type      string `json:"type"`
-			ID        string `json:"id"`
-			CallID    string `json:"call_id"`
-			Name      string `json:"name"`
-			Arguments string `json:"arguments"`
-			Content   []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		}{Type: "message", Content: []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}{{Type: "output_text", Text: text}}})
+		r.Output = append(r.Output, outputItem{Type: "message", Content: []outputContent{{Type: "output_text", Text: text}}})
 	}
 	for _, call := range toolCalls {
-		r.Output = append(r.Output, struct {
-			Type      string `json:"type"`
-			ID        string `json:"id"`
-			CallID    string `json:"call_id"`
-			Name      string `json:"name"`
-			Arguments string `json:"arguments"`
-			Content   []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		}{Type: "function_call", CallID: call.ID, Name: call.Name, Arguments: call.Arguments})
+		r.Output = append(r.Output, outputItem{Type: "function_call", CallID: call.ID, Name: call.Name, Arguments: call.Arguments})
 	}
 	return ParseResponsesResponse(r)
 }

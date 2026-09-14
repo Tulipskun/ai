@@ -17,7 +17,7 @@ func New(apiKey string) *Client { return &Client{BaseURL: "https://api.anthropic
 func (c *Client) WithAPIKey(key string) sdk.Provider { cp := *c; cp.APIKey = key; return &cp }
 func (c *Client) WithBaseURL(baseURL string) sdk.Provider { cp := *c; cp.BaseURL = baseURL; return &cp }
 func (c *Client) WithHeaders(headers map[string]string) sdk.Provider { cp := *c; cp.Headers = cloneHeaders(headers); return &cp }
-func (c *Client) ListModels(ctx context.Context, apiKey string) ([]sdk.Model, error) {var cancel context.CancelFunc; ctx, cancel = context.WithTimeout(ctx, 30*time.Second); defer cancel(); if apiKey != "" { c = c.WithAPIKey(apiKey).(*Client) }; var r struct { Data []struct { ID string `json:"id"`; DisplayName string `json:"display_name"` } `json:"data"` }; if err := internal.DoJSON(ctx, c.http(), http.MethodGet, c.BaseURL+"/models", c.headers(), nil, &r); err != nil { return nil, err }; models := make([]sdk.Model, 0, len(r.Data)); for _, item := range r.Data { if item.ID == "" { continue }; name := item.DisplayName; if name == "" { name = item.ID }; models = append(models, sdk.Model{ID: item.ID, Name: name, SupportsStreaming: true, SupportsTools: true, SupportsTemperature: true}) }; return models, nil }
+func (c *Client) ListModels(ctx context.Context, apiKey string) ([]sdk.Model, error) {var cancel context.CancelFunc; ctx, cancel = context.WithTimeout(ctx, 30*time.Second); defer cancel(); if apiKey != "" { c = c.WithAPIKey(apiKey).(*Client) }; var r struct { Data []struct { ID string `json:"id"`; DisplayName string `json:"display_name"` } `json:"data"` }; if err := internal.DoJSON(ctx, c.http(), http.MethodGet, c.BaseURL+"/models", c.headers(), nil, &r); err != nil { return nil, err }; models := make([]sdk.Model, 0, len(r.Data)); for _, item := range r.Data { if item.ID == "" { continue }; name := item.DisplayName; if name == "" { name = item.ID }; models = append(models, sdk.Model{ID: item.ID, Name: name, SupportsTools: true, SupportsTemperature: true}) }; return models, nil }
 func (c *Client) Name() string { return "anthropic" }
 // build converts via the central OpenAI Responses interface:
 // sdk.Request -> OpenAI canonical -> Anthropic native.
@@ -90,9 +90,6 @@ func BuildFromOpenAI(openAIReq map[string]any) map[string]any {
 	if len(tools) > 0 {
 		b["tools"] = tools
 	}
-	if stream, _ := openAIReq["stream"].(bool); stream {
-		b["stream"] = true
-	}
 	return b
 }
 func max(a,b int)int{if a>b{return a};return b}
@@ -100,7 +97,6 @@ type response struct { Model string `json:"model"`; StopReason string `json:"sto
 func (c *Client) headers() map[string]string { h := map[string]string{"x-api-key": c.APIKey, "anthropic-version": c.APIVersion}; for k, v := range c.Headers { if v == "" || strings.EqualFold(k, "x-api-key") { continue }; h[k] = v }; return h }
 func cloneHeaders(in map[string]string) map[string]string { if len(in) == 0 { return nil }; out := make(map[string]string, len(in)); for k, v := range in { out[k] = v }; return out }
 func (c *Client) Generate(ctx context.Context, req sdk.Request) (sdk.Response,error) { var r response; if err:=internal.DoJSON(ctx,c.http(),http.MethodPost,c.BaseURL+"/messages",c.headers(),build(req),&r);err!=nil{return sdk.Response{},err}; return ToOpenAIResponse(r), nil }
-func (c *Client) Stream(ctx context.Context, req sdk.Request) (<-chan sdk.Event,error) { req.Stream=true; ch:=make(chan sdk.Event,16); go func(){defer close(ch); type toolState struct{id,name,args string}; tools:=map[int]*toolState{}; var reasoningID string; err:=internal.SSE(ctx,c.http(),http.MethodPost,c.BaseURL+"/messages",c.headers(),build(req),func(data []byte)error{var e struct{Type string `json:"type"`;Index int `json:"index"`;Delta struct{Type string `json:"type"`;Text string `json:"text"`;Thinking string `json:"thinking"`;PartialJSON string `json:"partial_json"`} `json:"delta"`;ContentBlock struct{Type string `json:"type"`;ID string `json:"id"`;Name string `json:"name"`;Thinking string `json:"thinking"`} `json:"content_block"`};if json.Unmarshal(data,&e)!=nil{return nil};switch e.Type{case "content_block_start":switch e.ContentBlock.Type{case "tool_use":tools[e.Index]=&toolState{id:e.ContentBlock.ID,name:e.ContentBlock.Name};case "thinking":reasoningID=e.ContentBlock.ID;if e.ContentBlock.Thinking!=""{ch<-sdk.Event{Type:sdk.EventReasoning,Reasoning:&sdk.ReasoningState{ID:reasoningID,Text:e.ContentBlock.Thinking}}}};case "content_block_delta":switch e.Delta.Type{case "text_delta":if e.Delta.Text!=""{ch<-sdk.Event{Type:sdk.EventText,Text:e.Delta.Text}};case "thinking_delta":if e.Delta.Thinking!=""{ch<-sdk.Event{Type:sdk.EventReasoning,Reasoning:&sdk.ReasoningState{ID:reasoningID,Text:e.Delta.Thinking}}};case "input_json_delta":if state:=tools[e.Index];state!=nil{state.args+=e.Delta.PartialJSON}};case "content_block_stop":if state:=tools[e.Index];state!=nil{ch<-sdk.Event{Type:sdk.EventToolCall,ToolCall:&sdk.ToolCall{ID:state.id,Name:state.name,Arguments:state.args}};delete(tools,e.Index)};case "message_stop":ch<-sdk.Event{Type:sdk.EventDone}};return nil});if err!=nil{ch<-sdk.Event{Type:sdk.EventError,Err:err}}}();return ch,nil }
 func (c *Client) http()*http.Client{if c.HTTP!=nil{return c.HTTP};return http.DefaultClient}
 
 // ToOpenAIResponse converts a native Anthropic response into sdk.Response

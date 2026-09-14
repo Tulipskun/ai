@@ -31,9 +31,6 @@ func (p *agentTestProvider) Generate(_ context.Context, req Request) (Response, 
 	p.calls++
 	return r, nil
 }
-func (p *agentTestProvider) Stream(context.Context, Request) (<-chan Event, error) {
-	return nil, errors.New("not implemented")
-}
 func (p *agentTestProvider) WithAPIKey(string) Provider { return p }
 
 type agentTestTools struct {
@@ -58,9 +55,6 @@ func (p *blockingAgentProvider) Generate(ctx context.Context, _ Request) (Respon
 	}
 	<-ctx.Done()
 	return Response{}, ctx.Err()
-}
-func (p *blockingAgentProvider) Stream(context.Context, Request) (<-chan Event, error) {
-	return nil, errors.New("not implemented")
 }
 func (p *blockingAgentProvider) WithAPIKey(string) Provider { return p }
 func newAgentTestSession(p Provider) (*RouterClient, *Session) {

@@ -28,14 +28,13 @@ type Request struct {
 	Temperature     *float64       `json:"temperature,omitempty"`
 	MaxOutputTokens int            `json:"max_output_tokens,omitempty"`
 	Reasoning       map[string]any `json:"reasoning,omitempty"`
-	Stream          bool           `json:"stream,omitempty"`
 }
 
 // Canonical converts an sdk.Request into the canonical OpenAI struct form.
 // BuildResponsesRequest remains the map-based wire form used for HTTP.
 func Canonical(req sdk.Request) Request {
 	wire := BuildResponsesRequest(req)
-	out := Request{Stream: req.Stream}
+	out := Request{}
 	if v, _ := wire["model"].(string); v != "" {
 		out.Model = v
 	}

@@ -40,24 +40,13 @@ type Request struct {
 	Temperature *float64 `json:"temperature,omitempty"`
 	ThinkingLevel ThinkingLevel `json:"thinking_level,omitempty"`
 	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
-	Stream bool `json:"stream,omitempty"`
 }
 
 type Usage struct { InputTokens int `json:"input_tokens"`; OutputTokens int `json:"output_tokens"`; TotalTokens int `json:"total_tokens"`; CacheReadTokens int `json:"cache_read_tokens"`; CacheWriteTokens int `json:"cache_write_tokens"` }
 type CacheInfo struct { Hit bool `json:"hit"`; Layer string `json:"layer,omitempty"` }
 type Response struct { Provider string `json:"provider"`; Model string `json:"model"`; Content []ContentPart `json:"content,omitempty"`; ToolCalls []ToolCall `json:"tool_calls,omitempty"`; Reasoning *ReasoningState `json:"reasoning,omitempty"`; FinishReason string `json:"finish_reason,omitempty"`; Usage Usage `json:"usage"`; Cache CacheInfo `json:"cache"` }
 
-type EventType string
-const (
-	EventText EventType = "text"
-	EventToolCall EventType = "tool_call"
-	EventReasoning EventType = "reasoning"
-	EventDone EventType = "done"
-	EventError EventType = "error"
-)
-type Event struct { Type EventType `json:"type"`; Text string `json:"text,omitempty"`; ToolCall *ToolCall `json:"tool_call,omitempty"`; Reasoning *ReasoningState `json:"reasoning,omitempty"`; Response *Response `json:"response,omitempty"`; Err error `json:"-"` }
-
-type Provider interface { Name() string; Generate(context.Context, Request) (Response, error); Stream(context.Context, Request) (<-chan Event, error) }
+type Provider interface { Name() string; Generate(context.Context, Request) (Response, error) }
 type ProviderID string
 type AdapterID string
 const (
@@ -68,7 +57,7 @@ const (
 	AdapterGemini AdapterID = "gemini"
 )
 
-type Model struct { ID string `json:"id"`; Name string `json:"name,omitempty"`; SupportsTools bool `json:"supports_tools"`; SupportsThinking bool `json:"supports_thinking"`; SupportsTemperature bool `json:"supports_temperature"`; SupportsStreaming bool `json:"supports_streaming"` }
+type Model struct { ID string `json:"id"`; Name string `json:"name,omitempty"`; SupportsTools bool `json:"supports_tools"`; SupportsThinking bool `json:"supports_thinking"`; SupportsTemperature bool `json:"supports_temperature"` }
 type ProviderConfig struct { ID ProviderID `json:"id"`; BaseURL string `json:"base_url"`; Keys *KeyPool `json:"-"`; Adapter AdapterID `json:"adapter"`; RotateKeys bool `json:"rotate_keys,omitempty"`; FreeOnly bool `json:"free_only,omitempty"`; Headers map[string]string `json:"headers,omitempty"` }
 type ModelRoute struct { Provider ProviderID `json:"provider"`; Model string `json:"model"`; Adapter AdapterID `json:"adapter"` }
 type SessionConfig struct { ID string `json:"id"`; Provider ProviderID `json:"provider"`; Model string `json:"model"`; KeyIndex int `json:"key_index"`; ThinkingLevel ThinkingLevel `json:"thinking_level,omitempty"`; Temperature *float64 `json:"temperature,omitempty"` }

@@ -16,13 +16,6 @@ func (a *settingsCaptureAdapter) Generate(_ context.Context, req Request) (Respo
 	a.last = req
 	return Response{Provider: string(req.Provider), Model: req.Model}, nil
 }
-func (a *settingsCaptureAdapter) Stream(_ context.Context, req Request) (<-chan Event, error) {
-	a.last = req
-	ch := make(chan Event, 1)
-	ch <- Event{Type: EventDone, Response: &Response{Provider: string(req.Provider), Model: req.Model}}
-	close(ch)
-	return ch, nil
-}
 
 func TestRouterClientRequestSettingsOverrideSessionDefaults(t *testing.T) {
 	r := NewRouter()

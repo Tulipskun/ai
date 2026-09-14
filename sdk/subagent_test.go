@@ -2,7 +2,6 @@ package sdk
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -21,9 +20,6 @@ func (p *subAgentBlockingProvider) Generate(ctx context.Context, _ Request) (Res
 	<-ctx.Done()
 	return Response{}, ctx.Err()
 }
-func (p *subAgentBlockingProvider) Stream(context.Context, Request) (<-chan Event, error) {
-	return nil, errors.New("not implemented")
-}
 func (p *subAgentBlockingProvider) WithAPIKey(string) Provider { return p }
 
 type subAgentImmediateProvider struct{}
@@ -31,9 +27,6 @@ type subAgentImmediateProvider struct{}
 func (p *subAgentImmediateProvider) Name() string { return "test" }
 func (p *subAgentImmediateProvider) Generate(context.Context, Request) (Response, error) {
 	return Response{Content: []ContentPart{{Type: ContentText, Text: "worker done"}}}, nil
-}
-func (p *subAgentImmediateProvider) Stream(context.Context, Request) (<-chan Event, error) {
-	return nil, errors.New("not implemented")
 }
 func (p *subAgentImmediateProvider) WithAPIKey(string) Provider { return p }
 
@@ -48,9 +41,6 @@ func (p *subAgentCaptureProvider) Generate(_ context.Context, req Request) (Resp
 	p.requests = append(p.requests, req)
 	p.mu.Unlock()
 	return Response{Content: []ContentPart{{Type: ContentText, Text: "worker done"}}}, nil
-}
-func (p *subAgentCaptureProvider) Stream(context.Context, Request) (<-chan Event, error) {
-	return nil, errors.New("not implemented")
 }
 func (p *subAgentCaptureProvider) WithAPIKey(string) Provider { return p }
 func (p *subAgentCaptureProvider) lastRequest() Request {
@@ -157,6 +147,74 @@ func TestSubAgentDelegateReturnsImmediately(t *testing.T) {
 	}
 	if !strings.Contains(runner.Status(job), "status=stopped") {
 		t.Fatalf("worker did not stop: %s", runner.Status(job))
+	}
+}
+
+func TestSubAgentCompletionPromptNamesID(t *testing.T) {
+	event := SubAgentEvent{JobID: "sa-123", Status: "completed", Result: "worker done", PlanStep: PlanStep{Index: 1}}
+	got := SubAgentCompletionPrompt(event)
+	for _, want := range []string{"sub agent id sa-123", "finished", "subagent_history", "send_to_subagent"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("completion prompt missing %q: %s", want, got)
+		}
+	}
+}
+
+type subAgentTwoStepProvider struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (p *subAgentTwoStepProvider) Name() string { return "test" }
+func (p *subAgentTwoStepProvider) Generate(context.Context, Request) (Response, error) {
+	p.mu.Lock()
+	p.calls++
+	n := p.calls
+	p.mu.Unlock()
+	if n <= 1 {
+		return Response{Content: []ContentPart{{Type: ContentText, Text: "partial result"}}}, nil
+	}
+	return Response{Content: []ContentPart{{Type: ContentText, Text: "final done"}}}, nil
+}
+func (p *subAgentTwoStepProvider) WithAPIKey(string) Provider { return p }
+
+func TestSubAgentFollowUpContinuesSession(t *testing.T) {
+	agent, parent := newSubAgentTest(t, &subAgentTwoStepProvider{})
+	manager := newSubAgentManager(agent, agent.SubAgentConfig)
+	eventCh := make(chan SubAgentEvent, 2)
+	manager.SetEventSink(func(event SubAgentEvent) { eventCh <- event })
+	runner := &subAgentRunner{manager: manager, parent: parent}
+	job, err := runner.Delegate(context.Background(), "do the task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-eventCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first completion event was not emitted")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && strings.Contains(runner.Status(job), "status=running") {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := runner.Send(job, "work is incomplete, finish it"); err != nil {
+		t.Fatalf("follow-up send failed: %v", err)
+	}
+	select {
+	case event := <-eventCh:
+		if event.JobID != job || event.Status != "completed" {
+			t.Fatalf("unexpected follow-up event: %+v", event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("follow-up completion event was not emitted")
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && strings.Contains(runner.Status(job), "status=running") {
+		time.Sleep(10 * time.Millisecond)
+	}
+	history := runner.History(job)
+	if !strings.Contains(history, "final done") {
+		t.Fatalf("history missing worker final summary: %s", history)
 	}
 }
 

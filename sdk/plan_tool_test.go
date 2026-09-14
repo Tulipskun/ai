@@ -49,6 +49,7 @@ func (s *subAgentStub) Delegate(context.Context, string) (string, error) {
 }
 func (s *subAgentStub) Status(string) string  { return "status=running" }
 func (s *subAgentStub) History(string) string { return "history" }
+func (s *subAgentStub) Send(string, string) (string, error) { return "sa-test", nil }
 func (s *subAgentStub) Stop(string) bool      { return true }
 
 func TestPlanningToolDefinition(t *testing.T) {
@@ -77,7 +78,7 @@ func TestMainAgentDefinitionsContainNoExecutionTools(t *testing.T) {
 	defs := e.Definitions()
 	for _, d := range defs {
 		switch d.Name {
-		case planningToolName, "delegate_to_subagent", "subagent_status", "subagent_history", "stop_subagent":
+		case planningToolName, "delegate_to_subagent", "subagent_status", "subagent_history", "send_to_subagent", "stop_subagent":
 		default:
 			t.Fatalf("Main Agent exposed non-orchestration tool %q", d.Name)
 		}

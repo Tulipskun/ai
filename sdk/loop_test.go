@@ -12,12 +12,6 @@ func (loopTestProvider) Name() string { return "test" }
 func (loopTestProvider) Generate(context.Context, Request) (Response, error) {
 	return Response{Content: []ContentPart{{Type: ContentText, Text: "response"}}}, nil
 }
-func (loopTestProvider) Stream(context.Context, Request) (<-chan Event, error) {
-	ch := make(chan Event, 1)
-	ch <- Event{Type: EventDone}
-	close(ch)
-	return ch, nil
-}
 func newLoopTestClient() *RouterClient {
 	router := NewRouter()
 	router.Register(ModelRoute{Provider: ProviderOpenRouter, Model: "model", Adapter: AdapterOpenAI})
@@ -120,12 +114,6 @@ type tracedLoopTestProvider struct{}
 func (tracedLoopTestProvider) Name() string { return "test" }
 func (tracedLoopTestProvider) Generate(context.Context, Request) (Response, error) {
 	return Response{Content: []ContentPart{{Type: ContentText, Text: "response"}}}, nil
-}
-func (tracedLoopTestProvider) Stream(context.Context, Request) (<-chan Event, error) {
-	ch := make(chan Event, 1)
-	ch <- Event{Type: EventDone}
-	close(ch)
-	return ch, nil
 }
 func (tracedLoopTestProvider) WithAPIKey(string) Provider { return tracedLoopTestProvider{} }
 

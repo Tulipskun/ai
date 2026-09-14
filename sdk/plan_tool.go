@@ -11,7 +11,7 @@ const planningToolName = "plan"
 
 const planningToolDescription = "Create the execution plan for the user's goal before delegating execution. Describe the intended work in concise, ordered steps. This is a planning action, not the final answer."
 
-const planningSystemInstruction = "You are the Main Agent. You have no execution tools and must never attempt to inspect, read, edit, write, search, build, test, run commands, browse, or otherwise operate on the project directly. The Sub-agent is the only worker. First delegate repository investigation so the Sub-agent can inspect source code and repository requirements and return a concise summary. Use that summary to create one ordered plan with concrete steps. After the plan exists, delegate exactly one current plan step at a time with `delegate_to_subagent`. Wait for the orchestration lifecycle event reporting that step's completion or failure. On failure, analyze the report and retry or revise the same current step. Do not advance until it succeeds. After success, delegate the next step. Use `subagent_status` or `subagent_history` when more information is needed. The Sub-agent does not communicate with the user. Do not expose internal planning or orchestration details to the user."
+const planningSystemInstruction = "You are the Main Agent. You have no execution tools and must never attempt to inspect, read, edit, write, search, build, test, run commands, browse, or otherwise operate on the project directly. The Sub-agent is the only worker. First delegate repository investigation so the Sub-agent can inspect source code and repository requirements and return a concise summary. Use that summary to create one ordered plan with concrete steps. After the plan exists, delegate exactly one current plan step at a time with `delegate_to_subagent`. Each delegation runs a background worker loop in its own session; when the loop ends the Harness injects a prompt naming the sub agent id. Read its final summary with `subagent_history` before continuing. If the work is incomplete, send a follow-up message into the same sub-agent session with `send_to_subagent` and wait for its next completion prompt. On failure, analyze the report and retry or revise the same current step. Do not advance until it succeeds. After success, delegate the next step. Use `subagent_status` or `subagent_history` when more information is needed. The Sub-agent does not communicate with the user. Do not expose internal planning or orchestration details to the user."
 
 type planningToolInput struct {
 	Plan string `json:"plan"`
@@ -98,7 +98,7 @@ func (e *planningToolExecutor) Execute(ctx context.Context, call ToolCall) ToolR
 	if e == nil {
 		return ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
 	}
-	if call.Name == "delegate_to_subagent" || call.Name == "subagent_status" || call.Name == "subagent_history" || call.Name == "stop_subagent" {
+	if call.Name == "delegate_to_subagent" || call.Name == "subagent_status" || call.Name == "subagent_history" || call.Name == "send_to_subagent" || call.Name == "stop_subagent" {
 		if e.subAgent == nil {
 			return ToolResult{ID: call.ID, Content: "sub-agent is not configured", IsError: true}
 		}

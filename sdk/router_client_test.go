@@ -11,7 +11,6 @@ type fakeAdapter struct { name string }
 func (f *fakeAdapter) Name() string { return f.name }
 func (f *fakeAdapter) WithAPIKey(key string) Provider { return &fakeAdapter{name:f.name+":"+key} }
 func (f *fakeAdapter) Generate(_ context.Context, req Request) (Response,error) { return Response{Provider:string(req.Provider),Model:req.Model},nil }
-func (f *fakeAdapter) Stream(_ context.Context, req Request) (<-chan Event,error) { ch:=make(chan Event,1); ch<-Event{Type:EventDone,Response:&Response{Provider:string(req.Provider),Model:req.Model}};close(ch);return ch,nil }
 func (f *fakeAdapter) ListModels(_ context.Context, _ string) ([]Model,error) { return []Model{{ID:"discovered-model"}},nil }
 
 type retryStatusError struct { status int }
@@ -22,7 +21,6 @@ type retryingAdapter struct { name string; calls int; err error }
 func (a *retryingAdapter) Name() string { return a.name }
 func (a *retryingAdapter) WithAPIKey(key string) Provider { return a }
 func (a *retryingAdapter) Generate(_ context.Context, req Request) (Response,error) { a.calls++; if a.err != nil { return Response{}, a.err }; return Response{Provider:string(req.Provider),Model:req.Model},nil }
-func (a *retryingAdapter) Stream(_ context.Context, req Request) (<-chan Event,error) { ch:=make(chan Event,1); ch<-Event{Type:EventDone,Response:&Response{Provider:string(req.Provider),Model:req.Model}};close(ch);return ch,nil }
 
 func TestRouterClientDispatchesRequestedRoutes(t *testing.T) {
 	r:=NewRouter(); r.Register(ModelRoute{Provider:ProviderOpenRouter,Model:"gpt-5",Adapter:AdapterOpenAI}); r.Register(ModelRoute{Provider:ProviderOpenRouter,Model:"gemini-3.5",Adapter:AdapterGemini}); r.Register(ModelRoute{Provider:ProviderOpenCode,Model:"opus",Adapter:AdapterAnthropic}); c:=NewRouterClient(r); c.RegisterAdapter(AdapterOpenAI,&fakeAdapter{name:"openai"}); c.RegisterAdapter(AdapterGemini,&fakeAdapter{name:"gemini"}); c.RegisterAdapter(AdapterAnthropic,&fakeAdapter{name:"anthropic"}); pool:=NewKeyPool("or-1","or-2","oc-1"); cases:=[]SessionConfig{{ID:"s1",Provider:ProviderOpenRouter,Model:"gpt-5",KeyIndex:0},{ID:"s2",Provider:ProviderOpenRouter,Model:"gemini-3.5",KeyIndex:1},{ID:"s3",Provider:ProviderOpenCode,Model:"opus",KeyIndex:2}}; for _,cfg:=range cases { resp,err:=c.Generate(context.Background(),NewSession(cfg,pool),Request{});if err!=nil{t.Fatal(err)};if resp.Provider!=string(cfg.Provider)||resp.Model!=cfg.Model{t.Fatalf("got %+v",resp)} }
@@ -40,7 +38,6 @@ type abortTestAdapter struct{ calls int }
 func (a *abortTestAdapter) Name() string { return "abort" }
 func (a *abortTestAdapter) WithAPIKey(string) Provider { return a }
 func (a *abortTestAdapter) Generate(context.Context, Request) (Response, error) { a.calls++; return Response{}, retryTestError{status: 429, delay: 5 * time.Hour} }
-func (a *abortTestAdapter) Stream(context.Context, Request) (<-chan Event,error) { return nil, retryTestError{status:429, delay:5*time.Hour} }
 
 func TestGenerateStopsOnDistantRetryAfter(t *testing.T) {
 	r := NewRouter(); r.RegisterProvider(ProviderConfig{ID: "p", Adapter: AdapterOpenAI, Keys: NewKeyPool("k")}); r.Register(ModelRoute{Provider: "p", Model: "m", Adapter: AdapterOpenAI}); c := NewRouterClient(r); adapter := &abortTestAdapter{}; c.RegisterAdapter(AdapterOpenAI, adapter); s := NewSession(SessionConfig{ID: "s", Provider: "p", Model: "m", KeyIndex: 0}, NewKeyPool("k")); done := make(chan error, 1); go func() { _, err := c.Generate(context.Background(), s, Request{}); done <- err }(); select { case err := <-done: if err == nil { t.Fatal("expected rate limit error") }; if adapter.calls != 1 { t.Fatalf("distant Retry-After must stop after 1 call, got %d", adapter.calls) }; case <-time.After(10 * time.Second): t.Fatal("abort was not fast") }

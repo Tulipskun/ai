@@ -208,7 +208,7 @@ A provider is registered with its base URL, adapter, and provider-scoped key poo
 
 Retries are deliberately separate from key rotation. The selected session key never changes during a retry.
 
-Streaming is retried only when the failure happens before the stream has emitted an event. Once output has started, the stream is never replayed automatically because replaying it could duplicate user-visible output.
+The Harness uses non-streaming Generate only; streaming mode is not supported.
 
 ## Persistent sessions and jobs
 

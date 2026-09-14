@@ -51,15 +51,11 @@ func runInteractiveCLI(ctx context.Context, sessions *runtime.SessionManager, ag
 		}
 	}()
 	agent.SetSubAgentEventSink(func(event sdk.SubAgentEvent) {
-		step := "investigation"
-		if event.PlanStep.Index > 0 {
-			step = fmt.Sprintf("plan step %d", event.PlanStep.Index)
-		}
-		text := fmt.Sprintf("Sub-agent job %s %s for %s: %s", event.JobID, event.Status, step, event.Result)
+		text := sdk.SubAgentCompletionPrompt(event)
 		go func() {
 			turnMu.Lock()
 			defer turnMu.Unlock()
-			_, err := agent.RunTurnWithTrace(context.WithoutCancel(ctx), event.Parent, sdk.Turn{Role: sdk.RoleUser, Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: text}}}, sdk.Request{SystemPrompt: systemPrompt(agent), MaxOutputTokens: maxOutputTokens, Stream: true}, func(_ context.Context, trace sdk.TraceEvent) { ui.Trace(trace) })
+			_, err := agent.RunTurnWithTrace(context.WithoutCancel(ctx), event.Parent, sdk.Turn{Role: sdk.RoleUser, Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: text}}}, sdk.Request{SystemPrompt: systemPrompt(agent), MaxOutputTokens: maxOutputTokens}, func(_ context.Context, trace sdk.TraceEvent) { ui.Trace(trace) })
 			ui.EndTurn()
 			if err != nil && !errors.Is(err, context.Canceled) {
 				ui.Print("sub-agent event turn failed: " + err.Error())
@@ -84,7 +80,7 @@ func runInteractiveCLI(ctx context.Context, sessions *runtime.SessionManager, ag
 		activeMu.Lock()
 		activeTurn = session.ID()
 		activeMu.Unlock()
-		_, err = agent.RunTurnWithTrace(ctx, session, input.Turn, sdk.Request{SystemPrompt: systemPrompt(agent), MaxOutputTokens: maxOutputTokens, Stream: true}, func(_ context.Context, event sdk.TraceEvent) { ui.Trace(event) })
+		_, err = agent.RunTurnWithTrace(ctx, session, input.Turn, sdk.Request{SystemPrompt: systemPrompt(agent), MaxOutputTokens: maxOutputTokens}, func(_ context.Context, event sdk.TraceEvent) { ui.Trace(event) })
 		activeMu.Lock()
 		activeTurn = ""
 		activeMu.Unlock()
@@ -213,9 +209,6 @@ func handleCLICommand(ctx context.Context, line string, currentSession *string, 
 			}
 			if model.SupportsThinking {
 				flags += " thinking"
-			}
-			if model.SupportsStreaming {
-				flags += " stream"
 			}
 			b.WriteString("  " + model.ID + flags + "\n")
 		}

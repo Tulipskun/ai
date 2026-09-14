@@ -3,7 +3,6 @@ package sdk
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -34,11 +33,7 @@ func (h *HarnessLoop) Run(ctx context.Context) error {
 			if event.Parent == nil {
 				return
 			}
-			stepLabel := "investigation"
-			if event.PlanStep.Index > 0 {
-				stepLabel = fmt.Sprintf("plan step %d", event.PlanStep.Index)
-			}
-			text := fmt.Sprintf("Sub-agent job %s %s for %s: %s", event.JobID, event.Status, stepLabel, event.Result)
+			text := SubAgentCompletionPrompt(event)
 			source := inputSourceForSession(event.Parent.ID())
 			go func() {
 				_ = h.Entry(context.WithoutCancel(ctx), Input{Source: source, SessionID: event.Parent.ID(), Turn: Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: text}}}})

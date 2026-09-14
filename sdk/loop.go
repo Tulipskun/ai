@@ -29,6 +29,25 @@ func (h *HarnessLoop) Run(ctx context.Context) error {
 		return errors.New("sdk: incomplete harness loop configuration")
 	}
 	if h.Agent != nil {
+		h.Agent.SetSubAgentTraceSink(func(event SubAgentEvent) {
+			if event.Parent == nil || event.Trace == nil {
+				return
+			}
+			input := cloneInputRoute(event.Input)
+			if input.SessionID == "" {
+				input.SessionID = event.Parent.ID()
+			}
+			metadata := cloneMetadata(input.Metadata)
+			if metadata == nil {
+				metadata = map[string]string{}
+			}
+			metadata["trace_actor"] = "subagent"
+			metadata["trace_job_id"] = event.JobID
+			traceCopy := *event.Trace
+			for _, display := range h.Displays {
+				DispatchDisplay(context.WithoutCancel(ctx), display, Output{Source: input.Source, SessionID: input.SessionID, Trace: &traceCopy, Metadata: metadata}, h.DisplayTimeout)
+			}
+		})
 		h.Agent.SetSubAgentEventSink(func(event SubAgentEvent) {
 			if event.Parent == nil {
 				return
@@ -36,19 +55,6 @@ func (h *HarnessLoop) Run(ctx context.Context) error {
 			input := cloneInputRoute(event.Input)
 			if input.SessionID == "" {
 				input.SessionID = event.Parent.ID()
-			}
-			if event.Trace != nil {
-				metadata := cloneMetadata(input.Metadata)
-				if metadata == nil {
-					metadata = map[string]string{}
-				}
-				metadata["trace_actor"] = "subagent"
-				metadata["trace_job_id"] = event.JobID
-				traceCopy := *event.Trace
-				for _, display := range h.Displays {
-					DispatchDisplay(context.WithoutCancel(ctx), display, Output{Source: input.Source, SessionID: input.SessionID, Trace: &traceCopy, Metadata: metadata}, h.DisplayTimeout)
-				}
-				return
 			}
 			input.Turn = Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: event.Message()}}}
 			go func() {

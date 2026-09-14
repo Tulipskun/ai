@@ -5,24 +5,33 @@ import (
 	"testing"
 )
 
-type streamDoneToolProvider struct{}
+type streamDoneToolProvider struct {
+	calls int
+}
 
-func (streamDoneToolProvider) Name() string { return "stream-done-tool" }
-func (streamDoneToolProvider) Generate(context.Context, Request) (Response, error) {
+func (p *streamDoneToolProvider) Name() string { return "stream-done-tool" }
+func (p *streamDoneToolProvider) Generate(context.Context, Request) (Response, error) {
 	return Response{}, nil
 }
-func (streamDoneToolProvider) Stream(context.Context, Request) (<-chan Event, error) {
+func (p *streamDoneToolProvider) Stream(context.Context, Request) (<-chan Event, error) {
+	p.calls++
 	ch := make(chan Event, 1)
-	ch <- Event{Type: EventDone, Response: &Response{
-		ToolCalls: []ToolCall{{ID: "call-1", Name: "echo", Arguments: `{}`}},
-	}}
+	if p.calls == 1 {
+		ch <- Event{Type: EventDone, Response: &Response{
+			ToolCalls: []ToolCall{{ID: "call-1", Name: "echo", Arguments: `{}`}},
+		}}
+	} else {
+		ch <- Event{Type: EventDone, Response: &Response{
+			Content: []ContentPart{{Type: ContentText, Text: "done"}},
+		}}
+	}
 	close(ch)
 	return ch, nil
 }
-func (streamDoneToolProvider) WithAPIKey(string) Provider { return streamDoneToolProvider{} }
+func (p *streamDoneToolProvider) WithAPIKey(string) Provider { return p }
 
 func TestAgentStreamingTraceEmitsToolCallFromCompletedResponse(t *testing.T) {
-	provider := streamDoneToolProvider{}
+	provider := &streamDoneToolProvider{}
 	client, session := newAgentTestSession(provider)
 	tools := &agentTestTools{definitions: []Tool{{Name: "echo"}}}
 	agent := &Agent{Client: client, Tools: tools, MaxRetries: 0, DisablePlanning: true}
@@ -44,24 +53,33 @@ func TestAgentStreamingTraceEmitsToolCallFromCompletedResponse(t *testing.T) {
 	}
 }
 
-type streamEventAndDoneToolProvider struct{}
+type streamEventAndDoneToolProvider struct {
+	calls int
+}
 
-func (streamEventAndDoneToolProvider) Name() string { return "stream-event-and-done-tool" }
-func (streamEventAndDoneToolProvider) Generate(context.Context, Request) (Response, error) {
+func (p *streamEventAndDoneToolProvider) Name() string { return "stream-event-and-done-tool" }
+func (p *streamEventAndDoneToolProvider) Generate(context.Context, Request) (Response, error) {
 	return Response{}, nil
 }
-func (streamEventAndDoneToolProvider) Stream(context.Context, Request) (<-chan Event, error) {
+func (p *streamEventAndDoneToolProvider) Stream(context.Context, Request) (<-chan Event, error) {
+	p.calls++
 	ch := make(chan Event, 2)
 	call := ToolCall{ID: "call-1", Name: "echo", Arguments: `{}`}
-	ch <- Event{Type: EventToolCall, ToolCall: &call}
-	ch <- Event{Type: EventDone, Response: &Response{ToolCalls: []ToolCall{call}}}
+	if p.calls == 1 {
+		ch <- Event{Type: EventToolCall, ToolCall: &call}
+		ch <- Event{Type: EventDone, Response: &Response{ToolCalls: []ToolCall{call}}}
+	} else {
+		ch <- Event{Type: EventDone, Response: &Response{
+			Content: []ContentPart{{Type: ContentText, Text: "done"}},
+		}}
+	}
 	close(ch)
 	return ch, nil
 }
-func (streamEventAndDoneToolProvider) WithAPIKey(string) Provider { return streamEventAndDoneToolProvider{} }
+func (p *streamEventAndDoneToolProvider) WithAPIKey(string) Provider { return p }
 
 func TestAgentStreamingTraceDoesNotDuplicateToolCallFromCompletedResponse(t *testing.T) {
-	provider := streamEventAndDoneToolProvider{}
+	provider := &streamEventAndDoneToolProvider{}
 	client, session := newAgentTestSession(provider)
 	tools := &agentTestTools{definitions: []Tool{{Name: "echo"}}}
 	agent := &Agent{Client: client, Tools: tools, MaxRetries: 0, DisablePlanning: true}

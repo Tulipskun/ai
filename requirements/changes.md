@@ -1,20 +1,20 @@
-# Specification Changes
+# การเปลี่ยนแปลงข้อกำหนด
 
-This file is append-only in intent: each accepted specification change should record the previous requirement, the new requirement, reason, affected areas, and validation needed.
+ไฟล์นี้มีเจตนาให้เป็นแบบ append-only: ทุก specification change ที่ได้รับการยอมรับต้องบันทึก requirement เดิม, requirement ใหม่, เหตุผล, พื้นที่ที่ได้รับผลกระทบ และสิ่งที่ต้องใช้ตรวจสอบ
 
-## Change format
+## รูปแบบการเปลี่ยนแปลง
 
 ```text
 CHANGE-XXX
 
 Date: YYYY-MM-DD
 Type: add | revise | remove
-Request: <user request>
-Conflict: <requirement IDs or none>
-Previous: <previous requirement text when revising/removing>
-New: <new requirement text>
-Reason: <why the specification changes>
-Impact: <architecture/modules/tests/docs affected>
+Request: <คำขอของผู้ใช้>
+Conflict: <หมายเลข requirement หรือ none>
+Previous: <ข้อความ requirement เดิมเมื่อมีการแก้ไข/ลบ>
+New: <ข้อความ requirement ใหม่>
+Reason: <เหตุผลที่เปลี่ยน specification>
+Impact: <architecture/modules/tests/docs ที่ได้รับผลกระทบ>
 Status: proposed | accepted | rejected
 ```
 
@@ -22,37 +22,37 @@ CHANGE-001
 
 Date: 2026-09-14
 Type: add
-Request: Correct main/worker prompt and tool separation in normal and streaming turns without expanding orchestration lifecycle behavior.
-Conflict: none (clarifies REQ-004, REQ-012 and REQ-015)
-Previous: Role separation and preservation of prompt context were not explicitly specified; main prompt sanitation could discard repository requirements and unrelated context.
-New: REQ-016 restricts main-agent tools and direct execution; REQ-017 preserves worker prompts/execution tools without injected planner tools in both paths; REQ-018 preserves repository/custom context and resolves role conflicts without heuristic deletion.
-Reason: Workers with execution tools must not be instructed to act as tool-less planners, and main defaults must not instruct direct execution or discard the repository source of truth.
-Impact: SDK agent request composition and planning prompt composition; SDK worker and CLI main prompt defaults; focused SDK/CLI regressions, including real registry tool definitions. Existing executor filtering remains authoritative. No architecture, configuration, persistence, lifecycle or transport redesign.
-Validation: Normal/streaming worker prompt and execution continuations; actual delegated worker tools and context; main tool allowlist and execution rejection before/after planning; CLI defaults/context tests; go test ./sdk ./runtime ./cmd/ai ./transport/discord -timeout 2m; git diff --check.
+Request: แก้ไข prompt และการแยก tool ของ main/worker ใน turn ปกติและ streaming โดยไม่ขยายพฤติกรรมของ orchestration lifecycle
+Conflict: none (ทำให้ REQ-004, REQ-012 และ REQ-015 ชัดเจนขึ้น)
+Previous: การแยก role และการรักษา prompt context ยังไม่ได้ระบุไว้อย่างชัดเจน; การจัดการ main prompt อาจตัด repository requirements และ context อื่นที่ไม่เกี่ยวข้องออก
+New: REQ-016 จำกัด tools ของ main agent และการ execution โดยตรง; REQ-017 รักษา worker prompt/execution tools โดยไม่แทรก planner tools ในทั้งสองเส้นทาง; REQ-018 รักษา repository/custom context และจัดการ role conflict โดยไม่ลบข้อมูลด้วย heuristic
+Reason: Worker ที่มี execution tools ต้องไม่ถูกสั่งให้ทำงานเป็น planner ที่ไม่มี tools และ main defaults ต้องไม่สั่ง execution โดยตรงหรือทิ้ง repository source of truth
+Impact: SDK agent request composition และ planning prompt composition; SDK worker และ CLI main prompt defaults; focused SDK/CLI regressions รวมถึง real registry tool definitions ไม่มีการเปลี่ยน architecture, configuration, persistence, lifecycle หรือ transport redesign
+Validation: ตรวจ prompt ของ worker และ execution continuation ทั้ง normal/streaming; delegated worker tools และ context จริง; main tool allowlist และ execution rejection ก่อน/หลัง planning; CLI defaults/context tests; `go test ./sdk ./runtime ./cmd/ai ./transport/discord -timeout 2m`; `git diff --check`
 Status: accepted
 
 CHANGE-002
 
 Date: 2026-09-14
 Type: add
-Request: Reliable sequential orchestration with explicit main acceptance, same-session retries, captured plan identity, parent isolation, atomic reservations, and transport-independent lifecycle routing.
-Conflict: none (clarifies REQ-001, REQ-003, REQ-016; intentionally replaces implicit worker-success advancement)
-Previous: Worker loop completion implicitly advanced the current plan; job ownership/reservations and lifecycle transport metadata were not explicitly specified.
-New: REQ-019 gates advancement on reviewed, explicitly verified acceptance and event-driven waiting; REQ-020 binds operations to parent/revision/step and prevents overlapping jobs; REQ-021 preserves canonical input routing and reports continuation failures.
-Reason: A textual blocked report is not verified success, stale work must not change replacement plans, and mapped session IDs must not lose transport routing.
-Impact: SDK session plan transitions, sub-agent manager/tools/prompts, Harness lifecycle continuation routing, focused SDK/runtime/CLI/Discord tests. No transport presentation changes, configuration changes, or persistence redesign.
-Validation: Acceptance gating (including blocked text), retry/history continuity, stale completion, concurrent overlap, cross-parent denial, completed-plan investigation, metadata/source routing and continuation errors; go test ./sdk ./runtime ./cmd/ai ./transport/discord -timeout 2m and focused race tests.
+Request: orchestration แบบลำดับที่เชื่อถือได้ พร้อมการยอมรับจาก main อย่างชัดเจน, retry ใน session เดิม, plan identity ที่บันทึกไว้, parent isolation, atomic reservations และ transport-independent lifecycle routing
+Conflict: none (ทำให้ REQ-001, REQ-003 และ REQ-016 ชัดเจนขึ้น; ตั้งใจแทนที่การเลื่อน worker-success โดยอัตโนมัติ)
+Previous: Worker loop completion เคยเลื่อน current plan โดยอัตโนมัติ; ownership/reservation ของ job และ lifecycle transport metadata ยังไม่ได้ระบุไว้อย่างชัดเจน
+New: REQ-019 กำหนดให้การเลื่อนต้องผ่านการ review และ explicit verified acceptance และใช้ event-driven waiting; REQ-020 ผูก operation กับ parent/revision/step และป้องกัน job ซ้อนกัน; REQ-021 รักษา canonical input routing และรายงาน continuation errors
+Reason: blocked report ที่เป็นข้อความไม่ใช่ verified success, งานเก่าต้องไม่เปลี่ยนแผนใหม่ และ mapped session ID ต้องไม่ทำให้ transport routing หาย
+Impact: SDK session plan transitions, sub-agent manager/tools/prompts, Harness lifecycle continuation routing, focused SDK/runtime/CLI/Discord tests ไม่มีการเปลี่ยน transport presentation, configuration หรือ persistence redesign
+Validation: acceptance gating (รวม blocked text), retry/history continuity, stale completion, concurrent overlap, cross-parent denial, completed-plan investigation, metadata/source routing และ continuation errors; `go test ./sdk ./runtime ./cmd/ai ./transport/discord -timeout 2m` และ focused race tests
 Status: accepted
 
 CHANGE-003
 
 Date: 2026-09-14
 Type: add
-Request: Polish Discord final/progress rendering, lossless Unicode/fenced-code pagination, and reliable flush/error cleanup without live Discord access.
-Conflict: none (clarifies REQ-001, REQ-002, REQ-009, REQ-015 and REQ-021; replaces raw output JSON and lossy text presentation)
-Previous: Discord presentation, argument privacy, pagination and flush failure behavior were not explicitly specified.
-New: REQ-022 defines readable responses and non-sensitive concise progress; REQ-023 requires lossless final/streamed pagination without terminal replay; REQ-024 requires retained buffers, surfaced failures, retry-safe page tracking and terminal cleanup.
-Reason: End users need readable answers rather than SDK envelopes, private execution parameters must not leak via progress, and long multilingual/code responses and failed sends must not silently lose content.
-Impact: Discord adapter/gateway, a transport-local paginator, and mock-based rendering/routing tests. No core orchestration, persistence, configuration or transport contract redesign.
-Validation: Thai/emoji and whitespace round trips, long fenced code, streamed page updates/terminal non-duplication, secret-argument suppression, send/edit transition failures and retry, terminal cleanup, existing throttling/footer tests; go test ./transport/discord -timeout 2m; go test ./sdk ./runtime ./cmd/ai ./transport/discord -timeout 2m; git diff --check. No live Discord messages or credentials.
+Request: ปรับ Discord final/progress rendering, pagination ของ Unicode/fenced-code แบบ lossless และการ flush/error cleanup ที่เชื่อถือได้โดยไม่ต้องใช้ live Discord
+Conflict: none (ทำให้ REQ-001, REQ-002, REQ-009, REQ-015 และ REQ-021 ชัดเจนขึ้น; แทนที่ raw output JSON และการแสดงข้อความที่ทำให้ข้อมูลหาย)
+Previous: Discord presentation, argument privacy, pagination และ flush failure behavior ยังไม่ได้ระบุไว้อย่างชัดเจน
+New: REQ-022 กำหนด response ที่อ่านง่ายและ progress ที่กระชับและไม่เปิดเผยข้อมูลภายใน; REQ-023 กำหนด final/streamed pagination แบบ lossless โดยไม่ replay terminal content; REQ-024 กำหนดการเก็บ buffer, การแสดง failure, การ track page ที่ส่งสำเร็จเพื่อ retry โดยไม่ซ้ำ และ terminal cleanup
+Reason: ผู้ใช้ปลายทางต้องการคำตอบที่อ่านง่ายแทน SDK envelope, execution parameters ต้องไม่รั่วผ่าน progress และ response ที่ยาว มีหลายภาษา หรือมี code ต้องไม่สูญหาย รวมถึงกรณีส่งข้อความล้มเหลว
+Impact: Discord adapter/gateway, paginator ที่อยู่ใน transport และ rendering/routing tests แบบ mock ไม่มีการเปลี่ยน core orchestration, persistence, configuration หรือ transport contract redesign
+Validation: round trip ของ Thai/emoji และ whitespace, fenced code ขนาดยาว, streamed page update/terminal non-duplication, การซ่อน secret arguments, send/edit transition failures และ retry, terminal cleanup, throttling/footer tests เดิม; `go test ./transport/discord -timeout 2m`; `go test ./sdk ./runtime ./cmd/ai ./transport/discord -timeout 2m`; `git diff --check`; ห้ามใช้ live Discord messages หรือ credentials
 Status: accepted

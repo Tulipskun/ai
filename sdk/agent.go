@@ -319,7 +319,6 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 		var resp Response
 		var text []ContentPart
 		var calls []ToolCall
-		var emittedToolCalls = make(map[string]struct{})
 		var reasoning *ReasoningState
 		var streamErr error
 		for event := range events {
@@ -347,7 +346,6 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 				if event.ToolCall != nil {
 					call := *event.ToolCall
 					calls = append(calls, call)
-					emittedToolCalls[toolCallTraceKey(call)] = struct{}{}
 					traceEvent(ctx, trace, TraceEvent{Stage: TraceToolCall, ToolCall: cloneToolCall(call)})
 				}
 			case EventDone:
@@ -378,14 +376,6 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 		}
 		if resp.Reasoning == nil {
 			resp.Reasoning = reasoning
-		}
-		for _, call := range resp.ToolCalls {
-			key := toolCallTraceKey(call)
-			if _, emitted := emittedToolCalls[key]; emitted {
-				continue
-			}
-			traceEvent(ctx, trace, TraceEvent{Stage: TraceToolCall, ToolCall: cloneToolCall(call)})
-			emittedToolCalls[key] = struct{}{}
 		}
 		// Some providers return canonical content only in EventDone. Emit it
 		// once when no text deltas were received, never replay a streamed body.
@@ -442,13 +432,6 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 			}
 		}
 	}
-}
-
-func toolCallTraceKey(call ToolCall) string {
-	if call.ID != "" {
-		return "id:" + call.ID
-	}
-	return "call:" + call.Name + "\x00" + call.Arguments
 }
 
 func settleInterruptedTurn(session *Session, before []Turn) {

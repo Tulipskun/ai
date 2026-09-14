@@ -3,10 +3,10 @@ package gemini
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Tulipskun/ai/sdk"
@@ -14,135 +14,253 @@ import (
 	"github.com/Tulipskun/ai/sdk/providers/openai"
 )
 
-type Client struct{ BaseURL string; APIKey string; Headers map[string]string; HTTP *http.Client }
-func New(apiKey string) *Client { return &Client{BaseURL: "https://generativelanguage.googleapis.com/v1beta", APIKey: apiKey, HTTP: http.DefaultClient} }
+type Client struct {
+	BaseURL string
+	APIKey  string
+	Headers map[string]string
+	HTTP    *http.Client
+	// chains tracks one server-side interaction chain per conversation so
+	// follow-up turns continue with previous_interaction_id instead of
+	// replaying history. Shared across With* clones via pointer.
+	chains *interactionChainStore
+}
+
+type interactionChain struct {
+	lastID           string
+	sentClientInputs int
+}
+
+type interactionChainStore struct {
+	mu     sync.Mutex
+	chains map[string]*interactionChain
+}
+
+func newChainStore() *interactionChainStore {
+	return &interactionChainStore{chains: make(map[string]*interactionChain)}
+}
+
+func (s *interactionChainStore) get(id string) *interactionChain {
+	if s == nil || id == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.chains[id]
+	if st == nil {
+		return nil
+	}
+	cp := *st
+	return &cp
+}
+
+func (s *interactionChainStore) set(id string, st *interactionChain) {
+	if s == nil || id == "" || st == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *st
+	s.chains[id] = &cp
+}
+
+func New(apiKey string) *Client { return &Client{BaseURL: "https://generativelanguage.googleapis.com/v1beta", APIKey: apiKey, HTTP: http.DefaultClient, chains: newChainStore()} }
 func (c *Client) WithAPIKey(key string) sdk.Provider { cp := *c; cp.APIKey = key; return &cp }
 func (c *Client) WithBaseURL(baseURL string) sdk.Provider { cp := *c; cp.BaseURL = baseURL; return &cp }
 func (c *Client) WithHeaders(headers map[string]string) sdk.Provider { cp := *c; cp.Headers = cloneHeaders(headers); return &cp }
 func (c *Client) ListModels(ctx context.Context, apiKey string) ([]sdk.Model, error) {var cancel context.CancelFunc; ctx, cancel = context.WithTimeout(ctx, 30*time.Second); defer cancel(); key := apiKey; if key == "" { key = c.APIKey }; u := c.BaseURL + "/models"; if key != "" { u += "?key=" + url.QueryEscape(key) }; var r struct { Models []struct { Name string `json:"name"`; DisplayName string `json:"displayName"`; Supported []string `json:"supportedGenerationMethods"` } `json:"models"` }; if err := internal.DoJSON(ctx, c.http(), http.MethodGet, u, nil, nil, &r); err != nil { return nil, err }; models := make([]sdk.Model, 0, len(r.Models)); for _, item := range r.Models { id := strings.TrimPrefix(item.Name, "models/"); if id == "" { continue }; name := item.DisplayName; if name == "" { name = id }; models = append(models, sdk.Model{ID: id, Name: name, SupportsTools: true, SupportsThinking: true, SupportsTemperature: true}) }; return models, nil }
 func (c *Client) Name() string { return "gemini" }
 // build converts via the central OpenAI Responses interface:
-// sdk.Request -> OpenAI canonical -> Gemini native.
-func build(req sdk.Request) map[string]any {
-	return BuildFromOpenAI(openai.BuildResponsesRequest(req))
+// sdk.Request -> OpenAI canonical -> Gemini Interactions native.
+// It sends the full client-originated history; Generate narrows it to the
+// delta for chained follow-up turns.
+func build(req sdk.Request) (map[string]any, int, error) {
+	return BuildFromOpenAI(openai.BuildResponsesRequest(req), 0, "")
 }
 
 // BuildFromOpenAI translates a canonical OpenAI Responses request map
-// (see openai.BuildResponsesRequest) into a Gemini generateContent payload.
-func BuildFromOpenAI(openAIReq map[string]any) map[string]any {
-	b := map[string]any{}
+// (see openai.BuildResponsesRequest) into a Gemini Interactions payload.
+// Only client-originated items (user messages and function outputs) become
+// input steps: model outputs and function calls already live server-side
+// once a chain exists. skipClientInputs drops that many leading client
+// inputs for chained follow-ups; it returns the payload plus the total
+// client input count so callers can chain the next turn. prevID chains the
+// request with previous_interaction_id; empty starts a fresh interaction.
+func BuildFromOpenAI(openAIReq map[string]any, skipClientInputs int, prevID string) (map[string]any, int, error) {
+	b := map[string]any{"model": openai.ModelOf(openAIReq)}
 	if sys := openai.InstructionsOf(openAIReq); sys != "" {
-		b["systemInstruction"] = map[string]any{"parts": []any{map[string]any{"text": sys}}}
+		b["system_instruction"] = sys
 	}
-	var contents []any
-	toolNames := map[string]string{}
+	callNames := map[string]string{}
+	for _, item := range openai.InputItemsOf(openAIReq) {
+		if m := openai.ItemMap(item); m != nil && m["type"] == "function_call" {
+			if id, _ := m["call_id"].(string); id != "" {
+				callNames[id], _ = m["name"].(string)
+			}
+		}
+	}
+	var input []any
+	clientInputs := 0
 	for _, item := range openai.InputItemsOf(openAIReq) {
 		m := openai.ItemMap(item)
 		if m == nil {
 			continue
 		}
+		var step map[string]any
 		switch m["type"] {
 		case "message":
 			role, _ := m["role"].(string)
-			gemRole := "user"
-			if role == "assistant" {
-				gemRole = "model"
+			if role != "user" {
+				// Assistant messages live server-side once chained.
+				continue
 			}
-			if text, _ := m["content"].(string); text != "" {
-				contents = append(contents, map[string]any{"role": gemRole, "parts": []any{map[string]any{"text": text}}})
-			}
-		case "reasoning":
-			// Gemini thought parts are response-only; nothing to replay from history text.
+			text, _ := m["content"].(string)
+			step = map[string]any{"type": "user_input", "content": []any{map[string]any{"type": "text", "text": text}}}
+		case "reasoning", "function_call":
+			// Server-side steps; never replayed.
 			continue
-		case "function_call":
-			callID, _ := m["call_id"].(string)
-			name, _ := m["name"].(string)
-			toolNames[callID] = name
-			argsStr, _ := m["arguments"].(string)
-			var args any
-			_ = json.Unmarshal([]byte(argsStr), &args)
-			contents = append(contents, map[string]any{"role": "model", "parts": []any{map[string]any{"functionCall": map[string]any{"name": name, "args": args}}}})
 		case "function_call_output":
 			callID, _ := m["call_id"].(string)
 			output, _ := m["output"].(string)
-			name := toolNames[callID]
+			name := callNames[callID]
 			if name == "" {
 				name = callID
 			}
-			contents = append(contents, map[string]any{"role": "user", "parts": []any{map[string]any{"functionResponse": map[string]any{"name": name, "response": map[string]any{"content": output}}}}})
+			step = map[string]any{"type": "function_result", "name": name, "call_id": callID, "result": []any{map[string]any{"type": "text", "text": output}}}
+		default:
+			continue
 		}
+		if clientInputs < skipClientInputs {
+			clientInputs++
+			continue
+		}
+		clientInputs++
+		input = append(input, step)
 	}
-	b["contents"] = contents
+	if input == nil {
+		input = []any{}
+	}
+	b["input"] = input
 	cfg := map[string]any{}
 	if temp, ok := openai.TemperatureOf(openAIReq); ok {
 		cfg["temperature"] = temp
 	}
 	if maxTokens := openai.MaxOutputTokensOf(openAIReq); maxTokens > 0 {
-		cfg["maxOutputTokens"] = maxTokens
+		cfg["max_output_tokens"] = maxTokens
 	}
 	if effort := openai.ReasoningEffortOf(openAIReq); effort != "" && effort != string(sdk.ThinkingNone) {
-		cfg["thinkingConfig"] = map[string]any{"thinkingLevel": effort}
+		cfg["thinking_level"] = effort
 	}
 	if len(cfg) > 0 {
-		b["generationConfig"] = cfg
+		b["generation_config"] = cfg
 	}
-	var declarations []any
-	for _, t := range openai.ToolsOf(openAIReq) {
-		tm := openai.ItemMap(t)
-		if tm == nil {
-			continue
-		}
-		name, _ := tm["name"].(string)
-		desc, _ := tm["description"].(string)
-		declarations = append(declarations, map[string]any{"name": name, "description": desc, "parameters": tm["parameters"]})
+	tools := openai.ToolsOf(openAIReq)
+	if len(tools) > 0 {
+		b["tools"] = tools
 	}
-	if len(declarations) > 0 {
-		b["tools"] = []any{map[string]any{"functionDeclarations": declarations}}
+	// store:true keeps the interaction server-side so follow-up turns can
+	// chain with previous_interaction_id. The Harness still owns session
+	// state in its own session database.
+	b["store"] = true
+	if prevID != "" {
+		b["previous_interaction_id"] = prevID
 	}
-	return b
+	return b, clientInputs, nil
 }
-type functionCall struct { Name string `json:"name"`; Args map[string]any `json:"args"` }
-type part struct { Text string `json:"text"`; FunctionCall *functionCall `json:"functionCall"`; Thought bool `json:"thought"` }
-type candidate struct { Content struct { Parts []part `json:"parts"` } `json:"content"`; FinishReason string `json:"finishReason"` }
-type response struct { Candidates []candidate `json:"candidates"`; Usage struct { Prompt int `json:"promptTokenCount"`; Output int `json:"candidatesTokenCount"`; Total int `json:"totalTokenCount"`; Cached int `json:"cachedContentTokenCount"` } `json:"usageMetadata"` }
-func (c *Client) endpoint(model string) string { u := fmt.Sprintf("%s/models/%s:%s", c.BaseURL, url.PathEscape(model), "generateContent"); return u }
-func (c *Client) Generate(ctx context.Context, req sdk.Request) (sdk.Response, error) { var r response; if err := internal.DoJSON(ctx, c.http(), http.MethodPost, c.endpoint(req.Model), c.headers(), build(req), &r); err != nil { return sdk.Response{}, err }; return ToOpenAIResponse(r, req.Model), nil }
-func parse(r response, model string) sdk.Response { return ToOpenAIResponse(r, model) }
+type interactionContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type interactionStep struct {
+	Type      string               `json:"type"`
+	ID        string               `json:"id"`
+	Name      string               `json:"name"`
+	Arguments json.RawMessage      `json:"arguments"`
+	Content   []interactionContent `json:"content"`
+}
+
+type interactionResponse struct {
+	ID    string            `json:"id"`
+	Steps []interactionStep `json:"steps"`
+}
+
+func (c *Client) endpoint() string { return c.BaseURL + "/interactions" }
+
+func (c *Client) Generate(ctx context.Context, req sdk.Request) (sdk.Response, error) {
+	canonical := openai.BuildResponsesRequest(req)
+	prevID, skip := "", 0
+	if st := c.chains.get(req.ConversationID); st != nil {
+		prevID, skip = st.lastID, st.sentClientInputs
+	}
+	body, total, err := BuildFromOpenAI(canonical, skip, prevID)
+	if err != nil {
+		return sdk.Response{}, err
+	}
+	if total <= skip {
+		// History shrank or carried nothing new (repair path):
+		// start a fresh chain with the full client history.
+		if body, total, err = BuildFromOpenAI(canonical, 0, ""); err != nil {
+			return sdk.Response{}, err
+		}
+	}
+	var r interactionResponse
+	if err := internal.DoJSON(ctx, c.http(), http.MethodPost, c.endpoint(), c.headers(), body, &r); err != nil {
+		return sdk.Response{}, err
+	}
+	c.chains.set(req.ConversationID, &interactionChain{lastID: r.ID, sentClientInputs: total})
+	return ToInteractionResponse(r, req.Model), nil
+}
 func (c *Client) headers() map[string]string { h := map[string]string{"x-goog-api-key": c.APIKey}; for k, v := range c.Headers { if v == "" || strings.EqualFold(k, "x-goog-api-key") { continue }; h[k] = v }; return h }
 func cloneHeaders(in map[string]string) map[string]string { if len(in) == 0 { return nil }; out := make(map[string]string, len(in)); for k, v := range in { out[k] = v }; return out }
 
-// ToOpenAIResponse converts a native Gemini response into sdk.Response
-// through the central OpenAI Responses shape.
-func ToOpenAIResponse(r response, model string) sdk.Response {
-	usage := sdk.Usage{InputTokens: r.Usage.Prompt, OutputTokens: r.Usage.Output, TotalTokens: r.Usage.Total, CacheReadTokens: r.Usage.Cached}
-	if len(r.Candidates) == 0 {
-		out := openai.ResponsesResponseFromParts(model, "", nil, nil, nil, usage)
-		out.Provider = "gemini"
-		out.Cache = sdk.CacheInfo{Layer: "provider", Hit: usage.CacheReadTokens > 0}
-		return out
-	}
+// ToInteractionResponse converts a native Interactions response into
+// sdk.Response through the central OpenAI Responses shape.
+func ToInteractionResponse(r interactionResponse, model string) sdk.Response {
 	var texts []string
 	var calls []sdk.ToolCall
 	var reasoning *sdk.ReasoningState
-	for _, p := range r.Candidates[0].Content.Parts {
-		if p.Text != "" {
-			if p.Thought {
-				if reasoning == nil {
-					reasoning = &sdk.ReasoningState{}
+	for _, step := range r.Steps {
+		switch step.Type {
+		case "model_output", "thought":
+			for _, block := range step.Content {
+				if block.Type != "text" || block.Text == "" {
+					continue
 				}
-				reasoning.Text += p.Text
-			} else {
-				texts = append(texts, p.Text)
+				if step.Type == "thought" {
+					if reasoning == nil {
+						reasoning = &sdk.ReasoningState{}
+					}
+					reasoning.Text += block.Text
+				} else {
+					texts = append(texts, block.Text)
+				}
 			}
-		}
-		if p.FunctionCall != nil {
-			a, _ := json.Marshal(p.FunctionCall.Args)
-			calls = append(calls, sdk.ToolCall{ID: fmt.Sprintf("gemini-%s-%d", p.FunctionCall.Name, len(calls)+1), Name: p.FunctionCall.Name, Arguments: string(a)})
+		case "function_call":
+			calls = append(calls, sdk.ToolCall{ID: step.ID, Name: step.Name, Arguments: normalizeArguments(step.Arguments)})
 		}
 	}
-	out := openai.ResponsesResponseFromParts(model, r.Candidates[0].FinishReason, texts, calls, reasoning, usage)
+	// The interaction response carries no usage counters; accounting records
+	// zeros for Gemini until the API exposes them on this endpoint.
+	out := openai.ResponsesResponseFromParts(model, "", texts, calls, reasoning, sdk.Usage{})
 	out.Provider = "gemini"
-	out.Cache = sdk.CacheInfo{Layer: "provider", Hit: usage.CacheReadTokens > 0}
+	out.Cache = sdk.CacheInfo{Layer: "provider"}
 	return out
+}
+
+// normalizeArguments keeps the interaction function_call arguments as a
+// canonical JSON string for the tool loop round-trip.
+func normalizeArguments(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "{}"
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return string(raw)
+	}
+	normalized, err := json.Marshal(v)
+	if err != nil {
+		return string(raw)
+	}
+	return string(normalized)
 }
 func (c *Client) http() *http.Client { if c.HTTP != nil { return c.HTTP }; return http.DefaultClient }

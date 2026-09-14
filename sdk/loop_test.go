@@ -16,7 +16,7 @@ func newLoopTestClient() *RouterClient {
 	router := NewRouter()
 	router.Register(ModelRoute{Provider: ProviderOpenRouter, Model: "model", Adapter: AdapterOpenAI})
 	client := NewRouterClient(router)
-	client.RegisterAdapter(AdapterOpenAI, loopTestProvider{})
+	client.RegisterAdapter(ProviderOpenRouter, AdapterOpenAI, loopTestProvider{})
 	return client
 }
 
@@ -46,7 +46,7 @@ func TestLoopToolResultDoesNotDeadlock(t *testing.T) {
 	router := NewRouter()
 	router.Register(ModelRoute{Provider: "test", Model: "model", Adapter: AdapterOpenAI})
 	client := NewRouterClient(router)
-	client.RegisterAdapter(AdapterOpenAI, provider)
+	client.RegisterAdapter("test", AdapterOpenAI, provider)
 	tools := &agentTestTools{definitions: []Tool{{Name: "echo"}}}
 	loop := &HarnessLoop{Client: client, Agent: &Agent{Client: client, Tools: tools, MaxRetries: 0}, ResolveSession: func(context.Context, Input) (*Session, error) { return session, nil }}
 	done := make(chan error, 1)
@@ -69,7 +69,7 @@ func TestLoopEmitsFinalResponseTrace(t *testing.T) {
 	router := NewRouter()
 	router.Register(ModelRoute{Provider: "test", Model: "model", Adapter: AdapterOpenAI})
 	client := NewRouterClient(router)
-	client.RegisterAdapter(AdapterOpenAI, provider)
+	client.RegisterAdapter("test", AdapterOpenAI, provider)
 	events := make(chan TraceEvent, 8)
 	display := DisplayFunc(func(_ context.Context, output Output) error {
 		if output.Trace != nil {

@@ -9,18 +9,28 @@ import (
 
 type KeyedProvider interface { Provider; WithAPIKey(string) Provider }
 type HeaderedProvider interface { Provider; WithHeaders(map[string]string) Provider }
-type RouterClient struct { Router *Router; Adapters map[AdapterID]Provider }
-func NewRouterClient(router *Router) *RouterClient { return &RouterClient{Router: router, Adapters: make(map[AdapterID]Provider)} }
-func (c *RouterClient) RegisterAdapter(id AdapterID, p Provider) { c.Adapters[id] = p }
+// AdapterBinding identifies one adapter instance owned by one provider.
+// A provider may serve models over different wire formats, so bindings are
+// keyed by provider AND adapter: instances are never shared across
+// providers, and one provider can still route different models through
+// different adapters.
+type AdapterBinding struct{ Provider ProviderID; Adapter AdapterID }
+// RouterClient binds one adapter instance per provider. Adapters are never
+// shared across providers: each provider owns its instance and per-request
+// settings (key, base URL, headers) are applied on a copy.
+type RouterClient struct { Router *Router; Adapters map[AdapterBinding]Provider }
+func NewRouterClient(router *Router) *RouterClient { return &RouterClient{Router: router, Adapters: make(map[AdapterBinding]Provider)} }
+func (c *RouterClient) RegisterAdapter(provider ProviderID, id AdapterID, p Provider) { c.Adapters[AdapterBinding{provider, id}] = p }
 func (c *RouterClient) providerFor(session *Session, model string) (Provider, ModelRoute, error) {
 	route, err := c.Router.Resolve(session.config.Provider, model)
 	if err != nil && strings.Contains(err.Error(), "model catalogue for provider=") {
 		provider := session.config.Provider
-		adapterConfig, configErr := c.Router.Provider(provider)
-		if configErr == nil { if _, ok := c.Adapters[adapterConfig.Adapter]; ok { if refreshErr := c.RefreshModels(context.Background(), provider); refreshErr == nil { route, err = c.Router.Resolve(provider, model) } else { err = refreshErr } } }
+		if config, configErr := c.Router.Provider(provider); configErr == nil {
+			if _, ok := c.Adapters[AdapterBinding{provider, config.Adapter}]; ok { if refreshErr := c.RefreshModels(context.Background(), provider); refreshErr == nil { route, err = c.Router.Resolve(provider, model) } else { err = refreshErr } }
+		}
 	}
 	if err != nil { return nil, ModelRoute{}, err }
-	p, ok := c.Adapters[route.Adapter]
+	p, ok := c.Adapters[AdapterBinding{route.Provider, route.Adapter}]
 	if !ok { return nil, ModelRoute{}, &RouteError{Provider: route.Provider, Model: route.Model, Adapter: route.Adapter} }
 	if kp, ok := p.(KeyedProvider); ok { key, err := session.APIKey(); if err != nil { return nil, ModelRoute{}, err }; p = kp.WithAPIKey(key) }
 	if config, err := c.Router.Provider(route.Provider); err == nil { if config.BaseURL != "" { if ep, ok := p.(EndpointProvider); ok { p = ep.WithBaseURL(config.BaseURL) } }; if len(config.Headers) > 0 { if hp, ok := p.(HeaderedProvider); ok { p = hp.WithHeaders(config.Headers) } } }
@@ -28,11 +38,12 @@ func (c *RouterClient) providerFor(session *Session, model string) (Provider, Mo
 }
 type RouteError struct { Provider ProviderID; Model string; Adapter AdapterID }
 func (e *RouteError) Error() string { return "sdk: adapter not registered for provider=" + string(e.Provider) + " model=" + e.Model + " adapter=" + string(e.Adapter) }
-func (c *RouterClient) RefreshModels(ctx context.Context, provider ProviderID) error { config, err := c.Router.Provider(provider); if err != nil { return err }; adapter, ok := c.Adapters[config.Adapter]; if !ok { return &RouteError{Provider: provider, Adapter: config.Adapter} }; return c.Router.RefreshModels(ctx, provider, adapter) }
+func (c *RouterClient) RefreshModels(ctx context.Context, provider ProviderID) error { config, err := c.Router.Provider(provider); if err != nil { return err }; adapter, ok := c.Adapters[AdapterBinding{provider, config.Adapter}]; if !ok { return &RouteError{Provider: provider, Adapter: config.Adapter} }; return c.Router.RefreshModels(ctx, provider, adapter) }
 func (c *RouterClient) Generate(ctx context.Context, session *Session, req Request) (Response, error) {
 	cfg := session.Config(); model := req.Model; if model == "" { model = cfg.Model }
 	p, route, err := c.providerFor(session, model); if err != nil { return Response{}, err }
 	req.Provider, req.Model = route.Provider, route.Model
+	if req.ConversationID == "" { req.ConversationID = session.ID() }
 	if len(req.Messages) == 0 { req.Messages = session.History() }
 	if req.ThinkingLevel == "" { req.ThinkingLevel = cfg.ThinkingLevel }
 	if req.Temperature == nil && cfg.Temperature != nil { v := *cfg.Temperature; req.Temperature = &v }

@@ -40,6 +40,10 @@ type Request struct {
 	Temperature *float64 `json:"temperature,omitempty"`
 	ThinkingLevel ThinkingLevel `json:"thinking_level,omitempty"`
 	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
+	// ConversationID is an opaque chain key for stateful provider APIs
+	// (e.g. Gemini Interactions previous_interaction_id). Stateless
+	// adapters ignore it. RouterClient fills it from the session ID.
+	ConversationID string `json:"conversation_id,omitempty"`
 }
 
 type Usage struct { InputTokens int `json:"input_tokens"`; OutputTokens int `json:"output_tokens"`; TotalTokens int `json:"total_tokens"`; CacheReadTokens int `json:"cache_read_tokens"`; CacheWriteTokens int `json:"cache_write_tokens"` }

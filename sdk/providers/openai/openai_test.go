@@ -2,9 +2,11 @@ package openai
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Tulipskun/ai/sdk"
 )
@@ -47,21 +49,8 @@ func TestBuildReplaysResponsesReasoning(t *testing.T) {
 }
 
 func TestParseResponsePreservesReasoning(t *testing.T) {
-	r := response{Model: "deepseek-v4-flash", Output: []struct {
-		Type string `json:"type"`
-		ID string `json:"id"`
-		CallID string `json:"call_id"`
-		Name string `json:"name"`
-		Arguments string `json:"arguments"`
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}{
-		{Type: "reasoning", ID: "rs_123", Content: []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}{{Type: "reasoning_text", Text: "think"}}},
+	r := response{Model: "deepseek-v4-flash", Output: []outputItem{
+		{Type: "reasoning", ID: "rs_123", Content: []outputContent{{Type: "reasoning_text", Text: "think"}}},
 	}}
 	got := parseResponse(r)
 	if got.Reasoning == nil || got.Reasoning.ID != "rs_123" || got.Reasoning.Text != "think" {
@@ -165,5 +154,70 @@ func TestGenerateSurfacesChatErrorWhenBoth404(t *testing.T) {
 	c := &Client{BaseURL: server.URL, APIKey: "k"}
 	if _, err := c.Generate(context.Background(), sdk.Request{Model: "m"}); err == nil {
 		t.Fatal("expected error when both endpoints 404")
+	}
+}
+
+func TestGenerateIgnoresSDKEnvironmentDefaults(t *testing.T) {
+	var auth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"m","output":[],"status":"completed","usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0,"input_tokens_details":{}}}`))
+	}))
+	defer server.Close()
+	t.Setenv("OPENAI_API_KEY", "env-key-must-lose")
+	t.Setenv("OPENAI_BASE_URL", "https://env.invalid/v9")
+	c := &Client{BaseURL: server.URL, APIKey: "file-key", HTTP: server.Client()}
+	if _, err := c.Generate(context.Background(), sdk.Request{Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	if auth != "Bearer file-key" {
+		t.Fatalf("explicit config must win over env, got %q", auth)
+	}
+}
+
+func TestGenerateMapsRateLimitWithRetryAfter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"slow down","type":"rate_limit"}}`))
+	}))
+	defer server.Close()
+	c := &Client{BaseURL: server.URL, APIKey: "k", HTTP: server.Client()}
+	_, err := c.Generate(context.Background(), sdk.Request{Model: "m"})
+	if err == nil {
+		t.Fatal("expected rate limit error")
+	}
+	var statusErr sdk.HTTPStatusError
+	if !errors.As(err, &statusErr) || statusErr.HTTPStatusCode() != 429 {
+		t.Fatalf("status not preserved: %v", err)
+	}
+	var retryErr sdk.RetryAfterError
+	if !errors.As(err, &retryErr) || retryErr.RetryAfter() != 5*time.Second {
+		t.Fatalf("retry-after not preserved: %v", err)
+	}
+}
+
+func TestResponsesParamsShapesHistory(t *testing.T) {
+	temp := 0.7
+	params := responsesParams(sdk.Request{Model: "m", SystemPrompt: "sys", Temperature: &temp, ThinkingLevel: sdk.ThinkingLow,
+		MaxOutputTokens: 50,
+		Messages: []sdk.Turn{
+			{Role: sdk.RoleUser, Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "hi"}}},
+			{Role: sdk.RoleModel, Reasoning: &sdk.ReasoningState{ID: "rs_1", Text: "thinking"}},
+			{Role: sdk.RoleToolCall, ToolCall: &sdk.ToolCall{ID: "c1", Name: "bash", Arguments: `{}`}},
+			{Role: sdk.RoleToolResult, ToolResult: &sdk.ToolResult{ID: "c1", Content: "ok"}},
+		},
+		Tools: []sdk.Tool{{Name: "bash", Description: "run", InputSchema: map[string]any{"type": "object"}}},
+	})
+	if string(params.Model) != "m" {
+		t.Fatalf("model = %q", params.Model)
+	}
+	if len(params.Input.OfInputItemList) != 4 {
+		t.Fatalf("input items = %d, want user+reasoning+call+result", len(params.Input.OfInputItemList))
+	}
+	if len(params.Tools) != 1 {
+		t.Fatalf("tools = %d, want 1", len(params.Tools))
 	}
 }

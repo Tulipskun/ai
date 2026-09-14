@@ -261,7 +261,7 @@ func (g *Gateway) sendActorResponse(ctx context.Context, channelID, actor, jobID
 func paginateActorText(text string, max int) []string {
 	text = strings.TrimSpace(text)
 	if text == "" { return nil }
-	if max <= 0 { return []string{text] }
+	if max <= 0 { return []string{text} }
 	var pages []string
 	for len([]rune(text)) > max {
 		runes := []rune(text)

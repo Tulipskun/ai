@@ -62,10 +62,9 @@ type SubAgentEvent struct {
 	PlanStep     PlanStep
 	PlanRevision uint64
 	Input        Input
+	Trace        *TraceEvent
 }
 
-// Message is the planner-facing lifecycle report shared by transports. It
-// identifies the captured revision and makes clear that completion is not acceptance.
 func (e SubAgentEvent) Message() string {
 	label := "investigation"
 	if e.PlanStep.Index > 0 {
@@ -77,7 +76,7 @@ func (e SubAgentEvent) Message() string {
 	} else {
 		guidance += " Investigation results do not require plan-step acceptance; use the reviewed findings to create the execution plan."
 	}
-	return fmt.Sprintf("Sub-agent job %s %s for %s: %s\n%s", e.JobID, e.Status, label, e.Result, guidance)
+	return fmt.Sprintf("<sub agent id %s> %s: %s\n%s", e.JobID, e.Result, label, guidance)
 }
 
 type subAgentManager struct {
@@ -97,8 +96,6 @@ func (m *subAgentManager) Delegate(parent *Session, task string) (string, error)
 	return m.start(parent, task, "", Input{})
 }
 
-// start reserves the parent before starting any worker. Each attempt gets a new
-// job ID, while follow-ups reopen the original worker's persistent conversation.
 func (m *subAgentManager) start(parent *Session, task, previous string, input Input) (string, error) {
 	if m == nil || m.agent == nil || parent == nil {
 		return "", errors.New("sdk: sub-agent is not configured")
@@ -159,6 +156,20 @@ func (m *subAgentManager) run(ctx context.Context, job *subAgentJob) {
 	if sink != nil {
 		sink(SubAgentEvent{Parent: job.parent, JobID: job.id, Status: status, Result: result, PlanStep: job.step, PlanRevision: job.revision, Input: cloneInputRoute(job.input)})
 	}
+}
+
+func (m *subAgentManager) emitTrace(job *subAgentJob, event TraceEvent) {
+	if m == nil || job == nil {
+		return
+	}
+	m.eventMu.RLock()
+	sink := m.sink
+	m.eventMu.RUnlock()
+	if sink == nil {
+		return
+	}
+	trace := event
+	sink(SubAgentEvent{Parent: job.parent, JobID: job.id, Status: job.status, PlanStep: job.step, PlanRevision: job.revision, Input: cloneInputRoute(job.input), Trace: &trace})
 }
 
 func (m *subAgentManager) runWorker(ctx context.Context, job *subAgentJob) (Response, error) {
@@ -225,9 +236,38 @@ func (m *subAgentManager) runWorker(ctx context.Context, job *subAgentJob) (Resp
 		if message != "" {
 			job.events = append(job.events, message)
 		}
+		status := job.status
 		m.mu.Unlock()
+		m.emitTrace(job, TraceEvent{Stage: event.Stage, Message: event.Message, Response: cloneResponsePtr(event.Response), ToolCall: cloneToolCallPtr(event.ToolCall), ToolResult: cloneToolResultPtr(event.ToolResult), Text: event.Text, Err: event.Err, RetryAfter: event.RetryAfter, Elapsed: event.Elapsed})
+		_ = status
 	}
 	return workerAgent.runTurn(ctx, worker, Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: job.task}}}, req, trace, nil)
+}
+
+func cloneResponsePtr(in *Response) *Response {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Content = append([]ContentPart(nil), in.Content...)
+	out.ToolCalls = append([]ToolCall(nil), in.ToolCalls...)
+	return &out
+}
+
+func cloneToolCallPtr(in *ToolCall) *ToolCall {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
+}
+
+func cloneToolResultPtr(in *ToolResult) *ToolResult {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
 }
 
 func chooseThinking(value, fallback ThinkingLevel) ThinkingLevel {

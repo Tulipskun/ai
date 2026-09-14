@@ -71,6 +71,40 @@ func TestPlanningToolDefinition(t *testing.T) {
 	}
 }
 
+func TestMainAgentDefinitionsContainNoExecutionTools(t *testing.T) {
+	e := newPlanningToolExecutor(&planningTestExecutor{}, nil)
+	e.ConfigureSubAgent(&subAgentStub{})
+	defs := e.Definitions()
+	for _, d := range defs {
+		switch d.Name {
+		case planningToolName, "delegate_to_subagent", "subagent_status", "subagent_history", "stop_subagent":
+		default:
+			t.Fatalf("Main Agent exposed non-orchestration tool %q", d.Name)
+		}
+	}
+}
+
+func TestPlanningSystemPromptRemovesExecutionInstructions(t *testing.T) {
+	base := `You are an assistant.
+Before creating the plan, use the sub-agent.
+When the user asks to do something, CALL the matching tool.
+Prefer acting first: inspect with read_file, list_directory, or search_files, then act.
+Use run_command for shell work. Use web_fetch for URLs. Use browser_* tools to operate web pages.
+Available tools:
+- run_command: execute commands
+Project Requirements (repository source of truth):
+- must not expose this directly`
+	got := planningSystemPrompt(base)
+	for _, forbidden := range []string{"CALL the matching tool", "read_file", "list_directory", "search_files", "run_command", "web_fetch", "browser_*", "Available tools:", "Project Requirements (repository source of truth)"} {
+		if strings.Contains(strings.ToLower(got), strings.ToLower(forbidden)) {
+			t.Fatalf("Main Agent prompt still exposes execution instruction %q: %s", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "You are the Main Agent") || !strings.Contains(got, "do not have execution tools") {
+		t.Fatalf("Main Agent role instruction missing: %s", got)
+	}
+}
+
 func TestParsePlanSteps(t *testing.T) {
 	steps := parsePlanSteps("1. inspect A\n2) implement B\n- verify C")
 	if len(steps) != 3 || !strings.EqualFold(steps[0], "inspect A") || !strings.EqualFold(steps[2], "verify C") {

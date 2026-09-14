@@ -69,6 +69,7 @@ func TestSessionDBRecordsAttemptAndUsageWithoutRawPayloads(t *testing.T) {
 		Tools:         []Tool{{Name: "read_file"}},
 		ThinkingLevel: ThinkingLow,
 		MaxOutputTokens: 100,
+		Stream:        true,
 	}
 	id, err := s.RecordRequest(1, req)
 	if err != nil {

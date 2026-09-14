@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/Tulipskun/ai/sdk"
@@ -28,7 +29,10 @@ func TestToOpenAIResponseKeepsProvider(t *testing.T) {
 	var r response
 	r.Model = "m2"
 	r.StopReason = "stop"
-	r.Content = append(r.Content, contentBlock{Type: "text", Text: "hi"})
+	r.Content = append(r.Content, struct {
+		Type, Text, ID, Name string
+		Input                json.RawMessage `json:"input"`
+	}{Type: "text", Text: "hi"})
 	got := ToOpenAIResponse(r)
 	if got.Provider != "anthropic" || len(got.Content) != 1 || got.Content[0].Text != "hi" {
 		t.Fatalf("unexpected canonical response: %+v", got)

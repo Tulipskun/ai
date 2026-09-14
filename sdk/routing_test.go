@@ -74,6 +74,11 @@ func (f *headerCaptureLister) WithHeaders(h map[string]string) Provider {
 func (f *headerCaptureLister) Generate(context.Context, Request) (Response, error) {
 	return Response{}, nil
 }
+func (f *headerCaptureLister) Stream(context.Context, Request) (<-chan Event, error) {
+	ch := make(chan Event, 1)
+	close(ch)
+	return ch, nil
+}
 func (f *headerCaptureLister) ListModels(context.Context, string) ([]Model, error) { return f.models, nil }
 
 func TestRefreshModelsAppliesCustomHeaders(t *testing.T) {

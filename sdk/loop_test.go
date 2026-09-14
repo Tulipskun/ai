@@ -2,7 +2,6 @@ package sdk
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 )
@@ -13,11 +12,17 @@ func (loopTestProvider) Name() string { return "test" }
 func (loopTestProvider) Generate(context.Context, Request) (Response, error) {
 	return Response{Content: []ContentPart{{Type: ContentText, Text: "response"}}}, nil
 }
+func (loopTestProvider) Stream(context.Context, Request) (<-chan Event, error) {
+	ch := make(chan Event, 1)
+	ch <- Event{Type: EventDone}
+	close(ch)
+	return ch, nil
+}
 func newLoopTestClient() *RouterClient {
 	router := NewRouter()
 	router.Register(ModelRoute{Provider: ProviderOpenRouter, Model: "model", Adapter: AdapterOpenAI})
 	client := NewRouterClient(router)
-	client.RegisterAdapter(ProviderOpenRouter, AdapterOpenAI, loopTestProvider{})
+	client.RegisterAdapter(AdapterOpenAI, loopTestProvider{})
 	return client
 }
 
@@ -47,7 +52,7 @@ func TestLoopToolResultDoesNotDeadlock(t *testing.T) {
 	router := NewRouter()
 	router.Register(ModelRoute{Provider: "test", Model: "model", Adapter: AdapterOpenAI})
 	client := NewRouterClient(router)
-	client.RegisterAdapter("test", AdapterOpenAI, provider)
+	client.RegisterAdapter(AdapterOpenAI, provider)
 	tools := &agentTestTools{definitions: []Tool{{Name: "echo"}}}
 	loop := &HarnessLoop{Client: client, Agent: &Agent{Client: client, Tools: tools, MaxRetries: 0}, ResolveSession: func(context.Context, Input) (*Session, error) { return session, nil }}
 	done := make(chan error, 1)
@@ -70,7 +75,7 @@ func TestLoopEmitsFinalResponseTrace(t *testing.T) {
 	router := NewRouter()
 	router.Register(ModelRoute{Provider: "test", Model: "model", Adapter: AdapterOpenAI})
 	client := NewRouterClient(router)
-	client.RegisterAdapter("test", AdapterOpenAI, provider)
+	client.RegisterAdapter(AdapterOpenAI, provider)
 	events := make(chan TraceEvent, 8)
 	display := DisplayFunc(func(_ context.Context, output Output) error {
 		if output.Trace != nil {
@@ -116,67 +121,13 @@ func (tracedLoopTestProvider) Name() string { return "test" }
 func (tracedLoopTestProvider) Generate(context.Context, Request) (Response, error) {
 	return Response{Content: []ContentPart{{Type: ContentText, Text: "response"}}}, nil
 }
-func (tracedLoopTestProvider) WithAPIKey(string) Provider { return tracedLoopTestProvider{} }
-
-func TestLoopSubAgentEventDisplaysStatusWithMetadata(t *testing.T) {
-	keys := NewKeyPool("test-key")
-	session := NewSession(SessionConfig{ID: "s1", Provider: ProviderOpenRouter, Model: "model", KeyIndex: 0}, keys)
-	seen := make(chan Output, 8)
-	display := DisplayFunc(func(_ context.Context, output Output) error { seen <- output; return nil })
-	loop := &HarnessLoop{Client: newLoopTestClient(), ResolveSession: func(context.Context, Input) (*Session, error) { return session, nil }, Displays: []Display{display}, DisplayTimeout: time.Second}
-	meta := map[string]string{"channel_id": "C1"}
-	if err := loop.Handle(context.Background(), Input{Source: "discord", SessionID: "s1", Turn: Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: "input"}}}, Metadata: meta}); err != nil {
-		t.Fatal(err)
-	}
-	// Drain the normal turn output; the status assertion below is what matters.
-	select {
-	case <-seen:
-	case <-time.After(time.Second):
-		t.Fatal("turn output was not displayed")
-	}
-	loop.handleSubAgentEvent(context.Background(), SubAgentEvent{Parent: session, JobID: "sa-1", Status: "completed", Result: "done"})
-	timeout := time.After(2 * time.Second)
-	for {
-		select {
-		case output := <-seen:
-			if output.Trace != nil {
-				continue
-			}
-			text := ""
-			for _, part := range output.Content {
-				text += part.Text
-			}
-			if !strings.Contains(text, "sub agent id sa-1") {
-				continue
-			}
-			if output.Metadata["channel_id"] != "C1" {
-				t.Fatalf("status lost channel metadata: %+v", output.Metadata)
-			}
-			if output.SessionID != "s1" {
-				t.Fatalf("status session = %q", output.SessionID)
-			}
-			goto injected
-		case <-timeout:
-			t.Fatal("sub-agent status was not displayed")
-		}
-	}
-injected:
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, turn := range session.History() {
-			if turn.Role != RoleUser {
-				continue
-			}
-			for _, part := range turn.Content {
-				if strings.Contains(part.Text, "sub agent id sa-1") {
-					return
-				}
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("completion prompt was not injected into the parent session")
+func (tracedLoopTestProvider) Stream(context.Context, Request) (<-chan Event, error) {
+	ch := make(chan Event, 1)
+	ch <- Event{Type: EventDone}
+	close(ch)
+	return ch, nil
 }
+func (tracedLoopTestProvider) WithAPIKey(string) Provider { return tracedLoopTestProvider{} }
 
 func TestLoopContinuesWhenDisplayFails(t *testing.T) {
 	keys := NewKeyPool("test-key")

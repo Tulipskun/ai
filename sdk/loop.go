@@ -22,62 +22,6 @@ type HarnessLoop struct {
 	OnTurnError    func(Input, error)
 
 	sessionLocks sync.Map
-	metaMu       sync.RWMutex
-	// inputMetadata remembers the latest transport metadata (e.g. Discord
-	// channel_id) per session so background events — like sub-agent
-	// completion — can display in the right place.
-	inputMetadata map[string]map[string]string
-}
-
-func (h *HarnessLoop) rememberMetadata(sessionID string, meta map[string]string) {
-	if h == nil || sessionID == "" || len(meta) == 0 {
-		return
-	}
-	h.metaMu.Lock()
-	defer h.metaMu.Unlock()
-	if h.inputMetadata == nil {
-		h.inputMetadata = make(map[string]map[string]string)
-	}
-	h.inputMetadata[sessionID] = cloneMetadata(meta)
-}
-
-func (h *HarnessLoop) metadataFor(sessionID string) map[string]string {
-	if h == nil || sessionID == "" {
-		return nil
-	}
-	h.metaMu.RLock()
-	defer h.metaMu.RUnlock()
-	return cloneMetadata(h.inputMetadata[sessionID])
-}
-
-// handleSubAgentEvent reports a finished sub-agent loop back to the Main
-// Agent: it posts an explicit status line to the parent session's displays
-// and then injects the completion prompt as a new turn.
-func (h *HarnessLoop) handleSubAgentEvent(ctx context.Context, event SubAgentEvent) {
-	if h == nil || event.Parent == nil {
-		return
-	}
-	text := SubAgentCompletionPrompt(event)
-	source := inputSourceForSession(event.Parent.ID())
-	meta := h.metadataFor(event.Parent.ID())
-	status := Output{
-		Source:    source,
-		SessionID: event.Parent.ID(),
-		Content:   []ContentPart{{Type: ContentText, Text: text}},
-		Metadata:  cloneMetadata(meta),
-	}
-	turn := Input{
-		Source:    source,
-		SessionID: event.Parent.ID(),
-		Turn:      Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: text}}},
-		Metadata:  cloneMetadata(meta),
-	}
-	go func() {
-		for _, display := range h.Displays {
-			DispatchDisplay(ctx, display, status, h.DisplayTimeout)
-		}
-		_ = h.Entry(ctx, turn)
-	}()
 }
 
 func (h *HarnessLoop) Run(ctx context.Context) error {
@@ -138,7 +82,6 @@ func (h *HarnessLoop) Entry(ctx context.Context, input Input) error {
 	if session == nil {
 		return errors.New("sdk: session resolver returned nil session")
 	}
-	h.rememberMetadata(session.ID(), input.Metadata)
 
 	// Tool results enter through the same Entry point but are already the
 	// output of a model/tool loop. Handle them before acquiring the session

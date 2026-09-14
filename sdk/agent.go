@@ -196,10 +196,6 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 	if req.Stream {
 		return a.runStreamAttempt(ctx, session, req, trace, backoff, entry)
 	}
-	if planner, ok := executor.(*planningToolExecutor); ok && a.SubAgentConfig.Enabled {
-		planner.ConfigureSubAgent(&subAgentRunner{manager: a.subAgentManager(), parent: session})
-	}
-	session.Append(user)
 	baseSystemPrompt := req.SystemPrompt
 
 	for {

@@ -12,9 +12,9 @@ import (
 )
 
 // Custom IDs for the /model message wizard. Every step rewrites the same
-// ephemeral message, so IDs stay short: multi-step state lives in the
-// process-local pending store keyed by channel and user, not in custom IDs
-// (CHANGE-011).
+// regular channel message (ephemeral messages cannot be edited), so IDs stay
+// short: multi-step state lives in the process-local pending store keyed by
+// channel and user, not in custom IDs (CHANGE-011).
 const (
 	modelWizardProvider = "model:provider"
 	modelWizardModel    = "model:model"
@@ -158,9 +158,11 @@ func (h *ModelSettingsHandler) openWizard(s interactionAPI, i *discordgo.Interac
 	}
 	h.startWizard(i.ChannelID, interactionUserID(i))
 	content, components := providerMenuMessage(h.Providers)
+	// A regular channel message (not ephemeral): ephemeral messages cannot
+	// be edited, and the whole wizard works by editing this message in place.
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Content: content, Components: components, Flags: discordgo.MessageFlagsEphemeral},
+		Data: &discordgo.InteractionResponseData{Content: content, Components: components},
 	})
 }
 
@@ -277,7 +279,7 @@ func wizardErrorMessage(message string) (string, []discordgo.MessageComponent) {
 }
 
 // stepWizard serves every wizard component interaction behind a deferred
-// message update, then rewrites the same ephemeral message (REQ-024).
+// message update, then rewrites the same channel message (REQ-024).
 func (h *ModelSettingsHandler) stepWizard(s interactionAPI, i *discordgo.InteractionCreate) error {
 	data := i.MessageComponentData()
 	userID := interactionUserID(i)

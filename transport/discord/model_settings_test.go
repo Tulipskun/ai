@@ -26,6 +26,27 @@ func openTestWizard(t *testing.T, handler *ModelSettingsHandler, fake *fakeInter
 	}
 }
 
+func TestWizardOpensRegularEditableMessage(t *testing.T) {
+	keys := sdk.NewKeyPool("k1")
+	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1"}, keys)
+	handler := wizardTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
+	fake := &fakeInteractionAPI{}
+	openTestWizard(t, handler, fake)
+	if len(fake.responds) != 1 {
+		t.Fatalf("expected one opening response: %+v", fake.responds)
+	}
+	response := fake.responds[0]
+	if response.Type != discordgo.InteractionResponseChannelMessageWithSource {
+		t.Fatalf("wizard must open a real message: %+v", response)
+	}
+	if response.Data.Flags&discordgo.MessageFlagsEphemeral != 0 {
+		t.Fatalf("wizard must not be ephemeral: ephemeral messages cannot be edited")
+	}
+	if len(response.Data.Components) == 0 {
+		t.Fatalf("wizard must open with a provider menu: %+v", response.Data)
+	}
+}
+
 func wizardComponentInteraction(customID string, values ...string) *discordgo.InteractionCreate {
 	return &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
 		Type:      discordgo.InteractionMessageComponent,

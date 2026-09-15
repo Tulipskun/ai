@@ -238,3 +238,16 @@ Reason: V2 จัดสรุปกับปุ่มให้อยู่ด้
 Impact: transport/discord/model_settings.go (V2 builders, save/freeze, ลบ embed), model_settings_test.go (V2-aware helpers); ไม่แตะ shared text summary (/new), sdk, gateway dispatch, modal, canonical contract
 Validation: open/defer/edit/submit ทุก response มี V2 flag; โครงสร้าง Container + 5 ActionRows (+Save); Section 2 ฝั่งครบ ปุ่ม active Primary + ✅ ถูกฝั่ง; Save แล้วเหลือ Container เดียวไม่มี controls; modal submit อัพเดท V2; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-018
+
+Date: 2026-09-15
+Type: revise
+Request: สรุป panel เป็น 2 บล็อก Main/Sub ค่าอิสระกันตาม layout ที่ผู้ใช้วาด (title, Main 5 บรรทัด, sep, Sub 5 บรรทัด, sep, ปุ่ม main/sub, provider, model, thinking/temp, pool, sep, save); controls แก้ฝั่ง active
+Conflict: CHANGE-017 (สรุปคู่ค่าเดียว + sections มีปุ่มข้าง)
+Previous: CHANGE-017 container มี sections ฝั่งละปุ่ม, settings ชุดเดียว
+New: REQ-030 `ModeSettings` (provider/model/keyIndex/thinking/temperature) + `SessionConfig.Sub` persist; setters เขียนฝั่ง active (`SetKeyPool` คง main เพื่อ caller เดิม, เพิ่ม `SetSubKeyPool`); `EffectiveConfig` overlay เมื่อ sub; turn path ใช้ effective (router provider/model/thinking/temp, `APIKey`/`RotateAPIKey` ใช้ pool+index ฝั่ง active, worker spawn, resp labels); Resolve re-attach pool สองฝั่ง; เข้า sub ครั้งแรก seed จาก main (`EnsureSubSettings`); REQ-028 container เป็น TextDisplay ล้วน (title, main block, sep, sub block) ไม่มี sections, มี sep คั่นก่อน controls และก่อน save, `/new` copy ทั้งสองฝั่ง + สรุป text สองบล็อก
+Reason: main/sub ใช้งานจริงคนละ model/pool กัน (เช่น main วางแผน sub ทำงาน) ต้องแยก settings แต่สลับในช่องเดียวได้
+Impact: sdk/types.go (ModeSettings), sdk/session_settings.go (setters ฝั่ง active + EnsureSubSettings + SetSubKeyPool), sdk/routing.go (subKeys + EffectiveConfig + APIKey/Rotate), sdk/router_client.go, sdk/agent.go (labels), sdk/subagent.go (inherit effective), runtime/session_manager.go (re-attach), transport/discord/model_settings.go (layout ตาม sketch + active side), model_settings_test.go, sdk/mode_settings_test.go (ใหม่), transport/discord/new_channel.go (copy สองฝั่ง); ไม่แตะ gateway dispatch, modal, canonical contract
+Validation: setters เขียนถูกฝั่งตาม mode; effective overlay ครบทุก field; sub turn ใช้ pool/index/model ฝั่ง sub (stream/non-stream); seed ครั้งแรก; restart แล้ว pool สองฝั่งกลับมา; worker inherit effective; panel/controls/modal อ่านเขียนฝั่ง active; summary สองบล็อกค่าถูก; /new copy ครบ; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: accepted

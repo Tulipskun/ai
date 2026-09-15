@@ -122,11 +122,15 @@ func TestNewChannelNameUsesDateAndTime(t *testing.T) {
 }
 
 func TestNewChannelClonesSettingsAndReports(t *testing.T) {
-	_, target, resolve, keys := newChannelTestSessions(t)
+	source, target, resolve, keys := newChannelTestSessions(t)
+	subKeys := sdk.NewKeyPool("s1", "s2")
+	if err := source.SetSubSettings(sdk.ModeSettings{Provider: "C.ai", Model: "c1", KeyIndex: 1, ThinkingLevel: sdk.ThinkingLow}, subKeys); err != nil {
+		t.Fatal(err)
+	}
 	fake := &fakeNewChannelDiscord{newID: "chan-new"}
 	handler := &NewChannelHandler{
 		ResolveSession: resolve,
-		ProviderKeys:   map[sdk.ProviderID]*sdk.KeyPool{"B.ai": keys},
+		ProviderKeys:   map[sdk.ProviderID]*sdk.KeyPool{"B.ai": keys, "C.ai": subKeys},
 		Now:            func() time.Time { return time.Date(2026, 9, 15, 14, 30, 0, 0, time.UTC) },
 	}
 	if err := handler.Handle(fake, newChannelInteraction("guild-1", "src")); err != nil {
@@ -153,13 +157,19 @@ func TestNewChannelClonesSettingsAndReports(t *testing.T) {
 	if got.Provider != "B.ai" || got.Model != "qwen3.8-flash" || got.ThinkingLevel != sdk.ThinkingMedium || got.KeyIndex != 1 || got.AgentMode != sdk.AgentModeSub {
 		t.Fatalf("settings not cloned: %+v", got)
 	}
+	if got.Sub.Provider != "C.ai" || got.Sub.Model != "c1" || got.Sub.KeyIndex != 1 || got.Sub.ThinkingLevel != sdk.ThinkingLow {
+		t.Fatalf("sub settings not cloned: %+v", got.Sub)
+	}
+	if key, err := target.APIKey(); err != nil || key != "s2" {
+		t.Fatalf("target sub pool wrong: %q %v", key, err)
+	}
 	if got.Temperature == nil || *got.Temperature != 0.7 {
 		t.Fatalf("temperature not cloned: %+v", got.Temperature)
 	}
 	if fake.sentTo != "chan-new" {
 		t.Fatalf("summary not sent to new channel: %+v", fake)
 	}
-	for _, want := range []string{"B.ai", "qwen3.8-flash", "medium", "0.7", "API Pool: `2`"} {
+	for _, want := range []string{"B.ai", "qwen3.8-flash", "medium", "0.7", "API Pool: `2`", "🤖 **Main agent**", "⚡ **Sub agent**", "C.ai", "c1"} {
 		if !strings.Contains(fake.sentText, want) {
 			t.Fatalf("summary missing %q: %s", want, fake.sentText)
 		}

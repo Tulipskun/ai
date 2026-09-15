@@ -283,7 +283,7 @@ func (m *subAgentManager) emitTrace(job *subAgentJob, event TraceEvent) {
 }
 
 func (m *subAgentManager) runWorker(ctx context.Context, job *subAgentJob) (Response, error) {
-	parentCfg := job.parent.Config()
+	parentCfg := job.parent.EffectiveConfig()
 	provider := strings.TrimSpace(m.cfg.Provider)
 	if provider == "" {
 		provider = string(parentCfg.Provider)
@@ -292,7 +292,7 @@ func (m *subAgentManager) runWorker(ctx context.Context, job *subAgentJob) (Resp
 	if model == "" {
 		model = parentCfg.Model
 	}
-	keys := job.parent.keys
+	keys := job.parent.ActiveKeys()
 	if provider != string(parentCfg.Provider) {
 		config, err := m.agent.Client.Router.Provider(ProviderID(provider))
 		if err != nil {

@@ -43,6 +43,13 @@ func TestSessionAgentModeSelectsRole(t *testing.T) {
 			if err := s.SetAgentMode(AgentModeSub); err != nil {
 				t.Fatal(err)
 			}
+			// A sub turn runs on the sub side, which starts empty.
+			if err := s.SetProvider("test", NewKeyPool("key")); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SetModel("model"); err != nil {
+				t.Fatal(err)
+			}
 			tools := &agentTestTools{definitions: []Tool{{Name: "run_command", Description: "execute shell", InputSchema: map[string]any{"type": "object"}}}}
 			a := &Agent{Client: c, Tools: tools, MaxRetries: -1}
 			base := "channel system prompt"

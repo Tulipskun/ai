@@ -85,8 +85,9 @@ func (h *NewChannelHandler) sourceConfig(ctx context.Context, sourceSessionID st
 }
 
 // applySettings copies validated source settings into the new channel's
-// session. SetProvider runs first because it resets the model and key index
-// it then re-applies.
+// session: the main side through the active setters (the target starts in
+// main mode), then the sub side explicitly, then the mode last. SetProvider
+// runs first because it resets the model and key index it then re-applies.
 func (h *NewChannelHandler) applySettings(ctx context.Context, targetSessionID string, config sdk.SessionConfig, keys *sdk.KeyPool) (sdk.SessionConfig, error) {
 	target, err := h.ResolveSession(ctx, sdk.Input{SessionID: targetSessionID})
 	if err != nil {
@@ -114,6 +115,12 @@ func (h *NewChannelHandler) applySettings(ctx context.Context, targetSessionID s
 	}
 	if err := target.SetKeyIndex(config.KeyIndex); err != nil {
 		return sdk.SessionConfig{}, err
+	}
+	if config.Sub.Provider != "" {
+		subKeys := h.ProviderKeys[config.Sub.Provider]
+		if err := target.SetSubSettings(config.Sub, subKeys); err != nil {
+			return sdk.SessionConfig{}, err
+		}
 	}
 	if err := target.SetAgentMode(panelAgentMode(config)); err != nil {
 		return sdk.SessionConfig{}, err

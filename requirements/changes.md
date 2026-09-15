@@ -82,3 +82,16 @@ Reason: ผู้ใช้ต้องการสั่งงานต่อเ
 Impact: sdk/subagent.go (job tool trace capture, History/Status shaping, Continue + continue_subagent tool, planning guidance), sdk/routing.go (reservation สำหรับ continue), sdk/plan_tool.go (allowlist + system prompt)
 Validation: follow-up เดิมสำหรับงานล้มเหลว/blocked ยังต้องผ่าน; continue หลัง accept ต้อง reuse workerID เดิมและคงประวัติ worker; concurrent continue/delegate ต้องถูกจองกัน; cross-parent continue/status/history ต้องถูกปฏิเสธ; history ต้องมีชื่อ tool + arguments + result/error และ result สุดท้าย; `go test ./sdk -timeout 2m`; `go test ./... -timeout 2m`
 Status: accepted
+
+CHANGE-006
+
+Date: 2026-09-15
+Type: revise
+Request: งานง่าย ๆ (เช่น สร้างไฟล์ test.txt แล้วลบ) ใช้ parent 30 turns และ worker เกือบ 30 tool calls เกินความจำเป็น ขอให้ทำงานได้สัดส่วนกับความยากของงาน
+Conflict: REQ-016 (ค่าเริ่มต้นเดิมบังคับให้ Main Agent มอบหมายการตรวจสอบโปรเจคก่อนเสมอ แม้แต่งานที่ไม่ต้องใช้ repository context) และ REQ-017 (คำสั่ง worker เดิมสั่งให้ validate แต่ไม่จำกัดว่าแค่พอพิสูจน์ผล ทำให้ worker รัน ls/wc/cat/stat ซ้ำไฟล์เดียวกันและลองสูตรคำสั่งหลายแบบ)
+Previous: REQ-016 ค่าเริ่มต้นของคำสั่ง Main Agent ต้องมอบหมายการตรวจสอบโปรเจคและการดำเนินงาน แทนการสั่งให้ Main Agent ใช้ worker tools โดยตรง || REQ-017 ค่าเริ่มต้นของคำสั่ง sub-agent ต้องจำกัดงานให้อยู่ใน scope ที่ได้รับ ห้าม delegation ต่อ และห้ามสื่อสารกับ end user โดยตรง และต้องรายงานสิ่งที่ตรวจพบ/ผลลัพธ์ให้ planner
+New: REQ-016 ความพยายามต้องได้สัดส่วนกับความซับซ้อน: มีขั้นตอน investigation แยกเฉพาะงานที่ต้องใช้ repository context; งานเล็กน้อยที่ไม่ต้องใช้ repository context ใช้แผนขั้นเดียวที่สั้นที่สุดโดยข้าม investigation แยก; แผนทุกขนาดมี step น้อยที่สุดที่ครอบคลุมเป้าหมาย || REQ-017 การตรวจสอบผลต้องใช้วิธีน้อยที่สุดแต่เพียงพอ: คำสั่งเดียวที่พิสูจน์ผลได้ ห้ามทำซ้ำรายการเทียบเท่าเมื่อพิสูจน์ได้แล้ว และห้ามลองสูตรคำสั่งแบบอื่นต่อหลังสำเร็จแล้ว
+Reason: กรณีจริง channel 1549251007995846676 งานสร้าง+ลบไฟล์เดียวเสีย investigation 1 รอบ (8 read-only tools), ตรวจซ้ำด้วย ls/wc/cat/stat หลายรอบ และเสีย 3 calls ไปกับการลองรูปargs ของ run_command ที่รันตรงโดยไม่มี shell; acceptance gating ตาม REQ-019/020 ยังคงเดิม แค่ลดจำนวนรอบที่ไม่จำเป็น
+Impact: sdk/plan_tool.go (planning instruction เพิ่ม proportionality), sdk/subagent.go (worker default prompt เพิ่ม minimal validation), cmd/ai/main.go (default prompt ให้ข้าม investigation เมื่องานไม่ต้องใช้ repo context), tools/registry.go (run_command description เตือนกับดัก direct-exec ไม่มี shell พร้อมตัวอย่าง)
+Validation: ประโยคบังคับเดิมของ prompt/guidance tests ต้องยังอยู่ครบ (poll/event/follow-up/continue/accept/NOT verified success); prompt ใหม่ต้องมีข้อความ proportionality/minimal-check; run_command description ต้องเตือน direct-exec; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: accepted

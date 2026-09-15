@@ -96,3 +96,12 @@ func TestDefaultPromptRequiresSameSessionRetryAndAcceptance(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultPromptRequiresProportionalEffort(t *testing.T) {
+	prompt := defaultSystemPrompt(nil)
+	for _, want := range []string{"only when the task needs repository context", "skip that investigation", "fewest steps", "minimal sufficient check"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("default prompt missing %q", want)
+		}
+	}
+}

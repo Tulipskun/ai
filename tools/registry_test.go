@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Tulipskun/ai/sdk"
@@ -32,4 +33,19 @@ func TestRegistryUnknownTool(t *testing.T) {
 	r, _ := NewRegistry(t.TempDir())
 	res := r.Execute(context.Background(), sdk.ToolCall{ID:"1",Name:"missing",Arguments:`{}`})
 	if !res.IsError { t.Fatal("expected unknown tool error") }
+}
+
+func TestRunCommandDescriptionWarnsAboutDirectExec(t *testing.T) {
+	r, err := NewRegistry(t.TempDir())
+	if err != nil { t.Fatal(err) }
+	for _, d := range r.Definitions() {
+		if d.Name != "run_command" { continue }
+		for _, want := range []string{"without a shell", `"ls -la /x"`, `args ["-la","/x"]`} {
+			if !strings.Contains(d.Description, want) {
+				t.Fatalf("run_command description missing %q: %s", want, d.Description)
+			}
+		}
+		return
+	}
+	t.Fatal("run_command definition missing")
 }

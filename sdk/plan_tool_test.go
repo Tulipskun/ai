@@ -119,3 +119,16 @@ func TestParsePlanSteps(t *testing.T) {
 		t.Fatalf("unexpected steps: %#v", steps)
 	}
 }
+
+func TestPlanningGuidanceRequiresProportionalEffort(t *testing.T) {
+	for _, want := range []string{"Scale effort to the task", "skip the separate investigation", "fewest steps", "minimal sufficient check"} {
+		if !strings.Contains(planningSystemInstruction, want) {
+			t.Fatalf("planning guidance missing %q", want)
+		}
+	}
+	for _, want := range []string{"minimal sufficient check", "Do not repeat equivalent listings", "do not try another command formulation"} {
+		if !strings.Contains(defaultSubAgentSystemPrompt, want) {
+			t.Fatalf("worker prompt missing %q", want)
+		}
+	}
+}

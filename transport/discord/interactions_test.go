@@ -11,8 +11,10 @@ import (
 type fakeInteractionAPI struct {
 	responds    []*discordgo.InteractionResponse
 	followups   []*discordgo.WebhookParams
+	edits       []*discordgo.WebhookEdit
 	respondErr  error
 	followupErr error
+	editErr     error
 }
 
 func (f *fakeInteractionAPI) InteractionRespond(_ *discordgo.Interaction, resp *discordgo.InteractionResponse, _ ...discordgo.RequestOption) error {
@@ -24,6 +26,14 @@ func (f *fakeInteractionAPI) FollowupMessageCreate(_ *discordgo.Interaction, _ b
 	f.followups = append(f.followups, data)
 	if f.followupErr != nil {
 		return nil, f.followupErr
+	}
+	return &discordgo.Message{ID: "msg-1"}, nil
+}
+
+func (f *fakeInteractionAPI) InteractionResponseEdit(_ *discordgo.Interaction, data *discordgo.WebhookEdit, _ ...discordgo.RequestOption) (*discordgo.Message, error) {
+	f.edits = append(f.edits, data)
+	if f.editErr != nil {
+		return nil, f.editErr
 	}
 	return &discordgo.Message{ID: "msg-1"}, nil
 }

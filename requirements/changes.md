@@ -146,4 +146,17 @@ New: /model เปิด modal เดียวจบ 5 components พอดี�
 Reason: Discord API ไม่อนุญาตให้เปิด modal เพื่อตอบ modal submit ("Modals can not be sent when responding to a modal") ทำให้ submit ขั้นที่ 1 ถูกปฏิเสธทุกครั้ง; นอกจากนี้ gateway กลืน error ของ handler เงียบจน ai.log ไม่มีร่องรอย ทำให้วินิจฉัยไม่ได้
 Impact: transport/discord/model_settings.go (modal เดียว + smart model resolution + submit ใหม่), model_settings_test.go, gateway.go (log handler errors); ไม่แตะ cmd/ai wiring, sdk core, canonical contract
 Validation: modal มีครบ 5 fields พร้อม preselect ค่าเดิม; model รับ exact ID และ unique substring, ปฏิเสธชื่อกำกวมพร้อมรายชื่อ และชื่อที่ไม่มีพร้อม error ชัดเจน; key ว่างคง index เดิม; handler error ต้องปรากฏใน log; offline tests เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: superseded by CHANGE-011
+
+CHANGE-011
+
+Date: 2026-09-15
+Type: revise
+Request: เปลี่ยน /model เป็นข้อความปกติ ใช้ select menu ทั้งหมด และอัพเดทข้อความเดิมแทนการส่งใหม่ซ้ำ ๆ
+Conflict: CHANGE-010 (ยกเลิก modal เดี่ยว; catalogue ขนาดใหญ่พิมพ์ชื่อ model เองไม่สะดวก)
+Previous: CHANGE-010 /model เปิด modal เดี่ยว (provider select, model text, temperature, thinking, API pool text) แล้ว defer + followup สรุป
+New: /model ตอบ ephemeral message ที่มี provider select → ทุกขั้นถัดไปใช้ deferred-update + แก้ไขข้อความเดิม (provider → model พร้อมปุ่ม pager Prev/Next → temperature presets → thinking → API pool → สรุป) พร้อมปุ่ม Back ย้อนขั้น; settings ทั้งหมด apply ครั้งเดียวตอนยืนยันขั้นสุดท้าย; pending state เก็บ process-local keyed ด้วย channel+user
+Reason: เลือก model จากรายการดีกว่าพิมพ์ชื่อเองเมื่อ catalogue มีหลายร้อย models; ข้อความเดียวที่อัพเดทตลอดลด spam และเห็นสถานะปัจจุบันเสมอ; deferred-update + edit-original เลี่ยง 3s timeout ทุกขั้นโดยไม่มี loading state ค้าง
+Impact: transport/discord/model_settings.go (wizard + pending store + render/step functions), model_settings_test.go, interactions.go (เพิ่ม InteractionResponseEdit ใน interface); ไม่แตะ gateway dispatch, cmd/ai wiring, sdk core, canonical contract
+Validation: ทุกขั้นต้อง defer-update ก่อนงานแล้ว edit ข้อความเดิม (ไม่มีข้อความใหม่); pager ครอบคลุม catalogue >125; Back ย้อนขั้นได้; pending หมดอายุ/ข้ามช่องต้อง error ชัดเจน; apply ครั้งเดียวครบทุก field; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted

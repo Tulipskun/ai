@@ -10,6 +10,7 @@ import (
 type interactionAPI interface {
 	InteractionRespond(interaction *discordgo.Interaction, resp *discordgo.InteractionResponse, options ...discordgo.RequestOption) error
 	FollowupMessageCreate(interaction *discordgo.Interaction, wait bool, data *discordgo.WebhookParams, options ...discordgo.RequestOption) (*discordgo.Message, error)
+	InteractionResponseEdit(interaction *discordgo.Interaction, newresp *discordgo.WebhookEdit, options ...discordgo.RequestOption) (*discordgo.Message, error)
 }
 
 // deferEphemeralResponse acknowledges an interaction within Discord's
@@ -41,6 +42,25 @@ func followupEphemeralComponents(s interactionAPI, i *discordgo.InteractionCreat
 		Content:    content,
 		Components: components,
 		Flags:      discordgo.MessageFlagsEphemeral,
+	})
+	return err
+}
+
+// deferMessageUpdate acknowledges a message-component interaction instantly
+// without a loading state, so the handler can work past the 3-second window
+// and then rewrite the same message (REQ-024).
+func deferMessageUpdate(s interactionAPI, i *discordgo.InteractionCreate) error {
+	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredMessageUpdate,
+	})
+}
+
+// editOriginalMessage replaces the content and components of the deferred
+// message, keeping one message updated instead of sending new ones.
+func editOriginalMessage(s interactionAPI, i *discordgo.InteractionCreate, content string, components []discordgo.MessageComponent) error {
+	_, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+		Content:    &content,
+		Components: &components,
 	})
 	return err
 }

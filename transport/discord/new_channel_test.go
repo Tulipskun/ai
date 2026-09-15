@@ -55,6 +55,10 @@ func (f *fakeNewChannelDiscord) FollowupMessageCreate(_ *discordgo.Interaction, 
 	return &discordgo.Message{ID: "msg-1"}, nil
 }
 
+func (f *fakeNewChannelDiscord) InteractionResponseEdit(_ *discordgo.Interaction, _ *discordgo.WebhookEdit, _ ...discordgo.RequestOption) (*discordgo.Message, error) {
+	return &discordgo.Message{ID: "msg-1"}, nil
+}
+
 func (f *fakeNewChannelDiscord) ChannelMessageSend(channelID, content string, _ ...discordgo.RequestOption) (*discordgo.Message, error) {
 	f.sentTo, f.sentText = channelID, content
 	if f.sendErr != nil {

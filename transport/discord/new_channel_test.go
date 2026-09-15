@@ -86,6 +86,9 @@ func newChannelTestSessions(t *testing.T) (source, target *sdk.Session, resolve 
 	if err := source.SetKeyIndex(1); err != nil {
 		t.Fatal(err)
 	}
+	if err := source.SetAgentMode(sdk.AgentModeSub); err != nil {
+		t.Fatal(err)
+	}
 	target = sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:chan-new"}, keys)
 	sessions := map[string]*sdk.Session{"discord:channel:src": source, "discord:channel:chan-new": target}
 	return source, target, func(_ context.Context, input sdk.Input) (*sdk.Session, error) {
@@ -147,7 +150,7 @@ func TestNewChannelClonesSettingsAndReports(t *testing.T) {
 		t.Fatalf("outcome must use followup, not a direct response: %v", fake.ephemerals)
 	}
 	got := target.Config()
-	if got.Provider != "B.ai" || got.Model != "qwen3.8-flash" || got.ThinkingLevel != sdk.ThinkingMedium || got.KeyIndex != 1 {
+	if got.Provider != "B.ai" || got.Model != "qwen3.8-flash" || got.ThinkingLevel != sdk.ThinkingMedium || got.KeyIndex != 1 || got.AgentMode != sdk.AgentModeSub {
 		t.Fatalf("settings not cloned: %+v", got)
 	}
 	if got.Temperature == nil || *got.Temperature != 0.7 {

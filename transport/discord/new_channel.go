@@ -115,6 +115,9 @@ func (h *NewChannelHandler) applySettings(ctx context.Context, targetSessionID s
 	if err := target.SetKeyIndex(config.KeyIndex); err != nil {
 		return sdk.SessionConfig{}, err
 	}
+	if err := target.SetAgentMode(panelAgentMode(config)); err != nil {
+		return sdk.SessionConfig{}, err
+	}
 	return target.Config(), nil
 }
 

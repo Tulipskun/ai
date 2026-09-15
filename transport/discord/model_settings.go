@@ -11,59 +11,60 @@ import (
 	"github.com/Tulipskun/ai/sdk"
 )
 
-// Custom IDs for the /model message wizard. Every step rewrites the same
-// regular channel message (ephemeral messages cannot be edited), so IDs stay
-// short: multi-step state lives in the process-local pending store keyed by
-// channel and user, not in custom IDs (CHANGE-011).
+// Custom IDs for the /model control panel. One regular channel message holds
+// every control, so IDs stay short: option paging state lives in the
+// process-local page store keyed by channel and user, not in custom IDs
+// (CHANGE-012, REQ-028).
 const (
-	modelWizardProvider = "model:provider"
-	modelWizardModel    = "model:model"
-	modelWizardPagePrev = "model:page:prev"
-	modelWizardPageNext = "model:page:next"
-	modelWizardTemp     = "model:temp"
-	modelWizardThinking = "model:thinking"
-	modelWizardKey      = "model:key"
-	modelWizardBack     = "model:back"
+	modelPanelAgentMain = "model:agent:main"
+	modelPanelAgentSub  = "model:agent:sub"
+	modelPanelProvider  = "model:provider"
+	modelPanelModel     = "model:model"
+	modelPanelThinking  = "model:thinking"
+	modelPanelTemp      = "model:temp"
+	modelPanelKey       = "model:key"
 )
 
 const (
-	// modelWizardMenus caps the model select menus on one wizard page. Five
-	// action rows fit in a message; the pager row takes one when present.
-	modelWizardMenus = 5
-	// modelMenuOptions caps the options of one select menu (Discord limit).
-	modelMenuOptions = 25
+	// panelPageItems is the option count of the first page when a select
+	// menu must paginate. Later pages hold one fewer item to leave room
+	// for the Previous option, so every page stays within the 25-option
+	// select limit.
+	panelPageItems = 24
+	// panelMenuOptions caps the options of one select menu (Discord limit).
+	panelMenuOptions = 25
 )
 
-// modelPageSize is the largest catalogue slice one wizard page can offer.
-const modelPageSize = modelWizardMenus * modelMenuOptions
-
-// modelTemperatures are the temperature presets offered by the wizard. A
-// select menu cannot take free text, so the full 0.0-2.0 range is covered by
-// representative stops plus the default.
-var modelTemperatures = []string{"default", "0.0", "0.3", "0.5", "0.7", "1.0", "1.5", "2.0"}
-
-type modelWizardStage int
-
+// panelNavNext and panelNavPrev are select option values for option-level
+// paging. They are matched before membership validation, so a real provider
+// or model ID never needs to avoid them — but an ID equal to a sentinel
+// would page instead of applying, hence the unlikely shape.
 const (
-	modelStageProvider modelWizardStage = iota
-	modelStageModel
-	modelStageTemp
-	modelStageThinking
-	modelStageKey
+	panelNavNext = "__panel_next__"
+	panelNavPrev = "__panel_prev__"
 )
 
-// modelWizard accumulates one invoker's choices until the final step applies
-// them all at once. Process-local storage matches the orchestration
-// reservation pattern (REQ-021): a restart simply asks the user to rerun
-// /model.
-type modelWizard struct {
-	stage       modelWizardStage
-	provider    sdk.ProviderID
-	model       string
-	temperature string
-	thinking    string
-	key         string
-	page        int
+// panelThinkingCycle is the order the Thinking button walks through. The
+// first entry is the cleared (default) state.
+var panelThinkingCycle = []string{"default", string(sdk.ThinkingNone), string(sdk.ThinkingLow), string(sdk.ThinkingMedium), string(sdk.ThinkingHigh)}
+
+// panelTemperatures are the temperature stops the Temp button walks through:
+// default plus 0.0-2.0 in 0.1 steps (22 states, one select-safe cycle).
+func panelTemperatures() []string {
+	values := make([]string, 0, 22)
+	values = append(values, "default")
+	for tenth := 0; tenth <= 20; tenth++ {
+		values = append(values, strconv.FormatFloat(float64(tenth)/10, 'f', 1, 64))
+	}
+	return values
+}
+
+// modelPanelPages tracks option paging per invoker. Everything else renders
+// from the live session config, because every control applies immediately
+// and there is no staged state to keep.
+type modelPanelPages struct {
+	provider int
+	model    int
 }
 
 type ModelSettingsHandler struct {
@@ -73,8 +74,8 @@ type ModelSettingsHandler struct {
 	ProviderKeys      map[sdk.ProviderID]*sdk.KeyPool
 	Models            func(context.Context, sdk.ProviderID) ([]sdk.Model, error)
 
-	mu      sync.Mutex
-	pending map[string]*modelWizard
+	mu    sync.Mutex
+	pages map[string]*modelPanelPages
 }
 
 func (h *ModelSettingsHandler) sessionIDFor(channelID string) string {
@@ -87,9 +88,8 @@ func (h *ModelSettingsHandler) sessionIDFor(channelID string) string {
 	return "discord:channel:" + channelID
 }
 
-// wizardKey scopes pending state to the invoking user in the invoking
-// channel, so two users configuring side by side never share a wizard.
-func wizardKey(channelID, userID string) string {
+// panelKey scopes paging state to the invoking user in the invoking channel.
+func panelKey(channelID, userID string) string {
 	return strings.TrimSpace(channelID) + "\x00" + strings.TrimSpace(userID)
 }
 
@@ -106,31 +106,22 @@ func interactionUserID(i *discordgo.InteractionCreate) string {
 	return ""
 }
 
-func (h *ModelSettingsHandler) startWizard(channelID, userID string) *modelWizard {
-	wizard := &modelWizard{stage: modelStageProvider, temperature: "default", thinking: "default", key: "1"}
-	h.mu.Lock()
-	if h.pending == nil {
-		h.pending = make(map[string]*modelWizard)
-	}
-	h.pending[wizardKey(channelID, userID)] = wizard
-	h.mu.Unlock()
-	return wizard
-}
-
-func (h *ModelSettingsHandler) wizardFor(channelID, userID string) (*modelWizard, bool) {
+func (h *ModelSettingsHandler) panelPagesFor(channelID, userID string) *modelPanelPages {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	wizard, ok := h.pending[wizardKey(channelID, userID)]
-	return wizard, ok
+	if h.pages == nil {
+		h.pages = make(map[string]*modelPanelPages)
+	}
+	key := panelKey(channelID, userID)
+	pages, ok := h.pages[key]
+	if !ok {
+		pages = &modelPanelPages{}
+		h.pages[key] = pages
+	}
+	return pages
 }
 
-func (h *ModelSettingsHandler) dropWizard(channelID, userID string) {
-	h.mu.Lock()
-	delete(h.pending, wizardKey(channelID, userID))
-	h.mu.Unlock()
-}
-
-func (h *ModelSettingsHandler) Handle(s *discordgo.Session, i *discordgo.InteractionCreate) error {
+func (h *ModelSettingsHandler) Handle(s interactionAPI, i *discordgo.InteractionCreate) error {
 	if h == nil || i == nil {
 		return nil
 	}
@@ -138,376 +129,95 @@ func (h *ModelSettingsHandler) Handle(s *discordgo.Session, i *discordgo.Interac
 		if i.ApplicationCommandData().Name != "model" {
 			return nil
 		}
-		return h.openWizard(s, i)
+		return h.openPanel(s, i)
 	}
 	if i.Type != discordgo.InteractionMessageComponent {
 		return nil
 	}
-	customID := i.MessageComponentData().CustomID
-	switch customID {
-	case modelWizardProvider, modelWizardPagePrev, modelWizardPageNext,
-		modelWizardTemp, modelWizardThinking, modelWizardKey, modelWizardBack:
-		return h.stepWizard(s, i)
+	switch i.MessageComponentData().CustomID {
+	case modelPanelAgentMain, modelPanelAgentSub, modelPanelProvider,
+		modelPanelModel, modelPanelThinking, modelPanelTemp, modelPanelKey:
+		return h.stepPanel(s, i)
 	default:
-		if isModelMenuID(customID) {
-			return h.stepWizard(s, i)
+		if strings.HasPrefix(i.MessageComponentData().CustomID, "model:") {
+			return h.respondError(s, i, "this panel is stale; run /model again")
 		}
 		return nil
 	}
 }
 
-func (h *ModelSettingsHandler) openWizard(s interactionAPI, i *discordgo.InteractionCreate) error {
+// openPanel answers /model with one regular channel message holding every
+// control. The catalogue read can exceed the 3s interaction budget, so the
+// command defers (non-ephemeral) and edits the same message: the channel
+// still ends up with exactly one panel message (REQ-024, REQ-028).
+func (h *ModelSettingsHandler) openPanel(s interactionAPI, i *discordgo.InteractionCreate) error {
 	if len(h.Providers) == 0 {
 		return h.respondError(s, i, "no providers are configured")
 	}
-	h.startWizard(i.ChannelID, interactionUserID(i))
-	content, components := providerMenuMessage(h.Providers)
-	// A regular channel message (not ephemeral): ephemeral messages cannot
-	// be edited, and the whole wizard works by editing this message in place.
-	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Content: content, Components: components},
-	})
-}
-
-// providerMenuMessage renders the first wizard step. Provider selection needs
-// no session or catalogue reads, so the opening response stays immediate.
-func providerMenuMessage(providers []sdk.ProviderID) (string, []discordgo.MessageComponent) {
-	minValues := 1
-	return "Select a provider:", []discordgo.MessageComponent{discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-		discordgo.SelectMenu{CustomID: modelWizardProvider, MenuType: discordgo.StringSelectMenu, Placeholder: "Select provider", Options: makeProviderOptions(providers, ""), MinValues: &minValues, MaxValues: 1},
-	}}}
-}
-
-// modelPageMessage renders one catalogue page: up to five model menus plus a
-// pager row when the catalogue spans several pages. The current session model
-// is preselected.
-func modelPageMessage(provider sdk.ProviderID, models []sdk.Model, page int, current string) (string, []discordgo.MessageComponent) {
-	pages := modelPages(len(models))
-	if page < 0 {
-		page = 0
-	}
-	if page >= pages {
-		page = pages - 1
-	}
-	start := page * modelPageSize
-	end := start + modelPageSize
-	if end > len(models) {
-		end = len(models)
-	}
-	groups := makeModelOptionGroups(models[start:end], current)
-	components := make([]discordgo.MessageComponent, 0, len(groups)+1)
-	for index, options := range groups {
-		label := "Model"
-		if len(groups) > 1 {
-			label = fmt.Sprintf("Models %d-%d", start+index*modelMenuOptions+1, start+index*modelMenuOptions+len(options))
-		}
-		components = append(components, discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.SelectMenu{CustomID: modelMenuID(index), MenuType: discordgo.StringSelectMenu, Placeholder: label, Options: options, MinValues: intPtr(1), MaxValues: 1},
-		}})
-	}
-	content := fmt.Sprintf("Select a model for `%s`:", provider)
-	if pages > 1 {
-		content = fmt.Sprintf("Select a model for `%s` (page %d of %d):", provider, page+1, pages)
-		components = append(components, discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.Button{CustomID: modelWizardPagePrev, Style: discordgo.SecondaryButton, Label: "◀ Prev"},
-			discordgo.Button{CustomID: modelWizardPageNext, Style: discordgo.SecondaryButton, Label: "Next ▶"},
-			discordgo.Button{CustomID: modelWizardBack, Style: discordgo.SecondaryButton, Label: "‹ Providers"},
-		}})
-	} else {
-		components = append(components, discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.Button{CustomID: modelWizardBack, Style: discordgo.SecondaryButton, Label: "‹ Providers"},
-		}})
-	}
-	return content, components
-}
-
-// modelMenuID gives each model menu on a catalogue page its own custom ID.
-// Discord rejects a message whose components share a custom ID, so a page
-// with several menus cannot reuse one ID for all of them.
-func modelMenuID(index int) string {
-	return fmt.Sprintf("%s:%d", modelWizardModel, index+1)
-}
-
-// isModelMenuID reports whether customID belongs to one of the model menus.
-func isModelMenuID(customID string) bool {
-	return strings.HasPrefix(customID, modelWizardModel+":")
-}
-
-// modelPages counts the wizard pages for a catalogue of size n.
-func modelPages(n int) int {
-	if n <= 0 {
-		return 1
-	}
-	return (n + modelPageSize - 1) / modelPageSize
-}
-
-// selectMenuMessage renders a single-question wizard step with a Back button.
-func selectMenuMessage(content, customID, placeholder, current string, options []discordgo.SelectMenuOption) (string, []discordgo.MessageComponent) {
-	minValues := 1
-	return content, []discordgo.MessageComponent{discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-		discordgo.SelectMenu{CustomID: customID, MenuType: discordgo.StringSelectMenu, Placeholder: placeholder, Options: options, MinValues: &minValues, MaxValues: 1},
-	}}, discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-		discordgo.Button{CustomID: modelWizardBack, Style: discordgo.SecondaryButton, Label: "‹ Back"},
-	}}}
-}
-
-func temperatureMenuMessage(current string) (string, []discordgo.MessageComponent) {
-	if current == "" {
-		current = "default"
-	}
-	options := make([]discordgo.SelectMenuOption, 0, len(modelTemperatures))
-	for _, value := range modelTemperatures {
-		label := value
-		if value == "default" {
-			label = "Default"
-		}
-		options = append(options, discordgo.SelectMenuOption{Label: label, Value: value, Default: value == current})
-	}
-	return selectMenuMessage("Select a temperature:", modelWizardTemp, "Select temperature", current, options)
-}
-
-func thinkingMenuMessage(current string) (string, []discordgo.MessageComponent) {
-	return selectMenuMessage("Select a thinking level:", modelWizardThinking, "Select thinking level", current, makeThinkingOptions(current))
-}
-
-func keyMenuMessage(count int, current string) (string, []discordgo.MessageComponent) {
-	if count < 1 {
-		count = 1
-	}
-	if count > 25 {
-		count = 25
-	}
-	options := make([]discordgo.SelectMenuOption, 0, count)
-	for index := 1; index <= count; index++ {
-		value := strconv.Itoa(index)
-		options = append(options, discordgo.SelectMenuOption{Label: "Pool " + value, Value: value, Default: value == current})
-	}
-	return selectMenuMessage("Select an API key pool:", modelWizardKey, "Select API key pool", current, options)
-}
-
-// wizardErrorMessage re-renders the failure inside the same message with a
-// Back button, so one mis-tap never strands the user.
-func wizardErrorMessage(message string) (string, []discordgo.MessageComponent) {
-	return message, []discordgo.MessageComponent{discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-		discordgo.Button{CustomID: modelWizardBack, Style: discordgo.SecondaryButton, Label: "‹ Back"},
-	}}}
-}
-
-// stepWizard serves every wizard component interaction behind a deferred
-// message update, then rewrites the same channel message (REQ-024).
-func (h *ModelSettingsHandler) stepWizard(s interactionAPI, i *discordgo.InteractionCreate) error {
-	data := i.MessageComponentData()
-	userID := interactionUserID(i)
-	if userID == "" {
-		return h.respondError(s, i, "could not tell who invoked the menu")
-	}
-	wizard, ok := h.wizardFor(i.ChannelID, userID)
-	if !ok {
-		return h.respondError(s, i, "this setup expired; run /model again")
-	}
-	if err := deferMessageUpdate(s, i); err != nil {
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	}); err != nil {
 		return err
 	}
-	content, components, done, err := h.advance(i, wizard, data)
+	pages := h.panelPagesFor(i.ChannelID, interactionUserID(i))
+	pages.provider, pages.model = 0, 0
+	content, components, err := h.renderPanel(i, pages, "")
 	if err != nil {
-		content, components = wizardErrorMessage("Model settings error: " + err.Error())
-		return editOriginalMessage(s, i, content, components)
-	}
-	if done {
-		h.dropWizard(i.ChannelID, userID)
+		return editOriginalMessage(s, i, "Model settings error: "+err.Error(), nil)
 	}
 	return editOriginalMessage(s, i, content, components)
 }
 
-// advance applies one wizard interaction and renders the next step. It
-// returns done=true when the settings were applied and the content is the
-// final summary.
-func (h *ModelSettingsHandler) advance(i *discordgo.InteractionCreate, wizard *modelWizard, data discordgo.MessageComponentInteractionData) (string, []discordgo.MessageComponent, bool, error) {
+// stepPanel serves every panel control behind a deferred message update,
+// applies the pick immediately, then rewrites the same message (REQ-024).
+func (h *ModelSettingsHandler) stepPanel(s interactionAPI, i *discordgo.InteractionCreate) error {
+	data := i.MessageComponentData()
+	userID := interactionUserID(i)
+	if userID == "" {
+		return h.respondError(s, i, "could not tell who invoked the panel")
+	}
+	if err := deferMessageUpdate(s, i); err != nil {
+		return err
+	}
+	pages := h.panelPagesFor(i.ChannelID, userID)
+	content, components, err := h.applyPick(i, pages, data)
+	if err != nil {
+		// Re-render the current panel with the failure inline: the channel
+		// keeps one message and the next successful pick clears the notice.
+		content, components, _ = h.renderPanel(i, pages, err.Error())
+	}
+	return editOriginalMessage(s, i, content, components)
+}
+
+// applyPick applies one control interaction and renders the panel again.
+func (h *ModelSettingsHandler) applyPick(i *discordgo.InteractionCreate, pages *modelPanelPages, data discordgo.MessageComponentInteractionData) (string, []discordgo.MessageComponent, error) {
 	choice := ""
 	if len(data.Values) > 0 {
 		choice = strings.TrimSpace(data.Values[0])
 	}
+	var err error
 	switch data.CustomID {
-	case modelWizardProvider:
-		return h.pickProvider(i, wizard, choice)
-	case modelWizardPagePrev:
-		wizard.page--
-		return h.renderModelPage(i, wizard)
-	case modelWizardPageNext:
-		wizard.page++
-		return h.renderModelPage(i, wizard)
-	case modelWizardTemp:
-		return h.pickTemperature(wizard, choice)
-	case modelWizardThinking:
-		return h.pickThinking(wizard, choice)
-	case modelWizardKey:
-		return h.pickKey(i, wizard, choice)
-	case modelWizardBack:
-		return h.goBack(i, wizard)
+	case modelPanelAgentMain:
+		err = h.pickAgentMode(i, sdk.AgentModeMain)
+	case modelPanelAgentSub:
+		err = h.pickAgentMode(i, sdk.AgentModeSub)
+	case modelPanelProvider:
+		err = h.pickProvider(i, pages, choice)
+	case modelPanelModel:
+		err = h.pickModel(i, pages, choice)
+	case modelPanelThinking:
+		err = h.cycleThinking(i)
+	case modelPanelTemp:
+		err = h.cycleTemperature(i)
+	case modelPanelKey:
+		err = h.pickKey(i, choice)
 	default:
-		if isModelMenuID(data.CustomID) {
-			return h.pickModel(i, wizard, choice)
-		}
-		return "", nil, false, fmt.Errorf("unknown menu")
+		err = fmt.Errorf("unknown control")
 	}
-}
-
-func (h *ModelSettingsHandler) pickProvider(i *discordgo.InteractionCreate, wizard *modelWizard, choice string) (string, []discordgo.MessageComponent, bool, error) {
-	provider := sdk.ProviderID(choice)
-	if provider == "" {
-		return "", nil, false, fmt.Errorf("provider is required")
-	}
-	if !h.hasProvider(provider) {
-		return "", nil, false, fmt.Errorf("unknown provider %q", provider)
-	}
-	if h.ProviderKeys[provider] == nil {
-		return "", nil, false, fmt.Errorf("provider %q has no API key pool", provider)
-	}
-	wizard.provider = provider
-	wizard.model = ""
-	wizard.page = 0
-	wizard.stage = modelStageModel
-	return h.renderModelPage(i, wizard)
-}
-
-func (h *ModelSettingsHandler) renderModelPage(i *discordgo.InteractionCreate, wizard *modelWizard) (string, []discordgo.MessageComponent, bool, error) {
-	if h.Models == nil {
-		return "", nil, false, fmt.Errorf("model catalogue loader is not configured")
-	}
-	models, err := h.Models(context.Background(), wizard.provider)
 	if err != nil {
-		return "", nil, false, err
+		return "", nil, err
 	}
-	if len(models) == 0 {
-		return "", nil, false, fmt.Errorf("provider %q has no models", wizard.provider)
-	}
-	current := ""
-	if session, err := h.resolve(i); err == nil {
-		current = session.Config().Model
-	}
-	content, components := modelPageMessage(wizard.provider, models, wizard.page, current)
-	return content, components, false, nil
-}
-
-func (h *ModelSettingsHandler) pickModel(i *discordgo.InteractionCreate, wizard *modelWizard, choice string) (string, []discordgo.MessageComponent, bool, error) {
-	if choice == "" {
-		return "", nil, false, fmt.Errorf("model is required")
-	}
-	if h.Models == nil {
-		return "", nil, false, fmt.Errorf("model catalogue loader is not configured")
-	}
-	models, err := h.Models(context.Background(), wizard.provider)
-	if err != nil {
-		return "", nil, false, err
-	}
-	if !modelInCatalog(models, choice) {
-		return "", nil, false, fmt.Errorf("model %q is not available for provider %q", choice, wizard.provider)
-	}
-	wizard.model = choice
-	wizard.stage = modelStageTemp
-	current := wizard.temperature
-	if session, err := h.resolve(i); err == nil {
-		current = temperatureLabel(session.Config().Temperature)
-	}
-	content, components := temperatureMenuMessage(current)
-	return content, components, false, nil
-}
-
-func (h *ModelSettingsHandler) pickTemperature(wizard *modelWizard, choice string) (string, []discordgo.MessageComponent, bool, error) {
-	valid := false
-	for _, preset := range modelTemperatures {
-		if choice == preset {
-			valid = true
-			break
-		}
-	}
-	if !valid {
-		return "", nil, false, fmt.Errorf("temperature must be one of the offered presets")
-	}
-	wizard.temperature = choice
-	wizard.stage = modelStageThinking
-	content, components := thinkingMenuMessage(wizard.thinking)
-	return content, components, false, nil
-}
-
-func (h *ModelSettingsHandler) pickThinking(wizard *modelWizard, choice string) (string, []discordgo.MessageComponent, bool, error) {
-	choice = strings.ToLower(choice)
-	if choice != "default" && !validDiscordThinkingLevel(choice) {
-		return "", nil, false, fmt.Errorf("invalid thinking level %q", choice)
-	}
-	wizard.thinking = choice
-	wizard.stage = modelStageKey
-	count := 1
-	if keys := h.ProviderKeys[wizard.provider]; keys != nil && keys.Len() > 0 {
-		count = keys.Len()
-	}
-	content, components := keyMenuMessage(count, wizard.key)
-	return content, components, false, nil
-}
-
-func (h *ModelSettingsHandler) pickKey(i *discordgo.InteractionCreate, wizard *modelWizard, choice string) (string, []discordgo.MessageComponent, bool, error) {
-	index, err := strconv.Atoi(choice)
-	if err != nil || index < 1 {
-		return "", nil, false, fmt.Errorf("API Pool must be a positive number")
-	}
-	keys := h.ProviderKeys[wizard.provider]
-	if keys == nil {
-		return "", nil, false, fmt.Errorf("provider %q has no API key pool", wizard.provider)
-	}
-	if _, err := keys.At(index - 1); err != nil {
-		return "", nil, false, err
-	}
-	wizard.key = choice
-	session, err := h.resolve(i)
-	if err != nil {
-		return "", nil, false, err
-	}
-	values := map[string]string{"model": wizard.model, "temperature": wizard.temperature, "thinking": wizard.thinking, "key": wizard.key}
-	var models []sdk.Model
-	if h.Models != nil {
-		models, err = h.Models(context.Background(), wizard.provider)
-		if err != nil {
-			return "", nil, false, err
-		}
-	}
-	if err := applyModelSetup(session, keys, wizard.provider, values, models); err != nil {
-		return "", nil, false, err
-	}
-	return sessionSettingsSummary(session.Config()), nil, true, nil
-}
-
-// goBack returns the wizard one stage, re-rendering from the stored choices.
-func (h *ModelSettingsHandler) goBack(i *discordgo.InteractionCreate, wizard *modelWizard) (string, []discordgo.MessageComponent, bool, error) {
-	switch wizard.stage {
-	case modelStageModel:
-		wizard.stage = modelStageProvider
-		content, components := providerMenuMessage(h.Providers)
-		return content, components, false, nil
-	case modelStageTemp:
-		wizard.stage = modelStageModel
-		return h.renderModelPage(i, wizard)
-	case modelStageThinking:
-		wizard.stage = modelStageTemp
-		return h.renderTempPage(i, wizard)
-	case modelStageKey:
-		wizard.stage = modelStageThinking
-		content, components := thinkingMenuMessage(wizard.thinking)
-		return content, components, false, nil
-	default:
-		wizard.stage = modelStageProvider
-		content, components := providerMenuMessage(h.Providers)
-		return content, components, false, nil
-	}
-}
-
-func (h *ModelSettingsHandler) renderTempPage(i *discordgo.InteractionCreate, wizard *modelWizard) (string, []discordgo.MessageComponent, bool, error) {
-	current := wizard.temperature
-	if session, err := h.resolve(i); err == nil {
-		current = temperatureLabel(session.Config().Temperature)
-	}
-	content, components := temperatureMenuMessage(current)
-	return content, components, false, nil
+	return h.renderPanel(i, pages, "")
 }
 
 func (h *ModelSettingsHandler) resolve(i *discordgo.InteractionCreate) (*sdk.Session, error) {
@@ -517,90 +227,451 @@ func (h *ModelSettingsHandler) resolve(i *discordgo.InteractionCreate) (*sdk.Ses
 	return h.ResolveSession(context.Background(), sdk.Input{SessionID: h.sessionIDFor(i.ChannelID)})
 }
 
-// applyModelSetup validates one setup submission and applies it to the
-// session. A blank key field keeps the session's current pool index.
-func applyModelSetup(session *sdk.Session, keys *sdk.KeyPool, provider sdk.ProviderID, values map[string]string, models []sdk.Model) error {
-	if session == nil {
-		return fmt.Errorf("session manager is not configured")
+func (h *ModelSettingsHandler) pickAgentMode(i *discordgo.InteractionCreate, mode sdk.AgentMode) error {
+	session, err := h.resolve(i)
+	if err != nil {
+		return err
 	}
+	return session.SetAgentMode(mode)
+}
+
+func (h *ModelSettingsHandler) pickProvider(i *discordgo.InteractionCreate, pages *modelPanelPages, choice string) error {
+	switch choice {
+	case panelNavNext:
+		pages.provider++
+		return nil
+	case panelNavPrev:
+		if pages.provider > 0 {
+			pages.provider--
+		}
+		return nil
+	}
+	provider := sdk.ProviderID(choice)
+	if provider == "" {
+		return fmt.Errorf("provider is required")
+	}
+	if !h.hasProvider(provider) {
+		return fmt.Errorf("unknown provider %q", choice)
+	}
+	keys := h.ProviderKeys[provider]
 	if keys == nil {
 		return fmt.Errorf("provider %q has no API key pool", provider)
 	}
-	model := strings.TrimSpace(values["model"])
-	if model == "" {
-		return fmt.Errorf("model is required")
-	}
-	if !modelInCatalog(models, model) {
-		return fmt.Errorf("model %q is not available for provider %q", model, provider)
-	}
-	thinking := strings.TrimSpace(strings.ToLower(values["thinking"]))
-	temperatureText := strings.TrimSpace(values["temperature"])
-	keyText := strings.TrimSpace(values["key"])
-	var temperature *float64
-	if temperatureText != "" && temperatureText != "default" {
-		value, parseErr := strconv.ParseFloat(temperatureText, 64)
-		if parseErr != nil || value < 0 || value > 2 {
-			return fmt.Errorf("temperature must be a number from 0.0 to 2.0")
-		}
-		temperature = &value
-	}
-	if thinking != "" && thinking != "default" && !validDiscordThinkingLevel(thinking) {
-		return fmt.Errorf("invalid thinking level %q", thinking)
-	}
-	keyIndex := session.Config().KeyIndex
-	if keyText != "" {
-		parsed, parseErr := strconv.Atoi(keyText)
-		if parseErr != nil || parsed < 1 {
-			return fmt.Errorf("API Pool must be a positive number")
-		}
-		keyIndex = parsed - 1
-	}
-	if _, err := keys.At(keyIndex); err != nil {
+	session, err := h.resolve(i)
+	if err != nil {
 		return err
 	}
+	previousModel := session.Config().Model
+	// SetProvider clears the model and key index; restore a valid model so
+	// the session keeps working after every provider switch (REQ-028).
 	if err := session.SetProvider(provider, keys); err != nil {
 		return err
+	}
+	models, err := h.loadModels(provider)
+	if err != nil {
+		return err
+	}
+	model := previousModel
+	if !modelInCatalog(models, model) {
+		model = ""
+		if len(models) > 0 {
+			model = models[0].ID
+		}
+	}
+	if model == "" {
+		return fmt.Errorf("provider %q has no models", provider)
 	}
 	if err := session.SetModel(model); err != nil {
 		return err
 	}
-	if temperature == nil {
-		if err := session.ClearTemperature(); err != nil {
-			return err
-		}
-	} else if err := session.SetTemperature(*temperature); err != nil {
-		return err
-	}
-	if thinking == "" || thinking == "default" {
-		if err := session.ClearThinkingLevel(); err != nil {
-			return err
-		}
-	} else if err := session.SetThinkingLevel(sdk.ThinkingLevel(thinking)); err != nil {
-		return err
-	}
-	if err := session.SetKeyIndex(keyIndex); err != nil {
-		return err
-	}
+	pages.model = modelPageFor(models, model)
 	return nil
 }
 
-func modalValues(i *discordgo.InteractionCreate) map[string]string { values:=make(map[string]string,6);for _,component:=range i.ModalSubmitData().Components{label,ok:=component.(*discordgo.Label);if !ok{if valueLabel,valueOK:=component.(discordgo.Label);valueOK{label=&valueLabel}else{continue}};switch child:=label.Component.(type){case *discordgo.SelectMenu:if len(child.Values)>0{values[child.CustomID]=child.Values[0]};case discordgo.SelectMenu:if len(child.Values)>0{values[child.CustomID]=child.Values[0]};case *discordgo.TextInput:values[child.CustomID]=child.Value;case discordgo.TextInput:values[child.CustomID]=child.Value}};return values }
-func modalSelectValues(i *discordgo.InteractionCreate) map[string]string{return modalValues(i)}
-func normalizeTemperatureInput(value string) string {value=strings.TrimSpace(value);if value=="default"{return ""};return value}
-func validDiscordThinkingLevel(level string) bool {switch sdk.ThinkingLevel(level){case sdk.ThinkingNone,sdk.ThinkingLow,sdk.ThinkingMedium,sdk.ThinkingHigh:return true;default:return false}}
-func modelInCatalog(models []sdk.Model, model string) bool {for _,candidate:=range models{if candidate.ID==model{return true}};return false}
-func(h *ModelSettingsHandler)hasProvider(provider sdk.ProviderID)bool{for _,candidate:=range h.Providers{if candidate==provider{return true}};return false}
-func(h *ModelSettingsHandler)summary(session *sdk.Session)string{return sessionSettingsSummary(session.Config())}
+func (h *ModelSettingsHandler) pickModel(i *discordgo.InteractionCreate, pages *modelPanelPages, choice string) error {
+	switch choice {
+	case panelNavNext:
+		pages.model++
+		return nil
+	case panelNavPrev:
+		if pages.model > 0 {
+			pages.model--
+		}
+		return nil
+	}
+	if choice == "" {
+		return fmt.Errorf("model is required")
+	}
+	session, err := h.resolve(i)
+	if err != nil {
+		return err
+	}
+	models, err := h.loadModels(session.Config().Provider)
+	if err != nil {
+		return err
+	}
+	if !modelInCatalog(models, choice) {
+		return fmt.Errorf("model %q is not available for provider %q", choice, session.Config().Provider)
+	}
+	return session.SetModel(choice)
+}
 
-// sessionSettingsSummary renders the settings report shared by the /model flow
-// and the /new channel summary, so both surfaces always describe the same
-// fields (REQ-027).
-func sessionSettingsSummary(config sdk.SessionConfig)string{thinking:=string(config.ThinkingLevel);if thinking==""{thinking="default"};model:=config.Model;if model==""{model="not set"};return fmt.Sprintf("**Session Model Settings**\nProvider: `%s`\nModel: `%s`\nThinking: `%s`\nTemperature: `%s`\nAPI Pool: `%d`",config.Provider,model,thinking,temperatureLabel(config.Temperature),config.KeyIndex+1)}
-func temperatureLabel(value *float64)string{if value==nil{return "default"};return strconv.FormatFloat(*value,'f',1,64)}
-func boolPtr(value bool)*bool{return &value};func intPtr(value int)*int{return &value}
-func makeProviderOptions(providers []sdk.ProviderID, current string) []discordgo.SelectMenuOption { options:=make([]discordgo.SelectMenuOption,0,min(len(providers),25));for _,provider:=range providers{value:=string(provider);if value==""||len(options)>=25{continue};options=append(options,discordgo.SelectMenuOption{Label:value,Value:value,Default:value==current})};return options }
-func makeModelOptionGroups(models []sdk.Model, current string) [][]discordgo.SelectMenuOption { all:=make([]discordgo.SelectMenuOption,0,len(models));for _,model:=range models{if model.ID==""{continue};all=append(all,discordgo.SelectMenuOption{Label:model.ID,Value:model.ID,Default:model.ID==current})};groups:=make([][]discordgo.SelectMenuOption,0,(len(all)+24)/25);for start:=0;start<len(all);start+=25{end:=start+25;if end>len(all){end=len(all)};group:=make([]discordgo.SelectMenuOption,end-start);copy(group,all[start:end]);groups=append(groups,group)};return groups }
-func makeTemperatureOptions(current string) []discordgo.SelectMenuOption { return []discordgo.SelectMenuOption{{Label:current,Value:current,Default:true}} }
-func makeThinkingOptions(current string) []discordgo.SelectMenuOption {values:=[]string{"default",string(sdk.ThinkingNone),string(sdk.ThinkingLow),string(sdk.ThinkingMedium),string(sdk.ThinkingHigh)};options:=make([]discordgo.SelectMenuOption,0,len(values));for _,value:=range values{label:=value;if value=="default"{label="Default"};options=append(options,discordgo.SelectMenuOption{Label:label,Value:value,Default:value==current||(current==""&&value=="default")})};return options }
-func makeKeyOptions(count int,current string) []discordgo.SelectMenuOption {if count<1{count=1};if count>25{count=25};currentIndex,_:=strconv.Atoi(current);options:=make([]discordgo.SelectMenuOption,0,count);for index:=1;index<=count;index++{value:=strconv.Itoa(index);options=append(options,discordgo.SelectMenuOption{Label:"Pool "+value,Value:value,Default:index==currentIndex})};if currentIndex<1||currentIndex>count{options[0].Default=true};return options }
-func(h *ModelSettingsHandler)respondError(s interactionAPI,i *discordgo.InteractionCreate,message string)error{data:=&discordgo.InteractionResponseData{Content:"Model settings error: "+message,Flags:discordgo.MessageFlagsEphemeral};return s.InteractionRespond(i.Interaction,&discordgo.InteractionResponse{Type:discordgo.InteractionResponseChannelMessageWithSource,Data:data})}
+// cycleThinking advances the session thinking level to the next stop and
+// wraps around to default.
+func (h *ModelSettingsHandler) cycleThinking(i *discordgo.InteractionCreate) error {
+	session, err := h.resolve(i)
+	if err != nil {
+		return err
+	}
+	current := string(session.Config().ThinkingLevel)
+	if current == "" {
+		current = "default"
+	}
+	next := panelThinkingCycle[0]
+	for index, stop := range panelThinkingCycle {
+		if stop == current {
+			next = panelThinkingCycle[(index+1)%len(panelThinkingCycle)]
+			break
+		}
+	}
+	if next == "default" {
+		return session.ClearThinkingLevel()
+	}
+	return session.SetThinkingLevel(sdk.ThinkingLevel(next))
+}
+
+// cycleTemperature advances the session temperature to the next stop
+// (default, then 0.0-2.0 in 0.1 steps) and wraps around to default.
+func (h *ModelSettingsHandler) cycleTemperature(i *discordgo.InteractionCreate) error {
+	session, err := h.resolve(i)
+	if err != nil {
+		return err
+	}
+	current := temperatureLabel(session.Config().Temperature)
+	stops := panelTemperatures()
+	next := stops[0]
+	for index, stop := range stops {
+		if stop == current {
+			next = stops[(index+1)%len(stops)]
+			break
+		}
+	}
+	if next == "default" {
+		return session.ClearTemperature()
+	}
+	value, err := strconv.ParseFloat(next, 64)
+	if err != nil {
+		return err
+	}
+	return session.SetTemperature(value)
+}
+
+func (h *ModelSettingsHandler) pickKey(i *discordgo.InteractionCreate, choice string) error {
+	index, err := strconv.Atoi(choice)
+	if err != nil || index < 1 {
+		return fmt.Errorf("API Pool must be a positive number")
+	}
+	session, err := h.resolve(i)
+	if err != nil {
+		return err
+	}
+	return session.SetKeyIndex(index - 1)
+}
+
+func (h *ModelSettingsHandler) loadModels(provider sdk.ProviderID) ([]sdk.Model, error) {
+	if h.Models == nil {
+		return nil, fmt.Errorf("model catalogue loader is not configured")
+	}
+	models, err := h.Models(context.Background(), provider)
+	if err != nil {
+		return nil, err
+	}
+	kept := models[:0]
+	for _, model := range models {
+		if strings.TrimSpace(model.ID) != "" {
+			kept = append(kept, model)
+		}
+	}
+	return kept, nil
+}
+
+// renderPanel builds the one panel message: summary content plus the five
+// control rows. failure, when non-empty, is shown inline above the summary
+// until the next successful pick clears it.
+func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages *modelPanelPages, failure string) (string, []discordgo.MessageComponent, error) {
+	session, err := h.resolve(i)
+	if err != nil {
+		return "", nil, err
+	}
+	config := session.Config()
+	provider := config.Provider
+	if provider == "" && len(h.Providers) > 0 {
+		provider = h.Providers[0]
+	}
+	models, err := h.loadModels(provider)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(models) == 0 {
+		return "", nil, fmt.Errorf("provider %q has no models", provider)
+	}
+	pages.provider = clampPage(panelPages(countProviders(h.Providers)), pages.provider)
+	pages.model = clampPage(panelPages(len(models)), pages.model)
+
+	content := sessionSettingsSummary(config) + "\nAgent: `" + string(panelAgentMode(config)) + "`"
+	if failure != "" {
+		content = "Model settings error: " + failure + "\n" + content
+	}
+	components := []discordgo.MessageComponent{
+		panelAgentRow(panelAgentMode(config)),
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.SelectMenu{CustomID: modelPanelProvider, MenuType: discordgo.StringSelectMenu, Placeholder: "Select provider", Options: pagedProviderOptions(h.Providers, pages.provider, string(config.Provider)), MinValues: intPtr(1), MaxValues: 1},
+		}},
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.SelectMenu{CustomID: modelPanelModel, MenuType: discordgo.StringSelectMenu, Placeholder: "Select model", Options: pagedModelOptions(models, pages.model, config.Model), MinValues: intPtr(1), MaxValues: 1},
+		}},
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.Button{CustomID: modelPanelThinking, Style: discordgo.SecondaryButton, Label: "Thinking: " + panelThinkingLabel(config)},
+			discordgo.Button{CustomID: modelPanelTemp, Style: discordgo.SecondaryButton, Label: "Temp: " + temperatureLabel(config.Temperature)},
+		}},
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.SelectMenu{CustomID: modelPanelKey, MenuType: discordgo.StringSelectMenu, Placeholder: "Select API key pool", Options: makeKeyOptions(panelKeyCount(h, provider), strconv.Itoa(config.KeyIndex+1)), MinValues: intPtr(1), MaxValues: 1},
+		}},
+	}
+	return content, components, nil
+}
+
+func panelAgentRow(mode sdk.AgentMode) discordgo.ActionsRow {
+	mainStyle, subStyle := discordgo.SecondaryButton, discordgo.SecondaryButton
+	if mode == sdk.AgentModeSub {
+		subStyle = discordgo.PrimaryButton
+	} else {
+		mainStyle = discordgo.PrimaryButton
+	}
+	return discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+		discordgo.Button{CustomID: modelPanelAgentMain, Style: mainStyle, Label: "Main agent"},
+		discordgo.Button{CustomID: modelPanelAgentSub, Style: subStyle, Label: "Sub agent"},
+	}}
+}
+
+func panelAgentMode(config sdk.SessionConfig) sdk.AgentMode {
+	if config.AgentMode == sdk.AgentModeSub {
+		return sdk.AgentModeSub
+	}
+	return sdk.AgentModeMain
+}
+
+func panelThinkingLabel(config sdk.SessionConfig) string {
+	if config.ThinkingLevel == "" {
+		return "default"
+	}
+	return string(config.ThinkingLevel)
+}
+
+func countProviders(providers []sdk.ProviderID) int {
+	count := 0
+	for _, provider := range providers {
+		if strings.TrimSpace(string(provider)) != "" {
+			count++
+		}
+	}
+	return count
+}
+
+func panelKeyCount(h *ModelSettingsHandler, provider sdk.ProviderID) int {
+	if h != nil {
+		if keys := h.ProviderKeys[provider]; keys != nil && keys.Len() > 0 {
+			return keys.Len()
+		}
+	}
+	return 1
+}
+
+// panelPages counts the option pages for n items: a single page while the
+// items fit one menu, otherwise a 24-item first page and 23-item later pages
+// so Previous/Next navigation always fits the 25-option limit.
+func panelPages(n int) int {
+	if n <= panelMenuOptions {
+		return 1
+	}
+	return 2 + (n-panelPageItems-1)/23
+}
+
+func clampPage(pages, page int) int {
+	if page < 0 {
+		return 0
+	}
+	if page >= pages {
+		return pages - 1
+	}
+	return page
+}
+
+// panelWindow returns the item slice for one option page.
+func panelWindow(n, page int) (int, int) {
+	if panelPages(n) == 1 {
+		return 0, n
+	}
+	page = clampPage(panelPages(n), page)
+	if page == 0 {
+		return 0, panelPageItems
+	}
+	start := panelPageItems + 23*(page-1)
+	end := start + 23
+	if end > n {
+		end = n
+	}
+	return start, end
+}
+
+// modelPageFor finds the option page holding the model, so opening the panel
+// or switching providers lands on the current model instead of page one.
+func modelPageFor(models []sdk.Model, model string) int {
+	for index, candidate := range models {
+		if candidate.ID == model {
+			if panelPages(len(models)) == 1 {
+				return 0
+			}
+			if index < panelPageItems {
+				return 0
+			}
+			return 1 + (index-panelPageItems)/23
+		}
+	}
+	return 0
+}
+
+// pagedOptions windows items to one option page with Previous/Next entries.
+// Every page, including navigation entries, stays within 25 options and
+// every custom ID in the message stays unique (CHANGE-011 lesson).
+func pagedOptions(items []discordgo.SelectMenuOption, page int) []discordgo.SelectMenuOption {
+	pages := panelPages(len(items))
+	page = clampPage(pages, page)
+	if pages == 1 {
+		return items
+	}
+	start, end := panelWindow(len(items), page)
+	options := make([]discordgo.SelectMenuOption, 0, panelMenuOptions)
+	if page > 0 {
+		options = append(options, discordgo.SelectMenuOption{Label: "← Previous", Value: panelNavPrev})
+	}
+	options = append(options, items[start:end]...)
+	if page < pages-1 {
+		options = append(options, discordgo.SelectMenuOption{Label: "Next →", Value: panelNavNext})
+	}
+	return options
+}
+
+func pagedProviderOptions(providers []sdk.ProviderID, page int, current string) []discordgo.SelectMenuOption {
+	items := make([]discordgo.SelectMenuOption, 0, len(providers))
+	for _, provider := range providers {
+		value := strings.TrimSpace(string(provider))
+		if value == "" {
+			continue
+		}
+		items = append(items, discordgo.SelectMenuOption{Label: value, Value: value, Default: value == current})
+	}
+	return pagedOptions(items, page)
+}
+
+func pagedModelOptions(models []sdk.Model, page int, current string) []discordgo.SelectMenuOption {
+	items := make([]discordgo.SelectMenuOption, 0, len(models))
+	for _, model := range models {
+		if strings.TrimSpace(model.ID) == "" {
+			continue
+		}
+		items = append(items, discordgo.SelectMenuOption{Label: model.ID, Value: model.ID, Default: model.ID == current})
+	}
+	return pagedOptions(items, page)
+}
+
+func (h *ModelSettingsHandler) hasProvider(provider sdk.ProviderID) bool {
+	for _, candidate := range h.Providers {
+		if candidate == provider {
+			return true
+		}
+	}
+	return false
+}
+
+func modelInCatalog(models []sdk.Model, model string) bool {
+	for _, candidate := range models {
+		if candidate.ID == model {
+			return true
+		}
+	}
+	return false
+}
+
+func validDiscordThinkingLevel(level string) bool {
+	switch sdk.ThinkingLevel(level) {
+	case sdk.ThinkingNone, sdk.ThinkingLow, sdk.ThinkingMedium, sdk.ThinkingHigh:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *ModelSettingsHandler) respondError(s interactionAPI, i *discordgo.InteractionCreate, message string) error {
+	data := &discordgo.InteractionResponseData{Content: "Model settings error: " + message, Flags: discordgo.MessageFlagsEphemeral}
+	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: data})
+}
+
+func modalValues(i *discordgo.InteractionCreate) map[string]string { values := make(map[string]string, 6); for _, component := range i.ModalSubmitData().Components { label, ok := component.(*discordgo.Label); if !ok { if valueLabel, valueOK := component.(discordgo.Label); valueOK { label = &valueLabel } else { continue } }; switch child := label.Component.(type) { case *discordgo.SelectMenu: if len(child.Values) > 0 { values[child.CustomID] = child.Values[0] }; case discordgo.SelectMenu: if len(child.Values) > 0 { values[child.CustomID] = child.Values[0] }; case *discordgo.TextInput: values[child.CustomID] = child.Value; case discordgo.TextInput: values[child.CustomID] = child.Value } }; return values }
+func modalSelectValues(i *discordgo.InteractionCreate) map[string]string { return modalValues(i) }
+
+// sessionSettingsSummary renders the settings report shared by the /model
+// panel and the /new channel summary, so both surfaces always describe the
+// same fields (REQ-027).
+func sessionSettingsSummary(config sdk.SessionConfig) string {
+	thinking := string(config.ThinkingLevel)
+	if thinking == "" {
+		thinking = "default"
+	}
+	model := config.Model
+	if model == "" {
+		model = "not set"
+	}
+	return fmt.Sprintf("**Session Model Settings**\nProvider: `%s`\nModel: `%s`\nThinking: `%s`\nTemperature: `%s`\nAPI Pool: `%d`", config.Provider, model, thinking, temperatureLabel(config.Temperature), config.KeyIndex+1)
+}
+func temperatureLabel(value *float64) string {
+	if value == nil {
+		return "default"
+	}
+	return strconv.FormatFloat(*value, 'f', 1, 64)
+}
+func boolPtr(value bool) *bool     { return &value }
+func intPtr(value int) *int        { return &value }
+func makeKeyOptions(count int, current string) []discordgo.SelectMenuOption {
+	if count < 1 {
+		count = 1
+	}
+	if count > 25 {
+		count = 25
+	}
+	currentIndex, _ := strconv.Atoi(current)
+	options := make([]discordgo.SelectMenuOption, 0, count)
+	for index := 1; index <= count; index++ {
+		value := strconv.Itoa(index)
+		options = append(options, discordgo.SelectMenuOption{Label: "Pool " + value, Value: value, Default: index == currentIndex})
+	}
+	if currentIndex < 1 || currentIndex > count {
+		options[0].Default = true
+	}
+	return options
+}
+func makeThinkingOptions(current string) []discordgo.SelectMenuOption {
+	values := []string{"default", string(sdk.ThinkingNone), string(sdk.ThinkingLow), string(sdk.ThinkingMedium), string(sdk.ThinkingHigh)}
+	options := make([]discordgo.SelectMenuOption, 0, len(values))
+	for _, value := range values {
+		label := value
+		if value == "default" {
+			label = "Default"
+		}
+		options = append(options, discordgo.SelectMenuOption{Label: label, Value: value, Default: value == current || (current == "" && value == "default")})
+	}
+	return options
+}
+func (h *ModelSettingsHandler) summary(session *sdk.Session) string {
+	return sessionSettingsSummary(session.Config())
+}

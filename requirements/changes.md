@@ -160,3 +160,16 @@ Reason: เลือก model จากรายการดีกว่าพ�
 Impact: transport/discord/model_settings.go (wizard + pending store + render/step functions), model_settings_test.go, interactions.go (เพิ่ม InteractionResponseEdit ใน interface); ไม่แตะ gateway dispatch, cmd/ai wiring, sdk core, canonical contract
 Validation: ทุกขั้นต้อง defer-update ก่อนงานแล้ว edit ข้อความเดิม (ไม่มีข้อความใหม่); pager ครอบคลุม catalogue >125; Back ย้อนขั้นได้; pending หมดอายุ/ข้ามช่องต้อง error ชัดเจน; apply ครั้งเดียวครบทุก field; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-012
+
+Date: 2026-09-15
+Type: revise
+Request: /model เป็นข้อความเดียวแบบ control panel 5 แถว (ปุ่ม main/sub agent, provider menu, model menu, ปุ่ม thinking+temperature, pool menu); ถ้า provider/model เกิน 25 ให้ใส่ 24+next / prev+items+next ในตัวเลือกเอง
+Conflict: CHANGE-011 (ยกเลิก wizard หลายขั้นแบบ staged; ทุก control บันทึกทันที ไม่มี Back/pending choices เหลือแค่ page state)
+Previous: CHANGE-011 wizard staged provider→model(pager)→temp→thinking→key→summary apply ครั้งเดียวตอนจบ
+New: REQ-028 panel ข้อความปกติข้อความเดียวแก้ inplace ทุกคลิก (deferred-update + edit-original): ปุ่ม Main/Sub สลับ agent mode ของ session; provider/model select แบ่งหน้าใน options (sentinel `__panel_next__`/`__panel_prev__` เช็คก่อน validate membership); ปุ่ม Thinking วน default→none→low→medium→high, ปุ่ม Temp วน default→0.0→0.1→...→2.0 (label แสดงค่าปัจจุบัน); pool select; เปลี่ยน provider แล้วคง model เดิมถ้ายังอยู่ใน catalogue ไม่เช่นนั้นใช้ตัวแรก; REQ-029 `SessionConfig.AgentMode` persist + `SetAgentMode`, sdk เลือก planning ต่อ session (`sub` = execution tools เต็ม ไม่ wrap planning prompt) แทน global switch อย่างเดียว
+Reason: ควบคุมทุกอย่างจบในข้อความเดียว ไม่ต้องไล่หลายขั้น; catalogue ใหญ่แค่ไหนก็อยู่ใน 5 rows เพราะ page controls อยู่ใน options; agent mode ต่อ channel ไม่ต้องแก้ global config
+Impact: sdk/types.go (AgentMode), sdk/session_settings.go (SetAgentMode), sdk/agent.go (planningFor ต่อ session 4 จุด), transport/discord/model_settings.go (rewrite เป็น panel), model_settings_test.go, transport/discord/new_channel.go (copy agent mode ไปช่องใหม่); ไม่แตะ gateway dispatch, cmd/ai wiring (นอกจาก handler เดิม), canonical contract
+Validation: panel เปิดด้วย deferred channel message + edit (ข้อความเดียวเสมอ); custom ID ไม่ซ้ำในข้อความ; sentinel ไม่ถูกบันทึกเป็นค่า; nav ครอบคลุม >25 providers/models; cycle thinking/temp ครบทุกลำดับและ persist; provider switch คง/รีเซ็ต model ถูกต้อง; sub session ได้ full tools + prompt ไม่ถูก wrap (stream/non-stream); main คงพฤติกรรมเดิม; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: accepted

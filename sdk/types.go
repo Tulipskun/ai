@@ -71,7 +71,14 @@ const (
 type Model struct { ID string `json:"id"`; Name string `json:"name,omitempty"`; SupportsTools bool `json:"supports_tools"`; SupportsThinking bool `json:"supports_thinking"`; SupportsTemperature bool `json:"supports_temperature"`; SupportsStreaming bool `json:"supports_streaming"` }
 type ProviderConfig struct { ID ProviderID `json:"id"`; BaseURL string `json:"base_url"`; Keys *KeyPool `json:"-"`; Adapter AdapterID `json:"adapter"`; RotateKeys bool `json:"rotate_keys,omitempty"`; FreeOnly bool `json:"free_only,omitempty"`; Headers map[string]string `json:"headers,omitempty"` }
 type ModelRoute struct { Provider ProviderID `json:"provider"`; Model string `json:"model"`; Adapter AdapterID `json:"adapter"` }
-type SessionConfig struct { ID string `json:"id"`; Provider ProviderID `json:"provider"`; Model string `json:"model"`; KeyIndex int `json:"key_index"`; ThinkingLevel ThinkingLevel `json:"thinking_level,omitempty"`; Temperature *float64 `json:"temperature,omitempty"` }
+type SessionConfig struct { ID string `json:"id"`; Provider ProviderID `json:"provider"`; Model string `json:"model"`; KeyIndex int `json:"key_index"`; ThinkingLevel ThinkingLevel `json:"thinking_level,omitempty"`; Temperature *float64 `json:"temperature,omitempty"`; AgentMode AgentMode `json:"agent_mode,omitempty"` }
+
+// AgentMode selects how a session answers: AgentModeMain plans through the
+// Main Agent (planning prompt plus orchestration tools, no execution tools)
+// while AgentModeSub answers as a worker with the full execution tool set.
+// The zero value behaves as AgentModeMain so stored sessions keep working.
+type AgentMode string
+const ( AgentModeMain AgentMode = "main"; AgentModeSub AgentMode = "sub" )
 
 type RetryPolicy struct { MaxAttempts int; InitialBackoff time.Duration; MaxBackoff time.Duration }
 func DefaultRetryPolicy() RetryPolicy { return RetryPolicy{MaxAttempts: 3, InitialBackoff: 3 * time.Second, MaxBackoff: maxRetryCooldown} }

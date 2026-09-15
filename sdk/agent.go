@@ -182,9 +182,23 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 	return Response{}, fmt.Errorf("%w: attempts=%d: %w", ErrAgentRetriesExhausted, retries+1, lastErr)
 }
 
+// planningFor reports whether the turn for session runs through the Main
+// Agent planner. A session in sub mode answers as a worker with the full
+// execution tool set, independent of the global DisablePlanning switch, so
+// one channel can run direct while others keep planning (REQ-029).
+func (a *Agent) planningFor(session *Session) bool {
+	if a != nil && a.DisablePlanning {
+		return false
+	}
+	if session == nil {
+		return true
+	}
+	return session.Config().AgentMode != AgentModeSub
+}
+
 func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
 	var executor ToolExecutor
-	if !a.DisablePlanning {
+	if a.planningFor(session) {
 		executor = newPlanningToolExecutor(a.Tools, session)
 	} else {
 		executor = a.Tools
@@ -204,7 +218,7 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		}
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
 		req.SystemPrompt = baseSystemPrompt
-		if !a.DisablePlanning {
+		if a.planningFor(session) {
 			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt)
 		}
 		if executor != nil {
@@ -285,7 +299,7 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 
 func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
 	var executor ToolExecutor
-	if !a.DisablePlanning {
+	if a.planningFor(session) {
 		executor = newPlanningToolExecutor(a.Tools, session)
 	} else {
 		executor = a.Tools
@@ -300,7 +314,7 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 		}
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
 		req.SystemPrompt = baseSystemPrompt
-		if !a.DisablePlanning {
+		if a.planningFor(session) {
 			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt)
 		}
 		if executor != nil {

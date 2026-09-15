@@ -215,6 +215,7 @@ type Gateway struct {
 	modelSettings    *ModelSettingsHandler
 	providerSettings *ProviderSettingsHandler
 	sessionCommand   *SessionCommandHandler
+	newChannel       *NewChannelHandler
 	sessionMapping   *SessionMapping
 	stop             func(string) bool
 	retryStatusMu    sync.Mutex
@@ -302,6 +303,14 @@ func NewGateway(token string) (*Gateway, error) {
 		if gateway.providerSettings != nil {
 			_ = gateway.providerSettings.Handle(s, event)
 		}
+		if gateway.newChannel != nil {
+			if err := gateway.newChannel.Handle(s, event); err != nil {
+				return
+			}
+			if data, ok := event.Interaction.Data.(discordgo.ApplicationCommandInteractionData); ok && data.Name == "new" {
+				return
+			}
+		}
 	})
 	return gateway, nil
 }
@@ -318,6 +327,11 @@ func (g *Gateway) ConfigureModelSettings(handler *ModelSettingsHandler) {
 func (g *Gateway) ConfigureProviderSettings(handler *ProviderSettingsHandler) {
 	if g != nil {
 		g.providerSettings = handler
+	}
+}
+func (g *Gateway) ConfigureNewChannel(handler *NewChannelHandler) {
+	if g != nil {
+		g.newChannel = handler
 	}
 }
 func (g *Gateway) ConfigureSessionCommand(handler *SessionCommandHandler) {
@@ -439,6 +453,11 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 	if g.stop != nil {
 		if err := g.registerCommand(&discordgo.ApplicationCommand{Name: "stop", Description: "Stop the current AI task"}); err != nil {
+			return err
+		}
+	}
+	if g.newChannel != nil {
+		if err := g.registerCommand(&discordgo.ApplicationCommand{Name: "new", Description: "Create a new channel with this channel's model settings"}); err != nil {
 			return err
 		}
 	}

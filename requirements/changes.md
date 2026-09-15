@@ -95,3 +95,29 @@ Reason: กรณีจริง channel 1549251007995846676 งานสร้�
 Impact: sdk/plan_tool.go (planning instruction เพิ่ม proportionality), sdk/subagent.go (worker default prompt เพิ่ม minimal validation), cmd/ai/main.go (default prompt ให้ข้าม investigation เมื่องานไม่ต้องใช้ repo context), tools/registry.go (run_command description เตือนกับดัก direct-exec ไม่มี shell พร้อมตัวอย่าง)
 Validation: ประโยคบังคับเดิมของ prompt/guidance tests ต้องยังอยู่ครบ (poll/event/follow-up/continue/accept/NOT verified success); prompt ใหม่ต้องมีข้อความ proportionality/minimal-check; run_command description ต้องเตือน direct-exec; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-007
+
+Date: 2026-09-15
+Type: add
+Request: เพิ่มคำสั่ง /new สำหรับ Discord ให้สร้าง channel ใหม่พร้อมวันที่และเวลา คัดลอกการตั้งค่าโมเดลจากช่องที่ส่งคำสั่ง และส่งข้อความสรุปการตั้งค่าเข้าช่องใหม่
+Conflict: none (เพิ่มคำสั่งใหม่ใน Discord module ตาม REQ-002/015/022; ไม่แตะ core orchestration, persistence, canonical contract หรือ session database layout)
+Previous: Discord มีเฉพาะคำสั่ง model/provider/session/stop; การเปิดช่องคุยใหม่ต้องสร้าง channel เองแล้วตั้งค่าโมเดลซ้ำด้วย /model ทุกครั้ง
+New: REQ-027 คำสั่ง /new สร้าง text channel ใน guild เดียวกัน ชื่อ `ai-YYYY-MM-DD-HHMM` คัดลอก provider/model/temperature/thinking/API pool index จาก session ต้นทางไป session ช่องใหม่ แล้วส่งสรุปการตั้งค่าเข้าช่องใหม่; กรณีผิดพลาดตอบ ephemeral ในช่องเดิมโดยไม่สร้าง session ใหม่
+Reason: ผู้ใช้ต้องการแยกบทสนทนาใหม่โดยไม่ต้องตั้งค่าโมเดลซ้ำ และต้องการเห็นทันทีว่าช่องใหม่ใช้การตั้งค่าอะไร
+Impact: transport/discord (handler ใหม่ new_channel.go, gateway dispatch + command registration, แยก summary formatter ใช้ร่วมกับ model settings), cmd/ai (wiring handler); ไม่แตะ sdk core, session persistence, provider contract
+Validation: ชื่อช่องต้องตรงรูปแบบวันที่-เวลาและใช้ตัวอักษรที่ Discord อนุญาต; settings ทุก field (รวม key index) ต้องถูกคัดลอกครบ; ข้อความในช่องใหม่ต้องมี provider/model/thinking/temperature/pool; กรณี DM/ไม่มี settings/สร้างช่องล้มเหลวต้อง error แบบ ephemeral และไม่สร้าง session; offline tests ด้วย fake Discord interface เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: accepted
+
+CHANGE-008
+
+Date: 2026-09-15
+Type: revise
+Request: ปรับ /model เป็น modal 100% — /model แสดง modal เลือก provider เมื่อ submit ให้แสดง modal เลือก model พร้อม temperature/thinking/api pool
+Conflict: none (flow เดิมเป็น message-component ที่ไม่มี requirement ล็อกไว้; อยู่ใน Discord module ตาม REQ-015/022; ไม่แตะ core orchestration, persistence, canonical contract)
+Previous: /model ตอบกลับเป็น ephemeral message ที่มี provider select menu → เลือกแล้วตอบกลับเป็น ephemeral message ที่มี model select menu แบบแบ่งหน้า (follow-up หลายข้อความเมื่อ model เยอะ) → เลือก model แล้วจึงเปิด modal ขั้นสุดท้าย; มี providerSelectionModal ที่เป็น dead code
+New: /model เปิด modal ขั้นที่ 1 ทันที (provider select + ช่อง filter model แบบ optional) → submit แล้วเปิด modal ขั้นที่ 2 (model select สูงสุด 2 เมนู 50 models + temperature + thinking + API pool รวมไม่เกิน 5 components ตามลิมิต modal) → submit แล้ว apply settings และตอบสรุปแบบ ephemeral; ตัด message-component path และ helpers ที่ตายแล้วออก
+Reason: ลดจำนวนข้อความ ephemeral หลายชั้นและ follow-up แบ่งหน้า เหลือ modal 2 ขั้นตอนเดียวจบ; filter ช่วยเลือก model จาก catalogue ขนาดใหญ่โดยไม่ต้องไล่เมนูยาว
+Impact: transport/discord/model_settings.go (flow + modal builders + submit logic), model_settings_test.go (เขียนใหม่ตาม flow ใหม่); ไม่แตะ gateway dispatch contract, cmd/ai wiring, sdk core
+Validation: modal ขั้นที่ 1 มี provider select ครบ + filter optional; modal ขั้นที่ 2 มี model ไม่เกิน 50 ตัว + temp/thinking/key พร้อมค่าเดิม; filter ตรง/ไม่ตรง/เกินลิมิตต้องจัดการถูก; submit ตรวจ model ใน catalogue + ตรวจ temperature/thinking/key ผิดพลาด; offline tests เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: accepted

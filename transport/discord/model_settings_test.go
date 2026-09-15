@@ -1,73 +1,185 @@
 package discord
 
 import (
-	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/Tulipskun/ai/sdk"
 )
 
-func TestProviderSelectionComponentDoesNotPreselectCurrentProvider(t *testing.T) {
-	data := providerSelectionMessage("123", "B.ai", []sdk.ProviderID{"B.ai", "google"})
-	if len(data.Components) != 1 { t.Fatalf("components = %d, want 1", len(data.Components)) }
-	row, ok := data.Components[0].(discordgo.ActionsRow); if !ok { t.Fatalf("component = %T, want ActionsRow", data.Components[0]) }
-	selectMenu, ok := row.Components[0].(discordgo.SelectMenu); if !ok { t.Fatalf("child = %T, want SelectMenu", row.Components[0]) }
-	if selectMenu.CustomID != modelSettingsProviderSelect || len(selectMenu.Options) != 2 { t.Fatalf("unexpected provider select: %+v", selectMenu) }
-	for _, option := range selectMenu.Options { if option.Default { t.Fatalf("provider %q is preselected; provider must remain selectable", option.Value) } }
-}
-
-func TestModelOptionGroupsIncludeEveryModel(t *testing.T) {
-	models := make([]sdk.Model, 0, 76); for index := 1; index <= 76; index++ { models = append(models, sdk.Model{ID: "model-" + strconv.Itoa(index)}) }
-	groups := makeModelOptionGroups(models, "model-76")
-	if len(groups) != 4 { t.Fatalf("groups = %d, want 4", len(groups)) }
-	wantSizes := []int{25, 25, 25, 1}; for index, want := range wantSizes { if len(groups[index]) != want { t.Fatalf("group %d size = %d, want %d", index, len(groups[index]), want) } }
-	if groups[3][0].Value != "model-76" || !groups[3][0].Default { t.Fatalf("last model was not preserved: %+v", groups[3][0]) }
-}
-
-func TestModelSelectionComponentsUseUniquePagedMenus(t *testing.T) {
-	groups := [][]discordgo.SelectMenuOption{{{Label: "m1", Value: "m1"}}, {{Label: "m26", Value: "m26"}}, {{Label: "m51", Value: "m51"}}}
-	components := makeModelSelectionComponents("123", "google", groups, 0); if len(components) != 3 { t.Fatalf("components = %d, want 3", len(components)) }
-	seen := map[string]bool{}; for _, component := range components { row := component.(discordgo.ActionsRow); menu := row.Components[0].(discordgo.SelectMenu); if seen[menu.CustomID] { t.Fatalf("duplicate custom ID %q", menu.CustomID) }; seen[menu.CustomID] = true }
-}
-
-func TestModelSettingsModalUsesTemperatureTextInput(t *testing.T) {
-	data := modelSettingsModal("discord:channel:123", "google", "gemini-2.5-flash", "0.7", "medium", "2")
-	if len(data.Components) != 4 { t.Fatalf("components = %d, want 4", len(data.Components)) }
-	payload, err := json.Marshal(data); if err != nil { t.Fatalf("marshal modal: %v", err) }
-	var decoded struct { Components []struct { Type int `json:"type"`; Component struct { Type int `json:"type"`; CustomID string `json:"custom_id"`; Value string `json:"value"` } `json:"component"` } `json:"components"` }
-	if err := json.Unmarshal(payload, &decoded); err != nil { t.Fatalf("decode modal: %v", err) }
-	if decoded.Components[1].Component.Type != int(discordgo.TextInputComponent) { t.Fatalf("temperature component type = %d, want %d", decoded.Components[1].Component.Type, discordgo.TextInputComponent) }
-	if decoded.Components[1].Component.CustomID != "temperature" { t.Fatalf("temperature custom ID = %q, want temperature", decoded.Components[1].Component.CustomID) }
-	if decoded.Components[1].Component.Value != "0.7" { t.Fatalf("temperature value = %q, want 0.7", decoded.Components[1].Component.Value) }
-}
-
-func TestModelSettingsTemperatureRangeMatchesCLI(t *testing.T) {
-	data := modelSettingsModal("discord:channel:123", "openai", "gpt-5", "2.0", "high", "1")
-	label := data.Components[1].(discordgo.Label)
-	temperature := label.Component.(discordgo.TextInput)
-	if label.Description != "Enter a number from 0.0 to 2.0. Leave blank for default." { t.Fatalf("description = %q", label.Description) }
-	if temperature.Placeholder != "0.0 - 2.0" { t.Fatalf("placeholder = %q", temperature.Placeholder) }
-}
-
-func TestModelSettingsModalKeepsCurrentValuesSelected(t *testing.T) {
-	data := modelSettingsModal("discord:channel:123", "openai", "gpt-5", "0.4", "high", "3")
+func modalLabels(t *testing.T, data *discordgo.InteractionResponseData) []discordgo.Label {
+	t.Helper()
+	labels := make([]discordgo.Label, 0, len(data.Components))
 	for _, component := range data.Components {
-		label, ok := component.(discordgo.Label); if !ok { t.Fatalf("component is %T, want discordgo.Label", component) }
-		if label.Label == "Model" { input, ok := label.Component.(discordgo.TextInput); if !ok || input.Value != "gpt-5" { t.Fatalf("model child/value = %T/%q, want TextInput/gpt-5", label.Component, input.Value) }; continue }
-		if label.Label == "Temperature" { input, ok := label.Component.(discordgo.TextInput); if !ok { t.Fatalf("temperature child is %T, want discordgo.TextInput", label.Component) }; if input.Value != "0.4" { t.Fatalf("temperature value = %q, want 0.4", input.Value) }; continue }
-		selectMenu, ok := label.Component.(discordgo.SelectMenu); if !ok { t.Fatalf("label child is %T, want discordgo.SelectMenu", label.Component) }
-		found := false; for _, option := range selectMenu.Options { if option.Default { found = true; break } }; if !found { t.Fatalf("%s has no default option", label.Label) }
+		label, ok := component.(discordgo.Label)
+		if !ok {
+			t.Fatalf("modal component is %T, want discordgo.Label", component)
+		}
+		labels = append(labels, label)
+	}
+	return labels
+}
+
+func TestStep1ModalSelectsProviderAndFilters(t *testing.T) {
+	data := modelStep1Modal([]sdk.ProviderID{"B.ai", "google"})
+	if data.CustomID != modelStep1ModalID {
+		t.Fatalf("custom ID = %q", data.CustomID)
+	}
+	labels := modalLabels(t, data)
+	if len(labels) != 2 {
+		t.Fatalf("components = %d, want provider select + filter", len(labels))
+	}
+	provider, ok := labels[0].Component.(discordgo.SelectMenu)
+	if !ok || provider.CustomID != "provider" || len(provider.Options) != 2 {
+		t.Fatalf("provider select = %+v", labels[0].Component)
+	}
+	filter, ok := labels[1].Component.(discordgo.TextInput)
+	if !ok || filter.CustomID != "filter" || filter.Required == nil || *filter.Required {
+		t.Fatalf("filter input must be optional text: %+v", labels[1].Component)
 	}
 }
 
-func TestModelSettingsModalUsesCatalogModels(t *testing.T) {
-	models := []sdk.Model{{ID: "qwen3.8-flash"}, {ID: "qwen3.5-plus"}}
-	data := modelSettingsModalWithCatalog("discord:channel:123", "B.ai", "qwen3.8-flash", "default", "none", "1", models, 2)
-	if len(data.Components) != 4 { t.Fatalf("components = %d, want 4", len(data.Components)) }
-	modelInput := data.Components[0].(discordgo.Label).Component.(discordgo.TextInput)
-	if modelInput.Value != "qwen3.8-flash" { t.Fatalf("model value = %q, want qwen3.8-flash", modelInput.Value) }
+func TestFilterModelsNarrowsCatalog(t *testing.T) {
+	models := []sdk.Model{{ID: "qwen3.8-flash"}, {ID: "qwen3.5-plus"}, {ID: "gpt-5"}}
+	if got := filterModels(models, ""); len(got) != 3 {
+		t.Fatalf("blank filter = %d, want all", len(got))
+	}
+	got := filterModels(models, "QWEN")
+	if len(got) != 2 {
+		t.Fatalf("filter = %v, want 2 qwen models", got)
+	}
+	if got := filterModels(models, "nope"); len(got) != 0 {
+		t.Fatalf("filter = %v, want none", got)
+	}
+}
+
+func emptyTestConfig() sdk.SessionConfig {
+	return sdk.SessionConfig{ID: "discord:channel:c1", Provider: "B.ai", Model: "old", KeyIndex: 0}
+}
+
+func TestStep2ModalFitsOneModal(t *testing.T) {
+	models := make([]sdk.Model, 0, 40)
+	for index := 1; index <= 40; index++ {
+		models = append(models, sdk.Model{ID: "model-" + strconv.Itoa(index)})
+	}
+	data, err := modelStep2Modal("c1", "B.ai", models, emptyTestConfig(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(data.CustomID, modelStep2Prefix) {
+		t.Fatalf("custom ID = %q", data.CustomID)
+	}
+	labels := modalLabels(t, data)
+	if len(labels) != 5 {
+		t.Fatalf("components = %d, want 2 model menus + temperature + thinking + key", len(labels))
+	}
+	seen := map[string]bool{}
+	options := 0
+	for _, label := range labels {
+		menu, ok := label.Component.(discordgo.SelectMenu)
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(menu.CustomID, "model_") {
+			seen[menu.CustomID] = true
+			options += len(menu.Options)
+		}
+	}
+	if len(seen) != 2 || options != 40 {
+		t.Fatalf("model menus = %v with %d options", seen, options)
+	}
+}
+
+func TestStep2ModalRejectsEmptyAndOversized(t *testing.T) {
+	if _, err := modelStep2Modal("c1", "B.ai", nil, emptyTestConfig(), 1); err == nil {
+		t.Fatal("empty catalogue must error")
+	}
+	big := make([]sdk.Model, 0, maxStep2Models+1)
+	for index := 0; index <= maxStep2Models; index++ {
+		big = append(big, sdk.Model{ID: "m-" + strconv.Itoa(index)})
+	}
+	if _, err := modelStep2Modal("c1", "B.ai", big, emptyTestConfig(), 1); err == nil || !strings.Contains(err.Error(), "narrow the filter") {
+		t.Fatalf("oversized catalogue must ask for a narrower filter: %v", err)
+	}
+}
+
+func TestStep2ModalPreselectsCurrentValues(t *testing.T) {
+	temp := 0.7
+	config := sdk.SessionConfig{ID: "c", Provider: "B.ai", Model: "m2", Temperature: &temp, ThinkingLevel: sdk.ThinkingHigh, KeyIndex: 1}
+	data, err := modelStep2Modal("c1", "B.ai", []sdk.Model{{ID: "m1"}, {ID: "m2"}}, config, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundModel, foundKey := false, false
+	for _, label := range modalLabels(t, data) {
+		switch child := label.Component.(type) {
+		case discordgo.SelectMenu:
+			for _, option := range child.Options {
+				if child.CustomID == "model_0" && option.Value == "m2" && option.Default {
+					foundModel = true
+				}
+				if child.CustomID == "key" && option.Value == "2" && option.Default {
+					foundKey = true
+				}
+			}
+		case discordgo.TextInput:
+			if child.CustomID == "temperature" && child.Value != "0.7" {
+				t.Fatalf("temperature value = %q", child.Value)
+			}
+		}
+	}
+	if !foundModel || !foundKey {
+		t.Fatalf("current model/key not preselected (model=%v key=%v)", foundModel, foundKey)
+	}
+}
+
+func applyStep2TestSession(t *testing.T) (*sdk.Session, *sdk.KeyPool) {
+	t.Helper()
+	keys := sdk.NewKeyPool("k1", "k2")
+	return sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1"}, keys), keys
+}
+
+func TestApplyStep2AppliesEveryField(t *testing.T) {
+	session, keys := applyStep2TestSession(t)
+	models := []sdk.Model{{ID: "m1"}, {ID: "m2"}}
+	values := map[string]string{"model_1": "m2", "temperature": "0.7", "thinking": "high", "key": "2"}
+	if err := applyModelStep2(session, keys, "B.ai", values, models); err != nil {
+		t.Fatal(err)
+	}
+	got := session.Config()
+	if got.Provider != "B.ai" || got.Model != "m2" || got.ThinkingLevel != sdk.ThinkingHigh || got.KeyIndex != 1 {
+		t.Fatalf("not applied: %+v", got)
+	}
+	if got.Temperature == nil || *got.Temperature != 0.7 {
+		t.Fatalf("temperature not applied: %+v", got.Temperature)
+	}
+	if summary := sessionSettingsSummary(got); !strings.Contains(summary, "m2") || !strings.Contains(summary, "API Pool: `2`") {
+		t.Fatalf("summary missing applied values: %s", summary)
+	}
+}
+
+func TestApplyStep2RejectsBadInput(t *testing.T) {
+	models := []sdk.Model{{ID: "m1"}}
+	base := map[string]string{"model_0": "m1", "temperature": "", "thinking": "default", "key": "1"}
+	cases := map[string]map[string]string{
+		"missing model":   {"temperature": "", "thinking": "default", "key": "1"},
+		"unknown model":   {"model_0": "nope", "temperature": "", "thinking": "default", "key": "1"},
+		"bad temperature": {"model_0": "m1", "temperature": "9", "thinking": "default", "key": "1"},
+		"bad thinking":    {"model_0": "m1", "temperature": "", "thinking": "ultra", "key": "1"},
+		"bad key":         {"model_0": "m1", "temperature": "", "thinking": "default", "key": "0"},
+	}
+	for name, values := range cases {
+		session, keys := applyStep2TestSession(t)
+		if err := applyModelStep2(session, keys, "B.ai", values, models); err == nil {
+			t.Fatalf("%s was accepted", name)
+		}
+	}
+	session, _ := applyStep2TestSession(t)
+	if err := applyModelStep2(session, nil, "B.ai", base, models); err == nil {
+		t.Fatal("missing key pool was accepted")
+	}
 }
 
 func TestModelInCatalog(t *testing.T) {

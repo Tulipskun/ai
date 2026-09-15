@@ -616,6 +616,7 @@ func run(ctx context.Context, cliOnly bool) error {
 			return models, nil
 		}}
 		discord.ConfigureModelSettings(modelSettings)
+		discord.ConfigureNewChannel(&discordtransport.NewChannelHandler{ResolveSession: sessions.Resolve, SessionForChannel: discord.SessionIDForChannel, ProviderKeys: providerKeys})
 		discord.ConfigureProviderSettings(&discordtransport.ProviderSettingsHandler{Adapters: providerManager.Adapters(), Upsert: func(ctx context.Context, name, adapter, endpoint, apiKey string, freeOnly bool) error {
 			if err := providerManager.Upsert(ctx, name, adapter, endpoint, apiKey, freeOnly); err != nil {
 				return err

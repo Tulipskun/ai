@@ -71,12 +71,7 @@ const (
 type Model struct { ID string `json:"id"`; Name string `json:"name,omitempty"`; SupportsTools bool `json:"supports_tools"`; SupportsThinking bool `json:"supports_thinking"`; SupportsTemperature bool `json:"supports_temperature"`; SupportsStreaming bool `json:"supports_streaming"` }
 type ProviderConfig struct { ID ProviderID `json:"id"`; BaseURL string `json:"base_url"`; Keys *KeyPool `json:"-"`; Adapter AdapterID `json:"adapter"`; RotateKeys bool `json:"rotate_keys,omitempty"`; FreeOnly bool `json:"free_only,omitempty"`; Headers map[string]string `json:"headers,omitempty"` }
 type ModelRoute struct { Provider ProviderID `json:"provider"`; Model string `json:"model"`; Adapter AdapterID `json:"adapter"` }
-type SessionConfig struct { ID string `json:"id"`; Provider ProviderID `json:"provider"`; Model string `json:"model"`; KeyIndex int `json:"key_index"`; ThinkingLevel ThinkingLevel `json:"thinking_level,omitempty"`; Temperature *float64 `json:"temperature,omitempty"`; AgentMode AgentMode `json:"agent_mode,omitempty"`; Sub ModeSettings `json:"sub,omitempty"` }
-
-// ModeSettings holds one agent side's settings. The main side lives in the
-// top-level SessionConfig fields; the sub side lives in Sub. Key pools are
-// runtime-only and travel with the session, never with stored JSON.
-type ModeSettings struct { Provider ProviderID `json:"provider,omitempty"`; Model string `json:"model,omitempty"`; KeyIndex int `json:"key_index,omitempty"`; ThinkingLevel ThinkingLevel `json:"thinking_level,omitempty"`; Temperature *float64 `json:"temperature,omitempty"` }
+type SessionConfig struct { ID string `json:"id"`; Provider ProviderID `json:"provider"`; Model string `json:"model"`; KeyIndex int `json:"key_index"`; ThinkingLevel ThinkingLevel `json:"thinking_level,omitempty"`; Temperature *float64 `json:"temperature,omitempty"`; AgentMode AgentMode `json:"agent_mode,omitempty"` }
 
 // AgentMode selects how a session answers: AgentModeMain plans through the
 // Main Agent (planning prompt plus orchestration tools, no execution tools)

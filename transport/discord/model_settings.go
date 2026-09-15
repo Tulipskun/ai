@@ -81,6 +81,12 @@ func (h *ModelSettingsHandler) sessionIDFor(channelID string) string {
 	return "discord:channel:" + channelID
 }
 
+// subSessionIDFor derives the channel's sub-agent session: its own history
+// and database, reusable until deleted (REQ-030, CHANGE-021).
+func (h *ModelSettingsHandler) subSessionIDFor(channelID string) string {
+	return h.sessionIDFor(channelID) + ":sub"
+}
+
 // panelKey scopes paging state to the invoking user in the invoking channel.
 func panelKey(channelID, userID string) string {
 	return strings.TrimSpace(channelID) + "\x00" + strings.TrimSpace(userID)
@@ -243,12 +249,11 @@ func (h *ModelSettingsHandler) applyPick(i *discordgo.InteractionCreate, pages *
 // frozenPanel renders the saved panel: the summary container alone, with no
 // controls left to press (CHANGE-017).
 func (h *ModelSettingsHandler) frozenPanel(i *discordgo.InteractionCreate) (string, []discordgo.MessageComponent, error) {
-	session, err := h.resolve(i)
+	main, sub, err := h.resolveBoth(i)
 	if err != nil {
 		return "", nil, err
 	}
-	config := session.Config()
-	return "", []discordgo.MessageComponent{panelSummaryContainer(config)}, nil
+	return "", []discordgo.MessageComponent{panelSummaryContainer(main.Config(), sub.Config())}, nil
 }
 
 func (h *ModelSettingsHandler) resolve(i *discordgo.InteractionCreate) (*sdk.Session, error) {
@@ -258,26 +263,92 @@ func (h *ModelSettingsHandler) resolve(i *discordgo.InteractionCreate) (*sdk.Ses
 	return h.ResolveSession(context.Background(), sdk.Input{SessionID: h.sessionIDFor(i.ChannelID)})
 }
 
-func (h *ModelSettingsHandler) pickAgentMode(i *discordgo.InteractionCreate, pages *modelPanelPages, mode sdk.AgentMode) error {
-	session, err := h.resolve(i)
-	if err != nil {
+// resolveSub opens the channel's sub-agent session: its own history and
+// database, reused across turns until deleted (REQ-030, CHANGE-021).
+func (h *ModelSettingsHandler) resolveSub(i *discordgo.InteractionCreate) (*sdk.Session, error) {
+	if h.ResolveSession == nil {
+		return nil, fmt.Errorf("session manager is not configured")
+	}
+	return h.ResolveSession(context.Background(), sdk.Input{SessionID: h.subSessionIDFor(i.ChannelID)})
+}
+
+func (h *ModelSettingsHandler) resolveBoth(i *discordgo.InteractionCreate) (main, sub *sdk.Session, err error) {
+	if main, err = h.resolve(i); err != nil {
+		return nil, nil, err
+	}
+	if sub, err = h.resolveSub(i); err != nil {
+		return nil, nil, err
+	}
+	return main, sub, nil
+}
+
+// resolveActive returns the session the channel currently talks to: the sub
+// session while the main session's mode is sub, else the main session.
+func (h *ModelSettingsHandler) resolveActive(main *sdk.Session, i *discordgo.InteractionCreate) (*sdk.Session, error) {
+	if main.Config().AgentMode == sdk.AgentModeSub {
+		return h.resolveSub(i)
+	}
+	return main, nil
+}
+
+// seedSub copies the main session's settings into an empty sub session so
+// entering sub mode starts from the current settings and diverges there.
+func (h *ModelSettingsHandler) seedSub(main, sub *sdk.Session) error {
+	if sub.Config().Provider != "" {
+		return nil
+	}
+	config := main.Config()
+	keys, ok := h.ProviderKeys[config.Provider]
+	if !ok || keys == nil {
+		return fmt.Errorf("provider %q has no API key pool", config.Provider)
+	}
+	if err := sub.SetProvider(config.Provider, keys); err != nil {
 		return err
 	}
-	if err := session.SetAgentMode(mode); err != nil {
-		return err
-	}
-	if mode == sdk.AgentModeSub {
-		// First entry seeds the sub side from main so both sides start
-		// equal and the user diverges from there (REQ-030).
-		mainProvider := session.Config().Provider
-		if err := session.EnsureSubSettings(h.ProviderKeys[mainProvider]); err != nil {
+	if config.Model != "" {
+		if err := sub.SetModel(config.Model); err != nil {
 			return err
 		}
 	}
+	if config.Temperature == nil {
+		if err := sub.ClearTemperature(); err != nil {
+			return err
+		}
+	} else if err := sub.SetTemperature(*config.Temperature); err != nil {
+		return err
+	}
+	if config.ThinkingLevel == "" {
+		if err := sub.ClearThinkingLevel(); err != nil {
+			return err
+		}
+	} else if err := sub.SetThinkingLevel(config.ThinkingLevel); err != nil {
+		return err
+	}
+	if err := sub.SetKeyIndex(config.KeyIndex); err != nil {
+		return err
+	}
+	return sub.SetAgentMode(sdk.AgentModeSub)
+}
+
+func (h *ModelSettingsHandler) pickAgentMode(i *discordgo.InteractionCreate, pages *modelPanelPages, mode sdk.AgentMode) error {
+	main, sub, err := h.resolveBoth(i)
+	if err != nil {
+		return err
+	}
+	if err := main.SetAgentMode(mode); err != nil {
+		return err
+	}
+	active := main
+	if mode == sdk.AgentModeSub {
+		if err := h.seedSub(main, sub); err != nil {
+			return err
+		}
+		active = sub
+	}
 	// Land on the active side's model page.
-	effective := session.EffectiveConfig()
-	if models, err := h.loadModels(effective.Provider); err == nil && len(models) > 0 {
-		pages.model = modelPageFor(models, effective.Model)
+	config := active.Config()
+	if models, err := h.loadModels(config.Provider); err == nil && len(models) > 0 {
+		pages.model = modelPageFor(models, config.Model)
 	}
 	return nil
 }
@@ -304,11 +375,15 @@ func (h *ModelSettingsHandler) pickProvider(i *discordgo.InteractionCreate, page
 	if keys == nil {
 		return fmt.Errorf("provider %q has no API key pool", provider)
 	}
-	session, err := h.resolve(i)
+	main, err := h.resolve(i)
 	if err != nil {
 		return err
 	}
-	previousModel := session.EffectiveConfig().Model
+	session, err := h.resolveActive(main, i)
+	if err != nil {
+		return err
+	}
+	previousModel := session.Config().Model
 	// SetProvider clears the model and key index; restore a valid model so
 	// the session keeps working after every provider switch (REQ-028).
 	if err := session.SetProvider(provider, keys); err != nil {
@@ -349,17 +424,21 @@ func (h *ModelSettingsHandler) pickModel(i *discordgo.InteractionCreate, pages *
 	if choice == "" {
 		return fmt.Errorf("model is required")
 	}
-	session, err := h.resolve(i)
+	main, err := h.resolve(i)
 	if err != nil {
 		return err
 	}
-	effective := session.EffectiveConfig()
-	models, err := h.loadModels(effective.Provider)
+	session, err := h.resolveActive(main, i)
+	if err != nil {
+		return err
+	}
+	config := session.Config()
+	models, err := h.loadModels(config.Provider)
 	if err != nil {
 		return err
 	}
 	if !modelInCatalog(models, choice) {
-		return fmt.Errorf("model %q is not available for provider %q", choice, effective.Provider)
+		return fmt.Errorf("model %q is not available for provider %q", choice, config.Provider)
 	}
 	return session.SetModel(choice)
 }
@@ -368,11 +447,15 @@ func (h *ModelSettingsHandler) pickModel(i *discordgo.InteractionCreate, pages *
 // the session values. A modal must be the immediate interaction response,
 // so this runs before any defer (REQ-024).
 func (h *ModelSettingsHandler) openModal(s interactionAPI, i *discordgo.InteractionCreate) error {
-	session, err := h.resolve(i)
+	main, err := h.resolve(i)
 	if err != nil {
 		return h.respondError(s, i, err.Error())
 	}
-	config := session.EffectiveConfig()
+	session, err := h.resolveActive(main, i)
+	if err != nil {
+		return h.respondError(s, i, err.Error())
+	}
+	config := session.Config()
 	thinking := string(config.ThinkingLevel)
 	if thinking == "" {
 		thinking = "default"
@@ -400,7 +483,11 @@ func (h *ModelSettingsHandler) openModal(s interactionAPI, i *discordgo.Interact
 // the interaction budget (CHANGE-014).
 func (h *ModelSettingsHandler) submitModal(s interactionAPI, i *discordgo.InteractionCreate) error {
 	values := modalValues(i)
-	session, err := h.resolve(i)
+	main, err := h.resolve(i)
+	if err != nil {
+		return h.respondError(s, i, err.Error())
+	}
+	session, err := h.resolveActive(main, i)
 	if err != nil {
 		return h.respondError(s, i, err.Error())
 	}
@@ -449,7 +536,11 @@ func (h *ModelSettingsHandler) pickKey(i *discordgo.InteractionCreate, choice st
 	if err != nil || index < 1 {
 		return fmt.Errorf("API Pool must be a positive number")
 	}
-	session, err := h.resolve(i)
+	main, err := h.resolve(i)
+	if err != nil {
+		return err
+	}
+	session, err := h.resolveActive(main, i)
 	if err != nil {
 		return err
 	}
@@ -476,16 +567,19 @@ func (h *ModelSettingsHandler) loadModels(provider sdk.ProviderID) ([]sdk.Model,
 // renderPanel builds the one V2 panel message following the approved sketch:
 // a summary container, the control rows, a separator, then Save at the very
 // bottom. failure, when non-empty, is shown as message text above the
-// container until the next successful pick clears it. Every control reads
-// the active side; the summary shows both sides (REQ-028, CHANGE-018).
+// container until the next successful pick clears it. The summary shows both
+// sessions; every control reads the active one (REQ-028, CHANGE-021).
 func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages *modelPanelPages, failure string) (string, []discordgo.MessageComponent, error) {
-	session, err := h.resolve(i)
+	main, sub, err := h.resolveBoth(i)
 	if err != nil {
 		return "", nil, err
 	}
-	config := session.Config()
-	effective := session.EffectiveConfig()
-	provider := effective.Provider
+	mainConfig, subConfig := main.Config(), sub.Config()
+	active := mainConfig
+	if mainConfig.AgentMode == sdk.AgentModeSub {
+		active = subConfig
+	}
+	provider := active.Provider
 	if provider == "" && len(h.Providers) > 0 {
 		provider = h.Providers[0]
 	}
@@ -506,7 +600,7 @@ func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages
 	}
 	modelOptions, modelPlaceholder := modelMenuOptions(models, pages.model)
 	components := []discordgo.MessageComponent{
-		panelLiveContainer(config, effective, h, provider, pages, modelOptions, modelPlaceholder),
+		panelLiveContainer(mainConfig, subConfig, active, h, provider, pages, modelOptions, modelPlaceholder),
 	}
 	return content, components, nil
 }
@@ -515,19 +609,19 @@ func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages
 // every control shares the accent bar: summary texts, then all controls as
 // action rows (ActionRows with buttons and selects are valid container
 // children), ending with Save. Ten children total (CHANGE-020).
-func panelLiveContainer(config, effective sdk.SessionConfig, h *ModelSettingsHandler, provider sdk.ProviderID, pages *modelPanelPages, modelOptions []discordgo.SelectMenuOption, modelPlaceholder string) discordgo.Container {
-	thinking := string(effective.ThinkingLevel)
+func panelLiveContainer(mainConfig, subConfig, active sdk.SessionConfig, h *ModelSettingsHandler, provider sdk.ProviderID, pages *modelPanelPages, modelOptions []discordgo.SelectMenuOption, modelPlaceholder string) discordgo.Container {
+	thinking := string(active.ThinkingLevel)
 	if thinking == "" {
 		thinking = "default"
 	}
 	return panelContainer([]discordgo.MessageComponent{
 		discordgo.TextDisplay{Content: "**Session Model Settings**"},
-		discordgo.TextDisplay{Content: panelModeBlock("**Main agent**", config.Provider, config.Model, config.ThinkingLevel, config.Temperature, config.KeyIndex)},
+		discordgo.TextDisplay{Content: panelModeBlock("**Main agent**", mainConfig.Provider, mainConfig.Model, mainConfig.ThinkingLevel, mainConfig.Temperature, mainConfig.KeyIndex)},
 		discordgo.Separator{Divider: boolPtr(true)},
-		discordgo.TextDisplay{Content: panelModeBlock("**Sub agent**", config.Sub.Provider, config.Sub.Model, config.Sub.ThinkingLevel, config.Sub.Temperature, config.Sub.KeyIndex)},
+		discordgo.TextDisplay{Content: panelModeBlock("**Sub agent**", subConfig.Provider, subConfig.Model, subConfig.ThinkingLevel, subConfig.Temperature, subConfig.KeyIndex)},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.Button{CustomID: modelPanelAgentMain, Style: panelAgentButtonStyle(config, sdk.AgentModeMain), Label: "🤖 Main agent"},
-			discordgo.Button{CustomID: modelPanelAgentSub, Style: panelAgentButtonStyle(config, sdk.AgentModeSub), Label: "⚡ Sub agent"},
+			discordgo.Button{CustomID: modelPanelAgentMain, Style: panelAgentButtonStyle(mainConfig, sdk.AgentModeMain), Label: "🤖 Main agent"},
+			discordgo.Button{CustomID: modelPanelAgentSub, Style: panelAgentButtonStyle(mainConfig, sdk.AgentModeSub), Label: "⚡ Sub agent"},
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			discordgo.SelectMenu{CustomID: modelPanelProvider, MenuType: discordgo.StringSelectMenu, Placeholder: "📦 Select provider", Options: pagedProviderOptions(h.Providers, pages.provider), MinValues: intPtr(1), MaxValues: 1},
@@ -537,7 +631,7 @@ func panelLiveContainer(config, effective sdk.SessionConfig, h *ModelSettingsHan
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			discordgo.Button{CustomID: modelPanelThinking, Style: discordgo.SecondaryButton, Label: "💭 Thinking: " + thinking},
-			discordgo.Button{CustomID: modelPanelTemp, Style: discordgo.SecondaryButton, Label: "🌡️ Temp: " + temperatureLabel(effective.Temperature)},
+			discordgo.Button{CustomID: modelPanelTemp, Style: discordgo.SecondaryButton, Label: "🌡️ Temp: " + temperatureLabel(active.Temperature)},
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			discordgo.SelectMenu{CustomID: modelPanelKey, MenuType: discordgo.StringSelectMenu, Placeholder: "🔑 Select API key pool", Options: makeKeyOptions(panelKeyCount(h, provider)), MinValues: intPtr(1), MaxValues: 1},
@@ -558,13 +652,13 @@ func panelAgentButtonStyle(config sdk.SessionConfig, mode sdk.AgentMode) discord
 
 // panelSummaryContainer renders the saved panel: the summary container
 // alone with no controls left to press (CHANGE-017).
-func panelSummaryContainer(config sdk.SessionConfig) discordgo.Container {
+func panelSummaryContainer(main, sub sdk.SessionConfig) discordgo.Container {
 	return panelContainer([]discordgo.MessageComponent{
 		discordgo.TextDisplay{Content: "**Session Model Settings**"},
-		discordgo.TextDisplay{Content: panelModeBlock("**Main agent**", config.Provider, config.Model, config.ThinkingLevel, config.Temperature, config.KeyIndex)},
+		discordgo.TextDisplay{Content: panelModeBlock("**Main agent**", main.Provider, main.Model, main.ThinkingLevel, main.Temperature, main.KeyIndex)},
 		discordgo.Separator{Divider: boolPtr(true)},
-		discordgo.TextDisplay{Content: panelModeBlock("**Sub agent**", config.Sub.Provider, config.Sub.Model, config.Sub.ThinkingLevel, config.Sub.Temperature, config.Sub.KeyIndex)},
-		discordgo.TextDisplay{Content: panelModeStatus(config)},
+		discordgo.TextDisplay{Content: panelModeBlock("**Sub agent**", sub.Provider, sub.Model, sub.ThinkingLevel, sub.Temperature, sub.KeyIndex)},
+		discordgo.TextDisplay{Content: panelModeStatus(main)},
 	})
 }
 
@@ -782,10 +876,10 @@ func modalSelectValues(i *discordgo.InteractionCreate) map[string]string { retur
 // sessionSettingsSummary renders the settings report shared by the /model
 // fallback paths and the /new channel summary: the main block followed by
 // the sub block, mirroring the panel (REQ-027, REQ-030).
-func sessionSettingsSummary(config sdk.SessionConfig) string {
+func sessionSettingsSummary(main, sub sdk.SessionConfig) string {
 	return "**Session Model Settings**\n" +
-		panelModeBlock("**Main agent**", config.Provider, config.Model, config.ThinkingLevel, config.Temperature, config.KeyIndex) + "\n" +
-		panelModeBlock("**Sub agent**", config.Sub.Provider, config.Sub.Model, config.Sub.ThinkingLevel, config.Sub.Temperature, config.Sub.KeyIndex)
+		panelModeBlock("**Main agent**", main.Provider, main.Model, main.ThinkingLevel, main.Temperature, main.KeyIndex) + "\n" +
+		panelModeBlock("**Sub agent**", sub.Provider, sub.Model, sub.ThinkingLevel, sub.Temperature, sub.KeyIndex)
 }
 func temperatureLabel(value *float64) string {
 	if value == nil {
@@ -821,6 +915,6 @@ func makeThinkingOptions(current string) []discordgo.SelectMenuOption {
 	}
 	return options
 }
-func (h *ModelSettingsHandler) summary(session *sdk.Session) string {
-	return sessionSettingsSummary(session.Config())
+func (h *ModelSettingsHandler) summary(main, sub *sdk.Session) string {
+	return sessionSettingsSummary(main.Config(), sub.Config())
 }

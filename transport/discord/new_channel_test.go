@@ -90,7 +90,29 @@ func newChannelTestSessions(t *testing.T) (source, target *sdk.Session, resolve 
 		t.Fatal(err)
 	}
 	target = sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:chan-new"}, keys)
-	sessions := map[string]*sdk.Session{"discord:channel:src": source, "discord:channel:chan-new": target}
+	sourceSub := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:src:sub"}, keys)
+	if err := sourceSub.SetProvider("C.ai", keys); err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceSub.SetModel("c1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceSub.SetThinkingLevel(sdk.ThinkingLow); err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceSub.SetKeyIndex(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceSub.SetAgentMode(sdk.AgentModeSub); err != nil {
+		t.Fatal(err)
+	}
+	targetSub := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:chan-new:sub"}, keys)
+	sessions := map[string]*sdk.Session{
+		"discord:channel:src":          source,
+		"discord:channel:src:sub":      sourceSub,
+		"discord:channel:chan-new":     target,
+		"discord:channel:chan-new:sub": targetSub,
+	}
 	return source, target, func(_ context.Context, input sdk.Input) (*sdk.Session, error) {
 		session, ok := sessions[input.SessionID]
 		if !ok {
@@ -122,15 +144,11 @@ func TestNewChannelNameUsesDateAndTime(t *testing.T) {
 }
 
 func TestNewChannelClonesSettingsAndReports(t *testing.T) {
-	source, target, resolve, keys := newChannelTestSessions(t)
-	subKeys := sdk.NewKeyPool("s1", "s2")
-	if err := source.SetSubSettings(sdk.ModeSettings{Provider: "C.ai", Model: "c1", KeyIndex: 1, ThinkingLevel: sdk.ThinkingLow}, subKeys); err != nil {
-		t.Fatal(err)
-	}
+	_, target, resolve, keys := newChannelTestSessions(t)
 	fake := &fakeNewChannelDiscord{newID: "chan-new"}
 	handler := &NewChannelHandler{
 		ResolveSession: resolve,
-		ProviderKeys:   map[sdk.ProviderID]*sdk.KeyPool{"B.ai": keys, "C.ai": subKeys},
+		ProviderKeys:   map[sdk.ProviderID]*sdk.KeyPool{"B.ai": keys, "C.ai": keys},
 		Now:            func() time.Time { return time.Date(2026, 9, 15, 14, 30, 0, 0, time.UTC) },
 	}
 	if err := handler.Handle(fake, newChannelInteraction("guild-1", "src")); err != nil {
@@ -157,10 +175,15 @@ func TestNewChannelClonesSettingsAndReports(t *testing.T) {
 	if got.Provider != "B.ai" || got.Model != "qwen3.8-flash" || got.ThinkingLevel != sdk.ThinkingMedium || got.KeyIndex != 1 || got.AgentMode != sdk.AgentModeSub {
 		t.Fatalf("settings not cloned: %+v", got)
 	}
-	if got.Sub.Provider != "C.ai" || got.Sub.Model != "c1" || got.Sub.KeyIndex != 1 || got.Sub.ThinkingLevel != sdk.ThinkingLow {
-		t.Fatalf("sub settings not cloned: %+v", got.Sub)
+	targetSub, err := resolve(context.Background(), sdk.Input{SessionID: "discord:channel:chan-new:sub"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if key, err := target.APIKey(); err != nil || key != "s2" {
+	subGot := targetSub.Config()
+	if subGot.Provider != "C.ai" || subGot.Model != "c1" || subGot.KeyIndex != 1 || subGot.ThinkingLevel != sdk.ThinkingLow || subGot.AgentMode != sdk.AgentModeSub {
+		t.Fatalf("sub settings not cloned: %+v", subGot)
+	}
+	if key, err := targetSub.APIKey(); err != nil || key != "k2" {
 		t.Fatalf("target sub pool wrong: %q %v", key, err)
 	}
 	if got.Temperature == nil || *got.Temperature != 0.7 {
@@ -225,7 +248,7 @@ func TestNewChannelRequiresSourceSettings(t *testing.T) {
 func TestNewChannelCreateFailureStaysEphemeral(t *testing.T) {
 	_, _, resolve, keys := newChannelTestSessions(t)
 	fake := &fakeNewChannelDiscord{createErr: errors.New("403")}
-	handler := &NewChannelHandler{ResolveSession: resolve, ProviderKeys: map[sdk.ProviderID]*sdk.KeyPool{"B.ai": keys}}
+	handler := &NewChannelHandler{ResolveSession: resolve, ProviderKeys: map[sdk.ProviderID]*sdk.KeyPool{"B.ai": keys, "C.ai": keys}}
 	if err := handler.Handle(fake, newChannelInteraction("guild-1", "src")); err != nil {
 		t.Fatal(err)
 	}

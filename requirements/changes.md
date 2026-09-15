@@ -277,3 +277,16 @@ Reason: ทั้ง panel อยู่ใน accent bar เดียวกั�
 Impact: transport/discord/model_settings.go (render/frozen layout), model_settings_test.go; ไม่แตะ sdk, /new, gateway, modal, canonical contract
 Validation: top-level มี Container เดียว; children ครบ 10 ตามลำดับ; custom ID ครบ; V2 flag ครบ; Save freeze เหลือ container เดียว; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-021
+
+Date: 2026-09-15
+Type: revise
+Request: main/sub ทำงานไม่ถูก แยกให้ชัด session sub เก็บแยก db reuse ได้ตลอดจนกว่าจะลบ
+Conflict: CHANGE-018 (overlay Sub ใน session เดียว ประวัติปนกัน)
+Previous: CHANGE-018 main/sub เป็น overlay ใน session เดียว (history เดียว db เดียว)
+New: REQ-030 สอง sessions ต่อ channel (`discord:channel:<id>` planner + `discord:channel:<id>:sub` worker db แยก) settings อยู่ top-level ของแต่ละ session ไม่มี overlay; gateway route ข้อความตามโหมด active บน main session (resolve ล้มเหลวใช้ main); revert setters/effective/pool กลับ top-level ทั้งหมด (คง `AgentMode` + `SetAgentMode` + `planningFor` ราย session); panel resolve สอง sessions สรุปสองบล็อก controls/modal แก้ฝั่ง active เข้า sub ครั้งแรก seed จาก main; `/new` คัดลอกสอง sessions + สรุปสองบล็อก; ยังไม่มีคำสั่งลบ session (นอก scope รอบนี้)
+Reason: ประวัติการคุยต้องแยกกัน main วางแผน sub ทำงาน ไม่ปน; sub session ต้องอยู่ถาวรเรียกซ้ำได้ไม่ผูกกับ job
+Impact: sdk/types.go (ลบ ModeSettings/Sub), sdk/session_settings.go (setters top-level), sdk/routing.go (ลบ subKeys/effective/active pool), sdk/router_client.go, sdk/agent.go, sdk/subagent.go, runtime/session_manager.go (revert re-attach), sdk/mode_settings_test.go (ลบ), sdk/agent_mode_test.go, transport/discord/gateway.go (route ตาม mode), cmd/ai/main.go (wiring), transport/discord/model_settings.go (2 sessions), transport/discord/new_channel.go; ไม่แตะ modal, V2 layout, canonical contract
+Validation: main/sub turn ใช้ session/history/db ของตัวเอง; toggle สลับฝั่ง; seed ครั้งแรก; restart แล้วสองฝั่งกลับมา; panel สรุป/controls ถูกฝั่ง; /new copy ครบ; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: accepted

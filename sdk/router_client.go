@@ -13,7 +13,7 @@ type RouterClient struct { Router *Router; Adapters map[AdapterID]Provider }
 func NewRouterClient(router *Router) *RouterClient { return &RouterClient{Router: router, Adapters: make(map[AdapterID]Provider)} }
 func (c *RouterClient) RegisterAdapter(id AdapterID, p Provider) { c.Adapters[id] = p }
 func (c *RouterClient) providerFor(session *Session, model string) (Provider, ModelRoute, error) {
-	provider := session.EffectiveConfig().Provider
+	provider := session.Config().Provider
 	route, err := c.Router.Resolve(provider, model)
 	if err != nil && strings.Contains(err.Error(), "model catalogue for provider=") {
 		adapterConfig, configErr := c.Router.Provider(provider)
@@ -30,7 +30,7 @@ type RouteError struct { Provider ProviderID; Model string; Adapter AdapterID }
 func (e *RouteError) Error() string { return "sdk: adapter not registered for provider=" + string(e.Provider) + " model=" + e.Model + " adapter=" + string(e.Adapter) }
 func (c *RouterClient) RefreshModels(ctx context.Context, provider ProviderID) error { config, err := c.Router.Provider(provider); if err != nil { return err }; adapter, ok := c.Adapters[config.Adapter]; if !ok { return &RouteError{Provider: provider, Adapter: config.Adapter} }; return c.Router.RefreshModels(ctx, provider, adapter) }
 func (c *RouterClient) Generate(ctx context.Context, session *Session, req Request) (Response, error) {
-	cfg := session.EffectiveConfig(); model := req.Model; if model == "" { model = cfg.Model }
+	cfg := session.Config(); model := req.Model; if model == "" { model = cfg.Model }
 	p, route, err := c.providerFor(session, model); if err != nil { return Response{}, err }
 	req.Provider, req.Model = route.Provider, route.Model
 	if len(req.Messages) == 0 { req.Messages = session.History() }
@@ -47,7 +47,7 @@ func sleepBackoff(ctx context.Context, p RetryPolicy, attempt int, err error) er
 func (c *RouterClient) GenerateTurn(ctx context.Context, session *Session, user Turn, req Request) (Response, error) { before := session.History(); session.Append(user); req.Messages = session.History(); resp, err := c.Generate(ctx, session, req); if err != nil { session.ReplaceHistory(before); return Response{}, err }; commitResponse(session, resp); return resp, nil }
 func commitResponse(session *Session, resp Response) { if len(resp.Content) > 0 || resp.Reasoning != nil { turn:=Turn{Role:RoleModel,Content:append([]ContentPart(nil),resp.Content...)}; if resp.Reasoning!=nil { r:=*resp.Reasoning; turn.Reasoning=&r }; session.Append(turn) }; for _, call := range resp.ToolCalls { call := call; session.Append(Turn{Role: RoleToolCall, ToolCall: &call}) } }
 func (c *RouterClient) Stream(ctx context.Context, session *Session, req Request) (<-chan Event, error) {
-	cfg := session.EffectiveConfig(); model := req.Model; if model == "" { model = cfg.Model }
+	cfg := session.Config(); model := req.Model; if model == "" { model = cfg.Model }
 	p, route, err := c.providerFor(session, model); if err != nil { return nil, err }
 	req.Provider, req.Model = route.Provider, route.Model
 	if len(req.Messages) == 0 { req.Messages = session.History() }

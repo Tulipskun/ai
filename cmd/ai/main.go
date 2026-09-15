@@ -605,6 +605,7 @@ func run(ctx context.Context, cliOnly bool) error {
 		defer discord.Close(context.Background())
 		discord.ConfigureAuthorizedUser(transportConfig.Discord.OwnerID)
 		discord.ConfigureSessionList(sessions.ListSessions)
+		discord.ConfigureSessionResolver(sessions.Resolve)
 		modelSettings := &discordtransport.ModelSettingsHandler{ResolveSession: sessions.Resolve, SessionForChannel: discord.SessionIDForChannel, Providers: rt.Providers, ProviderKeys: providerKeys, Models: func(ctx context.Context, provider sdk.ProviderID) ([]sdk.Model, error) {
 			models := rt.Router.Models(provider)
 			if len(models) == 0 {

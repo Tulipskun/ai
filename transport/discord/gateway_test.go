@@ -279,3 +279,37 @@ func TestTraceFlushDelayHonorsCooldown(t *testing.T) {
 		t.Fatalf("stale push delay = %s, want 0", d)
 	}
 }
+
+func TestRouteSessionIDFollowsChannelMode(t *testing.T) {
+	gateway, err := NewGateway("token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := "discord:channel:c1"
+	if got := gateway.routeSessionID("c1", main); got != main {
+		t.Fatalf("no resolver must keep main: %q", got)
+	}
+	keys := sdk.NewKeyPool("k1")
+	mainSession := sdk.NewSession(sdk.SessionConfig{ID: main}, keys)
+	gateway.ConfigureSessionResolver(func(_ context.Context, input sdk.Input) (*sdk.Session, error) {
+		if input.SessionID != main {
+			t.Fatalf("must resolve the main session: %q", input.SessionID)
+		}
+		return mainSession, nil
+	})
+	if got := gateway.routeSessionID("c1", main); got != main {
+		t.Fatalf("main mode must keep main: %q", got)
+	}
+	if err := mainSession.SetAgentMode(sdk.AgentModeSub); err != nil {
+		t.Fatal(err)
+	}
+	if got := gateway.routeSessionID("c1", main); got != main+":sub" {
+		t.Fatalf("sub mode must route to the sub session: %q", got)
+	}
+	gateway.ConfigureSessionResolver(func(context.Context, sdk.Input) (*sdk.Session, error) {
+		return nil, context.DeadlineExceeded
+	})
+	if got := gateway.routeSessionID("c1", main); got != main {
+		t.Fatalf("resolve failure must keep main: %q", got)
+	}
+}

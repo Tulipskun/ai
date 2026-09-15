@@ -59,73 +59,110 @@ func (h *NewChannelHandler) sessionIDFor(channelID string) string {
 	return "discord:channel:" + channelID
 }
 
-// sourceConfig reads the invoking channel's model settings and refuses to
-// proceed when there is nothing to clone, so a failed invocation never leaves
-// an orphan channel behind.
-func (h *NewChannelHandler) sourceConfig(ctx context.Context, sourceSessionID string) (sdk.SessionConfig, *sdk.KeyPool, error) {
+// sourceConfigs reads the invoking channel's model settings for both agent
+// sides and refuses to proceed when there is nothing to clone, so a failed
+// invocation never leaves an orphan channel behind.
+func (h *NewChannelHandler) sourceConfigs(ctx context.Context, sourceChannelID string) (main sdk.SessionConfig, mainKeys *sdk.KeyPool, sub sdk.SessionConfig, subKeys *sdk.KeyPool, err error) {
 	if h.ResolveSession == nil {
-		return sdk.SessionConfig{}, nil, fmt.Errorf("session manager is not configured")
+		return sdk.SessionConfig{}, nil, sdk.SessionConfig{}, nil, fmt.Errorf("session manager is not configured")
 	}
 	if err := ctx.Err(); err != nil {
-		return sdk.SessionConfig{}, nil, err
+		return sdk.SessionConfig{}, nil, sdk.SessionConfig{}, nil, err
 	}
-	source, err := h.ResolveSession(ctx, sdk.Input{SessionID: sourceSessionID})
+	source, err := h.ResolveSession(ctx, sdk.Input{SessionID: h.sessionIDFor(sourceChannelID)})
 	if err != nil {
-		return sdk.SessionConfig{}, nil, err
+		return sdk.SessionConfig{}, nil, sdk.SessionConfig{}, nil, err
 	}
-	config := source.Config()
-	if strings.TrimSpace(string(config.Provider)) == "" || strings.TrimSpace(config.Model) == "" {
-		return sdk.SessionConfig{}, nil, fmt.Errorf("this channel has no model settings yet; configure them with /model first")
+	main = source.Config()
+	if strings.TrimSpace(string(main.Provider)) == "" || strings.TrimSpace(main.Model) == "" {
+		return sdk.SessionConfig{}, nil, sdk.SessionConfig{}, nil, fmt.Errorf("this channel has no model settings yet; configure them with /model first")
 	}
-	keys := h.ProviderKeys[config.Provider]
-	if keys == nil {
-		return sdk.SessionConfig{}, nil, fmt.Errorf("provider %q has no API key pool", config.Provider)
+	mainKeys = h.ProviderKeys[main.Provider]
+	if mainKeys == nil {
+		return sdk.SessionConfig{}, nil, sdk.SessionConfig{}, nil, fmt.Errorf("provider %q has no API key pool", main.Provider)
 	}
-	return config, keys, nil
+	subSession, err := h.ResolveSession(ctx, sdk.Input{SessionID: h.subSessionIDFor(sourceChannelID)})
+	if err != nil {
+		return sdk.SessionConfig{}, nil, sdk.SessionConfig{}, nil, err
+	}
+	sub = subSession.Config()
+	if sub.Provider != "" {
+		subKeys = h.ProviderKeys[sub.Provider]
+		if subKeys == nil {
+			return sdk.SessionConfig{}, nil, sdk.SessionConfig{}, nil, fmt.Errorf("provider %q has no API key pool", sub.Provider)
+		}
+	}
+	return main, mainKeys, sub, subKeys, nil
 }
 
-// applySettings copies validated source settings into the new channel's
-// session: the main side through the active setters (the target starts in
-// main mode), then the sub side explicitly, then the mode last. SetProvider
-// runs first because it resets the model and key index it then re-applies.
-func (h *NewChannelHandler) applySettings(ctx context.Context, targetSessionID string, config sdk.SessionConfig, keys *sdk.KeyPool) (sdk.SessionConfig, error) {
+// subSessionIDFor derives the channel's sub-agent session ID.
+func (h *NewChannelHandler) subSessionIDFor(channelID string) string {
+	return h.sessionIDFor(channelID) + ":sub"
+}
+
+// applySettings copies both validated source sessions into the new channel's
+// sessions. The targets start fresh in main mode, so the plain setters land
+// on the right side; the mode is copied last. A sub-active source with an
+// empty sub side seeds the target sub from the target main (CHANGE-021).
+func (h *NewChannelHandler) applySettings(ctx context.Context, targetSessionID string, main sdk.SessionConfig, mainKeys *sdk.KeyPool, sub sdk.SessionConfig, subKeys *sdk.KeyPool) (sdk.SessionConfig, sdk.SessionConfig, error) {
 	target, err := h.ResolveSession(ctx, sdk.Input{SessionID: targetSessionID})
 	if err != nil {
-		return sdk.SessionConfig{}, err
+		return sdk.SessionConfig{}, sdk.SessionConfig{}, err
 	}
+	if err := copySideSettings(target, main, mainKeys); err != nil {
+		return sdk.SessionConfig{}, sdk.SessionConfig{}, err
+	}
+	targetSub, err := h.ResolveSession(ctx, sdk.Input{SessionID: targetSessionID + ":sub"})
+	if err != nil {
+		return sdk.SessionConfig{}, sdk.SessionConfig{}, err
+	}
+	if sub.Provider != "" {
+		if err := copySideSettings(targetSub, sub, subKeys); err != nil {
+			return sdk.SessionConfig{}, sdk.SessionConfig{}, err
+		}
+		if err := targetSub.SetAgentMode(sdk.AgentModeSub); err != nil {
+			return sdk.SessionConfig{}, sdk.SessionConfig{}, err
+		}
+	}
+	if err := target.SetAgentMode(panelAgentMode(main)); err != nil {
+		return sdk.SessionConfig{}, sdk.SessionConfig{}, err
+	}
+	if target.Config().AgentMode == sdk.AgentModeSub && targetSub.Config().Provider == "" {
+		if err := copySideSettings(targetSub, target.Config(), mainKeys); err != nil {
+			return sdk.SessionConfig{}, sdk.SessionConfig{}, err
+		}
+		if err := targetSub.SetAgentMode(sdk.AgentModeSub); err != nil {
+			return sdk.SessionConfig{}, sdk.SessionConfig{}, err
+		}
+	}
+	return target.Config(), targetSub.Config(), nil
+}
+
+// copySideSettings applies one side's settings onto a fresh session.
+// SetProvider runs first because it resets the model and key index it then
+// re-applies.
+func copySideSettings(target *sdk.Session, config sdk.SessionConfig, keys *sdk.KeyPool) error {
 	if err := target.SetProvider(config.Provider, keys); err != nil {
-		return sdk.SessionConfig{}, err
+		return err
 	}
 	if err := target.SetModel(config.Model); err != nil {
-		return sdk.SessionConfig{}, err
+		return err
 	}
 	if config.Temperature == nil {
 		if err := target.ClearTemperature(); err != nil {
-			return sdk.SessionConfig{}, err
+			return err
 		}
 	} else if err := target.SetTemperature(*config.Temperature); err != nil {
-		return sdk.SessionConfig{}, err
+		return err
 	}
 	if config.ThinkingLevel == "" {
 		if err := target.ClearThinkingLevel(); err != nil {
-			return sdk.SessionConfig{}, err
+			return err
 		}
 	} else if err := target.SetThinkingLevel(config.ThinkingLevel); err != nil {
-		return sdk.SessionConfig{}, err
+		return err
 	}
-	if err := target.SetKeyIndex(config.KeyIndex); err != nil {
-		return sdk.SessionConfig{}, err
-	}
-	if config.Sub.Provider != "" {
-		subKeys := h.ProviderKeys[config.Sub.Provider]
-		if err := target.SetSubSettings(config.Sub, subKeys); err != nil {
-			return sdk.SessionConfig{}, err
-		}
-	}
-	if err := target.SetAgentMode(panelAgentMode(config)); err != nil {
-		return sdk.SessionConfig{}, err
-	}
-	return target.Config(), nil
+	return target.SetKeyIndex(config.KeyIndex)
 }
 
 func (h *NewChannelHandler) respondEphemeral(s newChannelDiscord, i *discordgo.InteractionCreate, message string) error {
@@ -155,7 +192,7 @@ func (h *NewChannelHandler) Handle(s newChannelDiscord, i *discordgo.Interaction
 	if sourceChannelID == "" {
 		return h.respondEphemeral(s, i, "Could not tell which channel invoked /new.")
 	}
-	config, keys, err := h.sourceConfig(context.Background(), h.sessionIDFor(sourceChannelID))
+	main, mainKeys, sub, subKeys, err := h.sourceConfigs(context.Background(), sourceChannelID)
 	if err != nil {
 		return h.respondEphemeral(s, i, err.Error())
 	}
@@ -166,11 +203,11 @@ func (h *NewChannelHandler) Handle(s newChannelDiscord, i *discordgo.Interaction
 	if err != nil || channel == nil || strings.TrimSpace(channel.ID) == "" {
 		return followupEphemeral(s, i, "Could not create the channel; the bot needs the Manage Channels permission.")
 	}
-	applied, err := h.applySettings(context.Background(), h.sessionIDFor(channel.ID), config, keys)
+	appliedMain, appliedSub, err := h.applySettings(context.Background(), h.sessionIDFor(channel.ID), main, mainKeys, sub, subKeys)
 	if err != nil {
 		return followupEphemeral(s, i, "Channel created, but settings were not copied: "+err.Error())
 	}
-	if _, err := s.ChannelMessageSend(channel.ID, sessionSettingsSummary(applied)); err != nil {
+	if _, err := s.ChannelMessageSend(channel.ID, sessionSettingsSummary(appliedMain, appliedSub)); err != nil {
 		return followupEphemeral(s, i, fmt.Sprintf("Channel created as <#%s> with the same model settings, but the summary message could not be delivered.", channel.ID))
 	}
 	return followupEphemeral(s, i, fmt.Sprintf("Created <#%s> with the same model settings as this channel.", channel.ID))

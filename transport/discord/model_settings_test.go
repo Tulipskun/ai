@@ -41,17 +41,21 @@ func panelButtonInteraction(customID string) *discordgo.InteractionCreate {
 	return interaction
 }
 
-func panelTestHandler(session *sdk.Session, keys *sdk.KeyPool, models []sdk.Model) *ModelSettingsHandler {
+func panelTestHandler(main *sdk.Session, keys *sdk.KeyPool, models []sdk.Model) (*ModelSettingsHandler, *sdk.Session) {
+	sub := sdk.NewSession(sdk.SessionConfig{ID: main.Config().ID + ":sub"}, keys)
 	return &ModelSettingsHandler{
 		Providers:    []sdk.ProviderID{"B.ai"},
 		ProviderKeys: map[sdk.ProviderID]*sdk.KeyPool{"B.ai": keys},
 		Models: func(_ context.Context, _ sdk.ProviderID) ([]sdk.Model, error) {
 			return models, nil
 		},
-		ResolveSession: func(_ context.Context, _ sdk.Input) (*sdk.Session, error) {
-			return session, nil
+		ResolveSession: func(_ context.Context, input sdk.Input) (*sdk.Session, error) {
+			if strings.HasSuffix(input.SessionID, ":sub") {
+				return sub, nil
+			}
+			return main, nil
 		},
-	}
+	}, sub
 }
 
 func lastEdit(t *testing.T, fake *fakeInteractionAPI) *discordgo.WebhookEdit {
@@ -228,7 +232,7 @@ func panelAccessoryStyles(t *testing.T, edit *discordgo.WebhookEdit) map[string]
 func TestPanelOpensOneRegularMessage(t *testing.T) {
 	keys := sdk.NewKeyPool("k1", "k2")
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1"}, keys)
-	handler := panelTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
+	handler, _ := panelTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
 	fake := &fakeInteractionAPI{}
 	if err := handler.openPanel(fake, panelCommandInteraction()); err != nil {
 		t.Fatal(err)
@@ -502,7 +506,7 @@ func TestPanelModelPickAppliesImmediately(t *testing.T) {
 	keys := sdk.NewKeyPool("k1")
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1", Provider: "B.ai", Model: "m1"}, keys)
 	models := []sdk.Model{{ID: "m1"}, {ID: "m2"}}
-	handler := panelTestHandler(session, keys, models)
+	handler, _ := panelTestHandler(session, keys, models)
 	fake := &fakeInteractionAPI{}
 	responds, edits := len(fake.responds), len(fake.edits)
 	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelModel, "m2")); err != nil {
@@ -532,7 +536,7 @@ func TestPanelModelPagesConditionalNav(t *testing.T) {
 	}
 	keys := sdk.NewKeyPool("k1")
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1", Provider: "B.ai", Model: "model-1"}, keys)
-	handler := panelTestHandler(session, keys, models)
+	handler, _ := panelTestHandler(session, keys, models)
 	fake := &fakeInteractionAPI{}
 	// Opening lands on the page holding the current model. The first page
 	// carries only Next plus 24 models, with the page in the menu name.
@@ -663,7 +667,7 @@ func panelModalSubmit(thinking, temperature string) *discordgo.InteractionCreate
 func TestPanelThinkingAndTempModal(t *testing.T) {
 	keys := sdk.NewKeyPool("k1")
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1"}, keys)
-	handler := panelTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
+	handler, _ := panelTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
 	fake := &fakeInteractionAPI{}
 	// Either button opens the same modal immediately, without deferring.
 	for _, button := range []string{modelPanelThinking, modelPanelTemp} {
@@ -797,6 +801,7 @@ func TestPanelProviderSwitchKeepsOrResetsModel(t *testing.T) {
 func TestPanelAgentModeSeedsAndEditsSubSide(t *testing.T) {
 	keys := sdk.NewKeyPool("k1", "k2")
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1", Provider: "B.ai", Model: "m1"}, keys)
+	sub := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1:sub"}, keys)
 	catalogs := map[sdk.ProviderID][]sdk.Model{
 		"B.ai": {{ID: "m1"}, {ID: "m2"}},
 		"C.ai": {{ID: "c1"}},
@@ -807,24 +812,33 @@ func TestPanelAgentModeSeedsAndEditsSubSide(t *testing.T) {
 		Models: func(_ context.Context, provider sdk.ProviderID) ([]sdk.Model, error) {
 			return catalogs[provider], nil
 		},
-		ResolveSession: func(_ context.Context, _ sdk.Input) (*sdk.Session, error) {
+		ResolveSession: func(_ context.Context, input sdk.Input) (*sdk.Session, error) {
+			if strings.HasSuffix(input.SessionID, ":sub") {
+				return sub, nil
+			}
 			return session, nil
 		},
 	}
 	fake := &fakeInteractionAPI{}
-	// Entering sub mode seeds its side from main.
+	// Entering sub mode seeds a fresh sub session from main.
 	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelAgentSub)); err != nil {
 		t.Fatal(err)
 	}
-	if got := session.Config(); got.AgentMode != sdk.AgentModeSub || got.Sub.Provider != "B.ai" || got.Sub.Model != "m1" {
+	if got := session.Config(); got.AgentMode != sdk.AgentModeSub {
+		t.Fatalf("channel mode = %q", got.AgentMode)
+	}
+	if got := sub.Config(); got.Provider != "B.ai" || got.Model != "m1" || got.AgentMode != sdk.AgentModeSub {
 		t.Fatalf("sub must start as a main copy: %+v", got)
 	}
-	// Edits in sub mode touch the sub side only.
+	// Edits in sub mode touch the sub session only; histories stay apart.
 	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelModel, "m2")); err != nil {
 		t.Fatal(err)
 	}
-	if got := session.Config(); got.Model != "m1" || got.Sub.Model != "m2" {
-		t.Fatalf("sides must diverge: %+v", got)
+	if got := session.Config(); got.Model != "m1" {
+		t.Fatalf("main must be untouched: %+v", got)
+	}
+	if got := sub.Config(); got.Model != "m2" {
+		t.Fatalf("sub must diverge: %+v", got)
 	}
 	texts := panelContainerTexts(t, lastEdit(t, fake))
 	if !strings.Contains(texts[1], "`m1`") || !strings.Contains(texts[2], "`m2`") {
@@ -839,10 +853,13 @@ func TestPanelAgentModeSeedsAndEditsSubSide(t *testing.T) {
 	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelProvider, "C.ai")); err != nil {
 		t.Fatal(err)
 	}
-	if got := session.Config(); got.Provider != "B.ai" || got.Model != "m1" || got.Sub.Provider != "C.ai" || got.Sub.Model != "c1" {
+	if got := session.Config(); got.Provider != "B.ai" || got.Model != "m1" {
+		t.Fatalf("main must be untouched: %+v", got)
+	}
+	if got := sub.Config(); got.Provider != "C.ai" || got.Model != "c1" {
 		t.Fatalf("sub provider switch wrong: %+v", got)
 	}
-	// Back in main mode the controls follow the main side again.
+	// Back in main mode the controls follow the main session again.
 	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelAgentMain)); err != nil {
 		t.Fatal(err)
 	}
@@ -858,7 +875,7 @@ func TestPanelAgentModeSeedsAndEditsSubSide(t *testing.T) {
 func TestPanelKeyPoolPickApplies(t *testing.T) {
 	keys := sdk.NewKeyPool("k1", "k2", "k3")
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1"}, keys)
-	handler := panelTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
+	handler, _ := panelTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
 	fake := &fakeInteractionAPI{}
 	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelKey, "3")); err != nil {
 		t.Fatal(err)
@@ -876,7 +893,7 @@ func TestPanelKeyPoolPickApplies(t *testing.T) {
 func TestPanelSaveFreezesPanel(t *testing.T) {
 	keys := sdk.NewKeyPool("k1")
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1", Provider: "B.ai", Model: "m1"}, keys)
-	handler := panelTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
+	handler, _ := panelTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
 	fake := &fakeInteractionAPI{}
 	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelSave)); err != nil {
 		t.Fatal(err)
@@ -911,7 +928,7 @@ func TestPanelSaveFreezesPanel(t *testing.T) {
 func TestPanelStaleControlsAnswerExpired(t *testing.T) {
 	keys := sdk.NewKeyPool("k1")
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1"}, keys)
-	handler := panelTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
+	handler, _ := panelTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
 	fake := &fakeInteractionAPI{}
 	stale := panelComponentInteraction("model:back")
 	if err := handler.Handle(fake, stale); err != nil {

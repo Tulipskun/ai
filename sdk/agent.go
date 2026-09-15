@@ -377,10 +377,10 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 			return Response{}, streamErr
 		}
 		if resp.Provider == "" {
-			resp.Provider = string(session.EffectiveConfig().Provider)
+			resp.Provider = string(session.Config().Provider)
 		}
 		if resp.Model == "" {
-			resp.Model = session.EffectiveConfig().Model
+			resp.Model = session.Config().Model
 		}
 		if len(resp.Content) == 0 {
 			resp.Content = text

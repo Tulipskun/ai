@@ -170,7 +170,6 @@ type Session struct {
 	mu        sync.RWMutex
 	config    SessionConfig
 	keys      *KeyPool
-	subKeys   *KeyPool
 	history   []Turn
 	store     *SessionDB
 	plan      PlanState
@@ -220,55 +219,11 @@ func (s *Session) Config() SessionConfig {
 		v := *c.Temperature
 		c.Temperature = &v
 	}
-	if c.Sub.Temperature != nil {
-		v := *c.Sub.Temperature
-		c.Sub.Temperature = &v
-	}
 	return c
 }
-
-// EffectiveConfig returns the settings of the active agent side: the
-// top-level fields for main, the Sub overlay for sub (REQ-030). Turn-time
-// readers use this instead of Config so a sub turn runs on sub settings.
-func (s *Session) EffectiveConfig() SessionConfig {
-	c := s.Config()
-	if c.AgentMode != AgentModeSub {
-		return c
-	}
-	c.Provider = c.Sub.Provider
-	c.Model = c.Sub.Model
-	c.KeyIndex = c.Sub.KeyIndex
-	c.ThinkingLevel = c.Sub.ThinkingLevel
-	c.Temperature = c.Sub.Temperature
-	return c
-}
-
-// activeKeys returns the key pool of the active side. Callers must hold at
-// least a read lock; APIKey and RotateAPIKey wrap this.
-func (s *Session) activeKeys() *KeyPool {
-	if s.config.AgentMode == AgentModeSub {
-		return s.subKeys
-	}
-	return s.keys
-}
-
-// ActiveKeys returns the key pool of the active agent side.
-func (s *Session) ActiveKeys() *KeyPool {
-	if s == nil {
-		return nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.activeKeys()
-}
-
 func (s *Session) APIKey() (string, error) {
 	s.mu.RLock()
-	keys := s.activeKeys()
-	index := s.config.KeyIndex
-	if s.config.AgentMode == AgentModeSub {
-		index = s.config.Sub.KeyIndex
-	}
+	keys, index := s.keys, s.config.KeyIndex
 	s.mu.RUnlock()
 	if keys == nil {
 		return "", errors.New("sdk: session has no key pool")
@@ -278,19 +233,14 @@ func (s *Session) APIKey() (string, error) {
 func (s *Session) RotateAPIKey() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.activeKeys() == nil {
+	if s.keys == nil {
 		return "", errors.New("sdk: session has no key pool")
 	}
-	key, err := s.activeKeys().Rotate()
+	key, err := s.keys.Rotate()
 	if err != nil {
 		return "", err
 	}
-	index := s.activeKeys().IndexOfCurrent()
-	if s.config.AgentMode == AgentModeSub {
-		s.config.Sub.KeyIndex = index
-	} else {
-		s.config.KeyIndex = index
-	}
+	s.config.KeyIndex = s.keys.IndexOfCurrent()
 	return key, nil
 }
 func (s *Session) History() []Turn { s.mu.RLock(); defer s.mu.RUnlock(); return cloneTurns(s.history) }

@@ -217,6 +217,7 @@ type Gateway struct {
 	sessionCommand   *SessionCommandHandler
 	newChannel       *NewChannelHandler
 	sessionMapping   *SessionMapping
+	resolveSession   func(context.Context, sdk.Input) (*sdk.Session, error)
 	stop             func(string) bool
 	retryStatusMu    sync.Mutex
 	retryStatus      map[string]string
@@ -255,6 +256,7 @@ func NewGateway(token string) (*Gateway, error) {
 			return
 		}
 		message.SessionID = gateway.SessionIDForChannel(message.ChannelID)
+		message.SessionID = gateway.routeSessionID(message.ChannelID, message.SessionID)
 		gateway.resetToolTrace(message.ChannelID)
 		// A new turn supersedes the outbound record of the previous one, so a
 		// later turn can upload the same reference again.
@@ -355,6 +357,32 @@ func (g *Gateway) ConfigureSessionMapping(mapping *SessionMapping) {
 	if g != nil && mapping != nil {
 		g.sessionMapping = mapping
 	}
+}
+
+// ConfigureSessionResolver lets the gateway route channel messages to the
+// active agent side: a channel whose main session runs in sub mode talks to
+// its sub session instead (REQ-030, CHANGE-021).
+func (g *Gateway) ConfigureSessionResolver(resolve func(context.Context, sdk.Input) (*sdk.Session, error)) {
+	if g != nil {
+		g.resolveSession = resolve
+	}
+}
+
+// routeSessionID returns the session a channel message belongs to: the
+// channel's sub session while its main session runs in sub mode, else the
+// main session. Resolution failures keep the main session.
+func (g *Gateway) routeSessionID(channelID, mainSessionID string) string {
+	if g == nil || g.resolveSession == nil {
+		return mainSessionID
+	}
+	session, err := g.resolveSession(context.Background(), sdk.Input{SessionID: mainSessionID})
+	if err != nil || session == nil {
+		return mainSessionID
+	}
+	if session.Config().AgentMode == sdk.AgentModeSub {
+		return mainSessionID + ":sub"
+	}
+	return mainSessionID
 }
 func (g *Gateway) SetChannelSession(channelID, sessionID string) error {
 	if g == nil {

@@ -212,3 +212,16 @@ Reason: ตัด nav ที่กดแล้วไม่ไปไหนออ�
 Impact: transport/discord/model_settings.go (modelMenuOptions/modelPageFor ใช้ panelPages/panelWindow ร่วมกับ provider, emoji labels), model_settings_test.go; ไม่แตะ sdk, gateway, /new, canonical contract
 Validation: หน้าแรกมีแค่ Next + 24 รายการ / หน้ากลางครบ / หน้าสุดท้ายมีแค่ Previous; placeholder (p/n) ตรง; emoji ไม่ทำให้ custom ID/value เปลี่ยน; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-016
+
+Date: 2026-09-15
+Type: revise
+Request: Next อยู่ด้านบน (หน้าแรก next + 1-24, หน้ากลาง previous + next + 23 รายการ, หน้าสุดท้าย previous + ที่เหลือ); thinking ใช้ 💭; key pool ไม่ preselect; สรุปเป็น embed
+Conflict: CHANGE-015 (Next อยู่ท้ายหน้าแรก; key pool preselect; สรุปเป็นข้อความ)
+Previous: CHANGE-015 provider/model paging หน้าแรก 24 รายการ + Next ต่อท้าย, key pool preselect ค่าปัจจุบัน, สรุปเป็น markdown text
+New: REQ-028 `pagedOptions` กลาง (ใช้ร่วม provider/model) วาง Next ไว้ options แรกเสมอ (หน้าแรก Next + 24 รายการ หน้ากลาง Previous + Next + 23 รายการ หน้าสุดท้าย Previous + ที่เหลือ รวมไม่เกิน 25); key pool เลิก preselect เหมือนอีกสองเมนู; สรุป settings ใน panel เป็น embed (title + fields Provider/Model/Thinking/Temperature/API Pool/Agent) แทน markdown text, error ยังเป็น content text เหนือ embed; thinking 💭 แทน 🧠 (ปุ่ม + modal title); หมายเหตุตัวอย่างหน้ากลาง 25-48 ของผู้ใช้ปรับเป็น 25-47 เพราะลิมิต 25 options
+Reason: nav อยู่ด้านบนเห็นก่อนไม่ต้องเลื่อน; ไม่ preselect ให้เมนูเป็นกลางทุกเมนู; embed อ่านง่ายกว่า text ก้อนเดียว
+Impact: transport/discord/model_settings.go (pagedOptions order, makeKeyOptions ไม่ preselect, renderPanel คืน embed, editPanelMessage helper, modal title), model_settings_test.go; ไม่แตะ shared summary (ใช้กับ /new ต่อ), sdk, gateway, canonical contract
+Validation: หน้าแรก Next อยู่อันแรก / หน้ากลาง Prev+Next อยู่อันแรก / หน้าสุดท้ายมีแค่ Prev; key pool ไม่มี default; panel edit มี embed ครบ 6 fields ถูกค่า; submit modal อัพเดท embed; error เป็น text; emoji ไม่แตะ ID/value; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: accepted

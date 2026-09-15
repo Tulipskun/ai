@@ -159,11 +159,11 @@ func (h *ModelSettingsHandler) openPanel(s interactionAPI, i *discordgo.Interact
 	}
 	pages := h.panelPagesFor(i.ChannelID, interactionUserID(i))
 	pages.provider, pages.model = 0, 0
-	content, components, err := h.renderPanel(i, pages, "")
+	content, embed, components, err := h.renderPanel(i, pages, "")
 	if err != nil {
 		return editOriginalMessage(s, i, "Model settings error: "+err.Error(), nil)
 	}
-	return editOriginalMessage(s, i, content, components)
+	return editPanelMessage(s, i, content, embed, components)
 }
 
 // stepPanel serves every panel control: the Thinking/Temp buttons open the
@@ -183,17 +183,29 @@ func (h *ModelSettingsHandler) stepPanel(s interactionAPI, i *discordgo.Interact
 		return err
 	}
 	pages := h.panelPagesFor(i.ChannelID, userID)
-	content, components, err := h.applyPick(i, pages, data)
+	content, embed, components, err := h.applyPick(i, pages, data)
 	if err != nil {
 		// Re-render the current panel with the failure inline: the channel
 		// keeps one message and the next successful pick clears the notice.
-		content, components, _ = h.renderPanel(i, pages, err.Error())
+		content, embed, components, _ = h.renderPanel(i, pages, err.Error())
 	}
-	return editOriginalMessage(s, i, content, components)
+	return editPanelMessage(s, i, content, embed, components)
+}
+
+// editPanelMessage rewrites the panel message with its summary embed,
+// keeping one message updated instead of sending new ones. A nil embed
+// leaves any previous embed untouched.
+func editPanelMessage(s interactionAPI, i *discordgo.InteractionCreate, content string, embed *discordgo.MessageEmbed, components []discordgo.MessageComponent) error {
+	edit := &discordgo.WebhookEdit{Content: &content, Components: &components}
+	if embed != nil {
+		edit.Embeds = &[]*discordgo.MessageEmbed{embed}
+	}
+	_, err := s.InteractionResponseEdit(i.Interaction, edit)
+	return err
 }
 
 // applyPick applies one control interaction and renders the panel again.
-func (h *ModelSettingsHandler) applyPick(i *discordgo.InteractionCreate, pages *modelPanelPages, data discordgo.MessageComponentInteractionData) (string, []discordgo.MessageComponent, error) {
+func (h *ModelSettingsHandler) applyPick(i *discordgo.InteractionCreate, pages *modelPanelPages, data discordgo.MessageComponentInteractionData) (string, *discordgo.MessageEmbed, []discordgo.MessageComponent, error) {
 	choice := ""
 	if len(data.Values) > 0 {
 		choice = strings.TrimSpace(data.Values[0])
@@ -220,7 +232,7 @@ func (h *ModelSettingsHandler) applyPick(i *discordgo.InteractionCreate, pages *
 		err = fmt.Errorf("unknown control")
 	}
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	return h.renderPanel(i, pages, "")
 }
@@ -342,7 +354,7 @@ func (h *ModelSettingsHandler) openModal(s interactionAPI, i *discordgo.Interact
 		Type:     discordgo.InteractionResponseModal,
 		Data: &discordgo.InteractionResponseData{
 			CustomID: modelSettingsModalID,
-			Title:    "🧠 Thinking & Temperature",
+			Title:    "💭 Thinking & Temperature",
 			Components: []discordgo.MessageComponent{
 				discordgo.Label{Label: "Thinking", Description: "Thinking level", Component: discordgo.SelectMenu{CustomID: "thinking", MenuType: discordgo.StringSelectMenu, Placeholder: "Select thinking level", Options: makeThinkingOptions(thinking)}},
 				discordgo.Label{Label: "Temperature", Description: "default or 0.0-2.0", Component: discordgo.TextInput{CustomID: "temperature", Style: discordgo.TextInputShort, Placeholder: "default", Value: temperature, Required: boolPtr(false), MaxLength: 8}},
@@ -391,13 +403,13 @@ func (h *ModelSettingsHandler) submitModal(s interactionAPI, i *discordgo.Intera
 		return h.respondError(s, i, err.Error())
 	}
 	pages := h.panelPagesFor(i.ChannelID, interactionUserID(i))
-	content, components, err := h.renderPanel(i, pages, "")
+	content, embed, components, err := h.renderPanel(i, pages, "")
 	if err != nil {
 		return h.respondError(s, i, err.Error())
 	}
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
-		Data: &discordgo.InteractionResponseData{Content: content, Components: components},
+		Data: &discordgo.InteractionResponseData{Content: content, Embeds: []*discordgo.MessageEmbed{embed}, Components: components},
 	})
 }
 
@@ -430,13 +442,13 @@ func (h *ModelSettingsHandler) loadModels(provider sdk.ProviderID) ([]sdk.Model,
 	return kept, nil
 }
 
-// renderPanel builds the one panel message: summary content plus the five
-// control rows. failure, when non-empty, is shown inline above the summary
-// until the next successful pick clears it.
-func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages *modelPanelPages, failure string) (string, []discordgo.MessageComponent, error) {
+// renderPanel builds the one panel message: a summary embed plus the five
+// control rows. failure, when non-empty, is shown as message text above the
+// embed until the next successful pick clears it.
+func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages *modelPanelPages, failure string) (string, *discordgo.MessageEmbed, []discordgo.MessageComponent, error) {
 	session, err := h.resolve(i)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	config := session.Config()
 	provider := config.Provider
@@ -445,18 +457,18 @@ func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages
 	}
 	models, err := h.loadModels(provider)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	if len(models) == 0 {
-		return "", nil, fmt.Errorf("provider %q has no models", provider)
+		return "", nil, nil, fmt.Errorf("provider %q has no models", provider)
 	}
 	pages.provider = clampPage(panelPages(countProviders(h.Providers)), pages.provider)
 	modelPages := modelMenuPages(len(models))
 	pages.model = clampPage(modelPages, pages.model)
 
-	content := sessionSettingsSummary(config) + "\nAgent: `" + string(panelAgentMode(config)) + "`"
+	content := ""
 	if failure != "" {
-		content = "Model settings error: " + failure + "\n" + content
+		content = "Model settings error: " + failure
 	}
 	modelOptions, modelPlaceholder := modelMenuOptions(models, pages.model)
 	components := []discordgo.MessageComponent{
@@ -468,14 +480,43 @@ func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages
 			discordgo.SelectMenu{CustomID: modelPanelModel, MenuType: discordgo.StringSelectMenu, Placeholder: modelPlaceholder, Options: modelOptions, MinValues: intPtr(1), MaxValues: 1},
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.Button{CustomID: modelPanelThinking, Style: discordgo.SecondaryButton, Label: "🧠 Thinking: " + panelThinkingLabel(config)},
+			discordgo.Button{CustomID: modelPanelThinking, Style: discordgo.SecondaryButton, Label: "💭 Thinking: " + panelThinkingLabel(config)},
 			discordgo.Button{CustomID: modelPanelTemp, Style: discordgo.SecondaryButton, Label: "🌡️ Temp: " + temperatureLabel(config.Temperature)},
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.SelectMenu{CustomID: modelPanelKey, MenuType: discordgo.StringSelectMenu, Placeholder: "🔑 Select API key pool", Options: makeKeyOptions(panelKeyCount(h, provider), strconv.Itoa(config.KeyIndex+1)), MinValues: intPtr(1), MaxValues: 1},
+			discordgo.SelectMenu{CustomID: modelPanelKey, MenuType: discordgo.StringSelectMenu, Placeholder: "🔑 Select API key pool", Options: makeKeyOptions(panelKeyCount(h, provider)), MinValues: intPtr(1), MaxValues: 1},
 		}},
 	}
-	return content, components, nil
+	return content, panelSummaryEmbed(config), components, nil
+}
+
+// panelSummaryEmbed renders the live session settings as an embed so the
+// values stay readable next to the controls (REQ-028, CHANGE-016). The
+// shared text summary stays untouched for /new.
+func panelSummaryEmbed(config sdk.SessionConfig) *discordgo.MessageEmbed {
+	model := config.Model
+	if model == "" {
+		model = "not set"
+	}
+	provider := string(config.Provider)
+	if provider == "" {
+		provider = "not set"
+	}
+	field := func(name, value string) *discordgo.MessageEmbedField {
+		return &discordgo.MessageEmbedField{Name: name, Value: "`" + value + "`", Inline: true}
+	}
+	return &discordgo.MessageEmbed{
+		Title: "⚙️ Session Model Settings",
+		Color: 0x5865F2,
+		Fields: []*discordgo.MessageEmbedField{
+			field("Provider", provider),
+			field("Model", model),
+			field("Agent", string(panelAgentMode(config))),
+			field("Thinking", panelThinkingLabel(config)),
+			field("Temperature", temperatureLabel(config.Temperature)),
+			field("API Pool", strconv.Itoa(config.KeyIndex+1)),
+		},
+	}
 }
 
 // panelAgentRow holds the agent toggle. It stays two buttons so the panel
@@ -583,8 +624,10 @@ func modelPageFor(models []sdk.Model, model string) int {
 }
 
 // pagedOptions windows items to one option page with Previous/Next entries.
-// Every page, including navigation entries, stays within 25 options and
-// every custom ID in the message stays unique (CHANGE-011 lesson).
+// Next always leads: the first page is Next plus 24 items, middle pages are
+// Previous plus Next plus 23 items, the last page is Previous plus the rest.
+// Every page stays within 25 options and every custom ID in the message
+// stays unique (CHANGE-011 lesson).
 func pagedOptions(items []discordgo.SelectMenuOption, page int) []discordgo.SelectMenuOption {
 	pages := panelPages(len(items))
 	page = clampPage(pages, page)
@@ -593,14 +636,13 @@ func pagedOptions(items []discordgo.SelectMenuOption, page int) []discordgo.Sele
 	}
 	start, end := panelWindow(len(items), page)
 	options := make([]discordgo.SelectMenuOption, 0, panelMenuOptions)
-	if page > 0 {
-		options = append(options, discordgo.SelectMenuOption{Label: "← Previous", Value: panelNavPrev})
-	}
-	options = append(options, items[start:end]...)
 	if page < pages-1 {
 		options = append(options, discordgo.SelectMenuOption{Label: "Next →", Value: panelNavNext})
 	}
-	return options
+	if page > 0 {
+		options = append(options, discordgo.SelectMenuOption{Label: "← Previous", Value: panelNavPrev})
+	}
+	return append(options, items[start:end]...)
 }
 
 // pagedProviderOptions windows providers to one option page with
@@ -702,21 +744,17 @@ func temperatureLabel(value *float64) string {
 }
 func boolPtr(value bool) *bool     { return &value }
 func intPtr(value int) *int        { return &value }
-func makeKeyOptions(count int, current string) []discordgo.SelectMenuOption {
+func makeKeyOptions(count int) []discordgo.SelectMenuOption {
 	if count < 1 {
 		count = 1
 	}
 	if count > 25 {
 		count = 25
 	}
-	currentIndex, _ := strconv.Atoi(current)
 	options := make([]discordgo.SelectMenuOption, 0, count)
 	for index := 1; index <= count; index++ {
 		value := strconv.Itoa(index)
-		options = append(options, discordgo.SelectMenuOption{Label: "Pool " + value, Value: value, Default: index == currentIndex})
-	}
-	if currentIndex < 1 || currentIndex > count {
-		options[0].Default = true
+		options = append(options, discordgo.SelectMenuOption{Label: "Pool " + value, Value: value})
 	}
 	return options
 }

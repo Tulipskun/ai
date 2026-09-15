@@ -70,6 +70,27 @@ func editContent(t *testing.T, edit *discordgo.WebhookEdit) string {
 	return *edit.Content
 }
 
+func editEmbedFields(t *testing.T, edit *discordgo.WebhookEdit) map[string]string {
+	t.Helper()
+	if edit.Embeds == nil || len(*edit.Embeds) == 0 {
+		t.Fatal("edited message has no summary embed")
+	}
+	embed := (*edit.Embeds)[0]
+	if embed.Title != "⚙️ Session Model Settings" {
+		t.Fatalf("embed title = %q", embed.Title)
+	}
+	fields := make(map[string]string, len(embed.Fields))
+	for _, field := range embed.Fields {
+		fields[field.Name] = field.Value
+	}
+	for _, want := range []string{"Provider", "Model", "Agent", "Thinking", "Temperature", "API Pool"} {
+		if _, ok := fields[want]; !ok {
+			t.Fatalf("embed misses field %q: %+v", want, embed.Fields)
+		}
+	}
+	return fields
+}
+
 func editOptionValues(t *testing.T, edit *discordgo.WebhookEdit, customID string) []string {
 	t.Helper()
 	if edit.Components == nil {
@@ -171,10 +192,12 @@ func TestPanelOpensOneRegularMessage(t *testing.T) {
 		}
 	}
 	content := editContent(t, edit)
-	for _, want := range []string{"Session Model Settings", "Agent:"} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("panel content misses %q: %q", want, content)
-		}
+	if content != "" {
+		t.Fatalf("panel content must stay empty next to the embed: %q", content)
+	}
+	fields := editEmbedFields(t, edit)
+	if fields["Agent"] != "`main`" || fields["Model"] != "`not set`" {
+		t.Fatalf("embed fields wrong: %+v", fields)
 	}
 	// Both menus stay neutral: current values show in the summary text,
 	// never as preselected options, so the (p/n) placeholder stays visible.
@@ -362,8 +385,8 @@ func TestPanelModelPickAppliesImmediately(t *testing.T) {
 	if got := session.Config().Model; got != "m2" {
 		t.Fatalf("model not applied: %q", got)
 	}
-	if content := editContent(t, lastEdit(t, fake)); !strings.Contains(content, "m2") {
-		t.Fatalf("panel must show the applied model: %q", content)
+	if fields := editEmbedFields(t, lastEdit(t, fake)); fields["Model"] != "`m2`" {
+		t.Fatalf("panel must show the applied model: %+v", fields)
 	}
 	if len(fake.followups) != 0 {
 		t.Fatalf("panel must reuse one message: %+v", fake.followups)
@@ -392,8 +415,8 @@ func TestPanelModelPagesConditionalNav(t *testing.T) {
 	if len(options) != 25 {
 		t.Fatalf("first page must fill the menu: %d", len(options))
 	}
-	if options[0].Value != "model-1" || options[23].Value != "model-24" || options[24].Value != panelNavNext {
-		t.Fatalf("first page must trail with Next only: %+v", options[:2])
+	if options[0].Value != panelNavNext || options[1].Value != "model-1" || options[24].Value != "model-24" {
+		t.Fatalf("first page must lead with Next: %+v", options[:3])
 	}
 	if buttons := editTopButtons(t, edit); len(buttons) != 2 {
 		t.Fatalf("top row must be agent buttons only: %+v", buttons)
@@ -413,11 +436,6 @@ func TestPanelModelPagesConditionalNav(t *testing.T) {
 	options = panelModelMenuOptions(t, edit)
 	if len(options) != 7 || options[0].Value != panelNavPrev || options[6].Value != "model-30" {
 		t.Fatalf("second page wrong: %+v", options)
-	}
-	for _, option := range options {
-		if option.Value == panelNavNext {
-			t.Fatalf("last page must not offer Next: %+v", options)
-		}
 	}
 	for _, option := range options {
 		if option.Value == panelNavNext {
@@ -472,6 +490,21 @@ func TestPanelModelPagesShareProviderScheme(t *testing.T) {
 	}
 	if got := modelPageFor([]sdk.Model{{ID: "a"}, {ID: "b"}}, "b"); got != 0 {
 		t.Fatalf("single page must be 0: %d", got)
+	}
+	// A middle page leads with both Previous and Next plus 23 models.
+	models := make([]sdk.Model, 0, 60)
+	for index := 1; index <= 60; index++ {
+		models = append(models, sdk.Model{ID: "m" + strconv.Itoa(index)})
+	}
+	options, placeholder := modelMenuOptions(models, 1)
+	if placeholder != "🤖 Select model (2/3)" {
+		t.Fatalf("placeholder = %q", placeholder)
+	}
+	if len(options) != 25 || options[0].Value != panelNavNext || options[1].Value != panelNavPrev {
+		t.Fatalf("middle page must lead with Next + Previous: %+v", options[:3])
+	}
+	if options[2].Value != "m25" || options[24].Value != "m47" {
+		t.Fatalf("middle page models wrong: %v", options[2:])
 	}
 }
 
@@ -532,8 +565,15 @@ func TestPanelThinkingAndTempModal(t *testing.T) {
 	if got := session.Config(); got.ThinkingLevel != sdk.ThinkingHigh || got.Temperature == nil || *got.Temperature != 1.5 {
 		t.Fatalf("modal values not applied: %+v", got)
 	}
-	if !strings.Contains(updated.Data.Content, "Thinking: `high`") || !strings.Contains(updated.Data.Content, "Temperature: `1.5`") {
-		t.Fatalf("panel not rewritten: %q", updated.Data.Content)
+	if len(updated.Data.Embeds) != 1 {
+		t.Fatalf("submit must rewrite the panel embed: %+v", updated.Data)
+	}
+	embedFields := map[string]string{}
+	for _, field := range updated.Data.Embeds[0].Fields {
+		embedFields[field.Name] = field.Value
+	}
+	if embedFields["Thinking"] != "`high`" || embedFields["Temperature"] != "`1.5`" {
+		t.Fatalf("panel embed not rewritten: %+v", embedFields)
 	}
 	if len(updated.Data.Components) != 5 {
 		t.Fatalf("rewritten panel must keep 5 rows: %+v", updated.Data.Components)
@@ -603,8 +643,8 @@ func TestPanelProviderSwitchKeepsOrResetsModel(t *testing.T) {
 	if got := session.Config(); got.Provider != "D.ai" || got.Model != "d-only" {
 		t.Fatalf("model must reset: %+v", got)
 	}
-	if content := editContent(t, lastEdit(t, fake)); !strings.Contains(content, "d-only") {
-		t.Fatalf("panel must show the reset model: %q", content)
+	if fields := editEmbedFields(t, lastEdit(t, fake)); fields["Model"] != "`d-only`" {
+		t.Fatalf("panel must show the reset model: %+v", fields)
 	}
 }
 
@@ -619,8 +659,8 @@ func TestPanelAgentModeButtonsPersist(t *testing.T) {
 	if got := session.Config().AgentMode; got != sdk.AgentModeSub {
 		t.Fatalf("agent mode = %q", got)
 	}
-	if content := editContent(t, lastEdit(t, fake)); !strings.Contains(content, "Agent: `sub`") {
-		t.Fatalf("panel must show sub mode: %q", content)
+	if fields := editEmbedFields(t, lastEdit(t, fake)); fields["Agent"] != "`sub`" {
+		t.Fatalf("panel must show sub mode: %+v", fields)
 	}
 	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelAgentMain)); err != nil {
 		t.Fatal(err)
@@ -640,6 +680,11 @@ func TestPanelKeyPoolPickApplies(t *testing.T) {
 	}
 	if got := session.Config().KeyIndex; got != 2 {
 		t.Fatalf("key index = %d", got)
+	}
+	for _, option := range panelMenuOptionsByID(t, lastEdit(t, fake), modelPanelKey) {
+		if option.Default {
+			t.Fatalf("pool must not preselect: %+v", option)
+		}
 	}
 }
 

@@ -176,9 +176,69 @@ func TestPanelOpensOneRegularMessage(t *testing.T) {
 			t.Fatalf("panel content misses %q: %q", want, content)
 		}
 	}
+	// The provider menu stays neutral: the current provider shows in the
+	// summary text, never as a preselected option.
+	for _, option := range panelProviderMenuOptions(t, edit) {
+		if option.Default {
+			t.Fatalf("provider must not preselect: %+v", option)
+		}
+	}
 	if len(fake.followups) != 0 {
 		t.Fatalf("panel must reuse one message, never send new ones: %+v", fake.followups)
 	}
+}
+
+func panelProviderMenuOptions(t *testing.T, edit *discordgo.WebhookEdit) []discordgo.SelectMenuOption {
+	t.Helper()
+	if edit.Components == nil {
+		t.Fatal("edited message has no components")
+	}
+	for _, component := range *edit.Components {
+		row, ok := component.(discordgo.ActionsRow)
+		if !ok {
+			continue
+		}
+		for _, child := range row.Components {
+			var menu *discordgo.SelectMenu
+			switch child := child.(type) {
+			case discordgo.SelectMenu:
+				menu = &child
+			case *discordgo.SelectMenu:
+				menu = child
+			default:
+				continue
+			}
+			if menu.CustomID == modelPanelProvider {
+				return menu.Options
+			}
+		}
+	}
+	t.Fatalf("no provider select in edited message")
+	return nil
+}
+
+func editTopButtons(t *testing.T, edit *discordgo.WebhookEdit) []discordgo.Button {
+	t.Helper()
+	if edit.Components == nil || len(*edit.Components) == 0 {
+		t.Fatal("edited message has no components")
+	}
+	row, ok := (*edit.Components)[0].(discordgo.ActionsRow)
+	if !ok {
+		t.Fatal("first row is not an action row")
+	}
+	buttons := []discordgo.Button{}
+	for _, child := range row.Components {
+		button, ok := child.(discordgo.Button)
+		if !ok {
+			if b, ok := child.(*discordgo.Button); ok {
+				button = *b
+			} else {
+				t.Fatalf("top row child is not a button: %T", child)
+			}
+		}
+		buttons = append(buttons, button)
+	}
+	return buttons
 }
 
 func TestPanelPagesCountOptions(t *testing.T) {
@@ -266,7 +326,7 @@ func TestPanelModelPickAppliesImmediately(t *testing.T) {
 	}
 }
 
-func TestPanelNavSentinelsPageWithoutApplying(t *testing.T) {
+func TestPanelPagerButtonsTurnModelPages(t *testing.T) {
 	models := make([]sdk.Model, 0, 30)
 	for index := 1; index <= 30; index++ {
 		models = append(models, sdk.Model{ID: "model-" + strconv.Itoa(index)})
@@ -275,24 +335,60 @@ func TestPanelNavSentinelsPageWithoutApplying(t *testing.T) {
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1", Provider: "B.ai", Model: "model-1"}, keys)
 	handler := panelTestHandler(session, keys, models)
 	fake := &fakeInteractionAPI{}
-	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelModel, panelNavNext)); err != nil {
+	// Opening lands on the page holding the current model.
+	if err := handler.openPanel(fake, panelCommandInteraction()); err != nil {
 		t.Fatal(err)
 	}
-	if got := session.Config().Model; got != "model-1" {
-		t.Fatalf("navigation must not apply a model: %q", got)
+	buttons := editTopButtons(t, lastEdit(t, fake))
+	if len(buttons) != 5 {
+		t.Fatalf("top row must hold agent + pager buttons: %+v", buttons)
+	}
+	if buttons[2].CustomID != modelPanelPagePrev || buttons[4].CustomID != modelPanelPageNext {
+		t.Fatalf("pager buttons misplaced: %+v", buttons)
+	}
+	if !buttons[2].Disabled || buttons[4].Disabled {
+		t.Fatalf("first page must disable Prev only: %+v", buttons)
+	}
+	if buttons[3].Label != "(1/2)" || !buttons[3].Disabled {
+		t.Fatalf("page indicator wrong: %+v", buttons[3])
 	}
 	values := editOptionValues(t, lastEdit(t, fake), modelPanelModel)
-	found := false
+	if len(values) != 25 {
+		t.Fatalf("first page must offer 25 models: %d", len(values))
+	}
 	for _, value := range values {
-		if value == "model-30" {
-			found = true
-		}
-		if value == "model-1" {
-			t.Fatalf("second page must not show first-page models: %v", values)
+		if value == panelNavNext || value == panelNavPrev {
+			t.Fatalf("model menu must not carry nav entries: %v", values)
 		}
 	}
-	if !found {
-		t.Fatalf("second page must offer later models: %v", values)
+	// Next turns the page; the indicator and disabled sides follow.
+	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelPageNext)); err != nil {
+		t.Fatal(err)
+	}
+	buttons = editTopButtons(t, lastEdit(t, fake))
+	if buttons[3].Label != "(2/2)" || buttons[2].Disabled || !buttons[4].Disabled {
+		t.Fatalf("last page buttons wrong: %+v", buttons)
+	}
+	values = editOptionValues(t, lastEdit(t, fake), modelPanelModel)
+	if len(values) != 5 || values[4] != "model-30" {
+		t.Fatalf("second page must offer the last models: %v", values)
+	}
+	// Paging past the end clamps; Back returns.
+	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelPageNext)); err != nil {
+		t.Fatal(err)
+	}
+	if label := editTopButtons(t, lastEdit(t, fake))[3].Label; label != "(2/2)" {
+		t.Fatalf("pager must clamp at the end: %q", label)
+	}
+	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelPagePrev)); err != nil {
+		t.Fatal(err)
+	}
+	if label := editTopButtons(t, lastEdit(t, fake))[3].Label; label != "(1/2)" {
+		t.Fatalf("pager must turn back: %q", label)
+	}
+	// A pick from the second page applies.
+	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelPageNext)); err != nil {
+		t.Fatal(err)
 	}
 	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelModel, "model-30")); err != nil {
 		t.Fatal(err)
@@ -312,45 +408,87 @@ func TestPanelNavSentinelsPageWithoutApplying(t *testing.T) {
 	}
 }
 
-func TestPanelThinkingAndTempCycle(t *testing.T) {
+func TestPanelThinkingAndTempSelects(t *testing.T) {
 	keys := sdk.NewKeyPool("k1")
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1"}, keys)
 	handler := panelTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
 	fake := &fakeInteractionAPI{}
-	for _, want := range []sdk.ThinkingLevel{sdk.ThinkingNone, sdk.ThinkingLow, sdk.ThinkingMedium, sdk.ThinkingHigh} {
-		if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelThinking)); err != nil {
-			t.Fatal(err)
-		}
-		if got := session.Config().ThinkingLevel; got != want {
-			t.Fatalf("thinking = %q, want %q", got, want)
-		}
-	}
+	// Pressing the Thinking button unfolds a select menu without applying.
 	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelThinking)); err != nil {
 		t.Fatal(err)
 	}
 	if got := session.Config().ThinkingLevel; got != "" {
-		t.Fatalf("thinking must wrap to default: %q", got)
+		t.Fatalf("unfolding must not apply: %q", got)
 	}
-	if content := editContent(t, lastEdit(t, fake)); !strings.Contains(content, "Thinking: `default`") {
-		t.Fatalf("panel must show default thinking: %q", content)
+	values := editOptionValues(t, lastEdit(t, fake), modelPanelThinkingMenu)
+	if len(values) != 5 {
+		t.Fatalf("thinking menu must offer 5 levels: %v", values)
 	}
-	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelTemp)); err != nil {
+	// Picking applies and folds the row back to buttons.
+	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelThinkingMenu, "high")); err != nil {
 		t.Fatal(err)
 	}
-	if got := session.Config().Temperature; got == nil || *got != 0.0 {
-		t.Fatalf("temp must step to 0.0: %+v", session.Config().Temperature)
+	if got := session.Config().ThinkingLevel; got != sdk.ThinkingHigh {
+		t.Fatalf("thinking = %q", got)
 	}
-	if content := editContent(t, lastEdit(t, fake)); !strings.Contains(content, "Temperature: `0.0`") {
-		t.Fatalf("panel must show the temp: %q", content)
+	if content := editContent(t, lastEdit(t, fake)); !strings.Contains(content, "Thinking: `high`") {
+		t.Fatalf("panel must show applied thinking: %q", content)
 	}
-	if err := session.SetTemperature(2.0); err != nil {
+	ids := editCustomIDs(t, lastEdit(t, fake))
+	for _, id := range ids {
+		if id == modelPanelThinkingMenu {
+			t.Fatalf("row must fold back to buttons: %v", ids)
+		}
+	}
+	// Pressing the same button twice folds back without changing anything.
+	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelTemp)); err != nil {
 		t.Fatal(err)
 	}
 	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelTemp)); err != nil {
 		t.Fatal(err)
 	}
 	if session.Config().Temperature != nil {
-		t.Fatalf("temp must wrap to default: %+v", session.Config().Temperature)
+		t.Fatalf("folding back must not apply: %+v", session.Config().Temperature)
+	}
+	// The Temp menu offers default plus 0.0-2.0 with the current preselected.
+	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelTemp)); err != nil {
+		t.Fatal(err)
+	}
+	edit := lastEdit(t, fake)
+	values = editOptionValues(t, edit, modelPanelTempMenu)
+	if len(values) != 22 || values[0] != "default" || values[1] != "0.0" || values[21] != "2.0" {
+		t.Fatalf("temp menu must span default + 0.0-2.0: %v", values)
+	}
+	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelTempMenu, "1.5")); err != nil {
+		t.Fatal(err)
+	}
+	if got := session.Config().Temperature; got == nil || *got != 1.5 {
+		t.Fatalf("temp not applied: %+v", session.Config().Temperature)
+	}
+	if content := editContent(t, lastEdit(t, fake)); !strings.Contains(content, "Temperature: `1.5`") {
+		t.Fatalf("panel must show the temp: %q", content)
+	}
+	// Default clears the override; garbage fails inline.
+	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelTemp)); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelTempMenu, "default")); err != nil {
+		t.Fatal(err)
+	}
+	if session.Config().Temperature != nil {
+		t.Fatalf("default must clear temp: %+v", session.Config().Temperature)
+	}
+	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelThinking)); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelThinkingMenu, "ultra")); err != nil {
+		t.Fatal(err)
+	}
+	if got := session.Config().ThinkingLevel; got != sdk.ThinkingHigh {
+		t.Fatalf("bad pick must not apply: %q", got)
+	}
+	if content := editContent(t, lastEdit(t, fake)); !strings.Contains(content, "invalid thinking level") {
+		t.Fatalf("bad pick must fail inline: %q", content)
 	}
 }
 
@@ -433,7 +571,7 @@ func TestPanelStaleControlsAnswerExpired(t *testing.T) {
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1"}, keys)
 	handler := panelTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
 	fake := &fakeInteractionAPI{}
-	stale := panelComponentInteraction("model:page:next")
+	stale := panelComponentInteraction("model:back")
 	if err := handler.Handle(fake, stale); err != nil {
 		t.Fatal(err)
 	}

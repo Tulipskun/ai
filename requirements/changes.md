@@ -173,3 +173,16 @@ Reason: ควบคุมทุกอย่างจบในข้อควา
 Impact: sdk/types.go (AgentMode), sdk/session_settings.go (SetAgentMode), sdk/agent.go (planningFor ต่อ session 4 จุด), transport/discord/model_settings.go (rewrite เป็น panel), model_settings_test.go, transport/discord/new_channel.go (copy agent mode ไปช่องใหม่); ไม่แตะ gateway dispatch, cmd/ai wiring (นอกจาก handler เดิม), canonical contract
 Validation: panel เปิดด้วย deferred channel message + edit (ข้อความเดียวเสมอ); custom ID ไม่ซ้ำในข้อความ; sentinel ไม่ถูกบันทึกเป็นค่า; nav ครอบคลุม >25 providers/models; cycle thinking/temp ครบทุกลำดับและ persist; provider switch คง/รีเซ็ต model ถูกต้อง; sub session ได้ full tools + prompt ไม่ถูก wrap (stream/non-stream); main คงพฤติกรรมเดิม; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-013
+
+Date: 2026-09-15
+Type: revise
+Request: provider ไม่ preselect; ปุ่ม thinking/temperature กดแล้วแสดง select menu แทนการวนค่า; model pager เป็นปุ่ม Previous/Next อยู่บนสุดพร้อมตัวบอกหน้า (1/2)
+Conflict: CHANGE-012 (ยกเลิก thinking/temp แบบวนค่า และ model แบ่งหน้าใน options)
+Previous: CHANGE-012 panel 5 แถว, thinking/temp วนค่าด้วยปุ่ม, model/provider แบ่งหน้าใน options ด้วย sentinel
+New: REQ-028 แถวแรกเป็นปุ่ม `[Main agent] [Sub agent]` ต่อด้วยปุ่ม pager `[◀] [(p/n)] [▶]` เฉพาะเมื่อ model มีหลายหน้า (ปุ่มหน้าปิด disabled, ปุ่ม (p/n) disabled เสมอ รวมไม่เกิน 5 ปุ่มต่อแถว); provider menu ไม่ preselect; model menu แสดง 25 รายการต่อหน้าเต็มโดยไม่มี nav options; ปุ่ม Thinking/Temp กดแล้วแถวเดียวกันกลายเป็น select menu (thinking ใช้รายการเดิม, temp มี default + 0.0–2.0 22 options, preselect ค่าปัจจุบัน) เลือกแล้วบันทึกและแถวกลับเป็นปุ่ม, กดปุ่มเดิมซ้ำคือยกเลิก; provider ยังแบ่งหน้าใน options เหมือนเดิม; เลือก control อื่นปิด selector ที่เปิดอยู่
+Reason: ไม่ preselect provider เพื่อไม่ชี้นำค่า; select menu เลือก thinking/temp เร็วกว่ากดวน 22 ครั้ง; pager บนสุดเห็นก่อนและรู้ว่าอยู่หน้าไหน
+Impact: transport/discord/model_settings.go (selector state, pager row, thinking/temp select), model_settings_test.go; ไม่แตะ sdk, gateway dispatch, /new, canonical contract
+Validation: เปิด panel ได้ 5 แถวเสมอ (หน้าเดียวไม่มี pager); pager เปลี่ยนหน้าไปกลับ + disabled ถูกข้าง + (p/n) ตรง; thinking/temp select บันทึกค่าและกลับเป็นปุ่ม; provider ไม่มี default; model หน้าเต็ม 25 ไม่มี sentinel; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: accepted

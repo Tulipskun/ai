@@ -16,13 +16,17 @@ import (
 // process-local page store keyed by channel and user, not in custom IDs
 // (CHANGE-012, REQ-028).
 const (
-	modelPanelAgentMain = "model:agent:main"
-	modelPanelAgentSub  = "model:agent:sub"
-	modelPanelProvider  = "model:provider"
-	modelPanelModel     = "model:model"
-	modelPanelThinking  = "model:thinking"
-	modelPanelTemp      = "model:temp"
-	modelPanelKey       = "model:key"
+	modelPanelAgentMain   = "model:agent:main"
+	modelPanelAgentSub    = "model:agent:sub"
+	modelPanelPagePrev    = "model:page:prev"
+	modelPanelPageNext    = "model:page:next"
+	modelPanelProvider    = "model:provider"
+	modelPanelModel       = "model:model"
+	modelPanelThinking    = "model:thinking"
+	modelPanelThinkingMenu = "model:thinking:menu"
+	modelPanelTemp        = "model:temp"
+	modelPanelTempMenu    = "model:temp:menu"
+	modelPanelKey         = "model:key"
 )
 
 const (
@@ -44,12 +48,8 @@ const (
 	panelNavPrev = "__panel_prev__"
 )
 
-// panelThinkingCycle is the order the Thinking button walks through. The
-// first entry is the cleared (default) state.
-var panelThinkingCycle = []string{"default", string(sdk.ThinkingNone), string(sdk.ThinkingLow), string(sdk.ThinkingMedium), string(sdk.ThinkingHigh)}
-
-// panelTemperatures are the temperature stops the Temp button walks through:
-// default plus 0.0-2.0 in 0.1 steps (22 states, one select-safe cycle).
+// panelTemperatures are the temperature stops offered by the Temp selector:
+// default plus 0.0-2.0 in 0.1 steps (22 states, one select-safe menu).
 func panelTemperatures() []string {
 	values := make([]string, 0, 22)
 	values = append(values, "default")
@@ -59,13 +59,22 @@ func panelTemperatures() []string {
 	return values
 }
 
-// modelPanelPages tracks option paging per invoker. Everything else renders
+// modelPanelPages tracks option paging per invoker plus which value selector
+// (thinking or temperature) is currently unfolded. Everything else renders
 // from the live session config, because every control applies immediately
 // and there is no staged state to keep.
 type modelPanelPages struct {
 	provider int
 	model    int
+	selector string
 }
+
+// panelSelectorThinking and panelSelectorTemp name the value selector
+// unfolded in place of the Thinking/Temp button row.
+const (
+	panelSelectorThinking = "thinking"
+	panelSelectorTemp     = "temp"
+)
 
 type ModelSettingsHandler struct {
 	ResolveSession    func(context.Context, sdk.Input) (*sdk.Session, error)
@@ -135,8 +144,9 @@ func (h *ModelSettingsHandler) Handle(s interactionAPI, i *discordgo.Interaction
 		return nil
 	}
 	switch i.MessageComponentData().CustomID {
-	case modelPanelAgentMain, modelPanelAgentSub, modelPanelProvider,
-		modelPanelModel, modelPanelThinking, modelPanelTemp, modelPanelKey:
+	case modelPanelAgentMain, modelPanelAgentSub, modelPanelPagePrev, modelPanelPageNext,
+		modelPanelProvider, modelPanelModel, modelPanelThinking, modelPanelThinkingMenu,
+		modelPanelTemp, modelPanelTempMenu, modelPanelKey:
 		return h.stepPanel(s, i)
 	default:
 		if strings.HasPrefix(i.MessageComponentData().CustomID, "model:") {
@@ -198,18 +208,37 @@ func (h *ModelSettingsHandler) applyPick(i *discordgo.InteractionCreate, pages *
 	var err error
 	switch data.CustomID {
 	case modelPanelAgentMain:
+		pages.selector = ""
 		err = h.pickAgentMode(i, sdk.AgentModeMain)
 	case modelPanelAgentSub:
+		pages.selector = ""
 		err = h.pickAgentMode(i, sdk.AgentModeSub)
+	case modelPanelPagePrev:
+		pages.selector = ""
+		if pages.model > 0 {
+			pages.model--
+		}
+	case modelPanelPageNext:
+		pages.selector = ""
+		pages.model++
 	case modelPanelProvider:
+		pages.selector = ""
 		err = h.pickProvider(i, pages, choice)
 	case modelPanelModel:
+		pages.selector = ""
 		err = h.pickModel(i, pages, choice)
 	case modelPanelThinking:
-		err = h.cycleThinking(i)
+		h.toggleSelector(pages, panelSelectorThinking)
+	case modelPanelThinkingMenu:
+		pages.selector = ""
+		err = h.pickThinking(i, choice)
 	case modelPanelTemp:
-		err = h.cycleTemperature(i)
+		h.toggleSelector(pages, panelSelectorTemp)
+	case modelPanelTempMenu:
+		pages.selector = ""
+		err = h.pickTemperature(i, choice)
 	case modelPanelKey:
+		pages.selector = ""
 		err = h.pickKey(i, choice)
 	default:
 		err = fmt.Errorf("unknown control")
@@ -289,16 +318,6 @@ func (h *ModelSettingsHandler) pickProvider(i *discordgo.InteractionCreate, page
 }
 
 func (h *ModelSettingsHandler) pickModel(i *discordgo.InteractionCreate, pages *modelPanelPages, choice string) error {
-	switch choice {
-	case panelNavNext:
-		pages.model++
-		return nil
-	case panelNavPrev:
-		if pages.model > 0 {
-			pages.model--
-		}
-		return nil
-	}
 	if choice == "" {
 		return fmt.Errorf("model is required")
 	}
@@ -316,50 +335,51 @@ func (h *ModelSettingsHandler) pickModel(i *discordgo.InteractionCreate, pages *
 	return session.SetModel(choice)
 }
 
-// cycleThinking advances the session thinking level to the next stop and
-// wraps around to default.
-func (h *ModelSettingsHandler) cycleThinking(i *discordgo.InteractionCreate) error {
-	session, err := h.resolve(i)
-	if err != nil {
-		return err
+// toggleSelector unfolds a value selector in place of the Thinking/Temp
+// button row; pressing the same button again folds it back.
+func (h *ModelSettingsHandler) toggleSelector(pages *modelPanelPages, selector string) {
+	if pages.selector == selector {
+		pages.selector = ""
+		return
 	}
-	current := string(session.Config().ThinkingLevel)
-	if current == "" {
-		current = "default"
-	}
-	next := panelThinkingCycle[0]
-	for index, stop := range panelThinkingCycle {
-		if stop == current {
-			next = panelThinkingCycle[(index+1)%len(panelThinkingCycle)]
-			break
-		}
-	}
-	if next == "default" {
-		return session.ClearThinkingLevel()
-	}
-	return session.SetThinkingLevel(sdk.ThinkingLevel(next))
+	pages.selector = selector
 }
 
-// cycleTemperature advances the session temperature to the next stop
-// (default, then 0.0-2.0 in 0.1 steps) and wraps around to default.
-func (h *ModelSettingsHandler) cycleTemperature(i *discordgo.InteractionCreate) error {
+// pickThinking applies one thinking level from the unfolded selector menu.
+func (h *ModelSettingsHandler) pickThinking(i *discordgo.InteractionCreate, choice string) error {
+	choice = strings.ToLower(choice)
+	if choice == "" || choice == "default" {
+		session, err := h.resolve(i)
+		if err != nil {
+			return err
+		}
+		return session.ClearThinkingLevel()
+	}
+	if !validDiscordThinkingLevel(choice) {
+		return fmt.Errorf("invalid thinking level %q", choice)
+	}
 	session, err := h.resolve(i)
 	if err != nil {
 		return err
 	}
-	current := temperatureLabel(session.Config().Temperature)
-	stops := panelTemperatures()
-	next := stops[0]
-	for index, stop := range stops {
-		if stop == current {
-			next = stops[(index+1)%len(stops)]
-			break
+	return session.SetThinkingLevel(sdk.ThinkingLevel(choice))
+}
+
+// pickTemperature applies one temperature from the unfolded selector menu:
+// default clears the override, otherwise a 0.0-2.0 number.
+func (h *ModelSettingsHandler) pickTemperature(i *discordgo.InteractionCreate, choice string) error {
+	if choice == "" || choice == "default" {
+		session, err := h.resolve(i)
+		if err != nil {
+			return err
 		}
-	}
-	if next == "default" {
 		return session.ClearTemperature()
 	}
-	value, err := strconv.ParseFloat(next, 64)
+	value, err := strconv.ParseFloat(choice, 64)
+	if err != nil || value < 0 || value > 2 {
+		return fmt.Errorf("temperature must be a number from 0.0 to 2.0")
+	}
+	session, err := h.resolve(i)
 	if err != nil {
 		return err
 	}
@@ -416,24 +436,22 @@ func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages
 		return "", nil, fmt.Errorf("provider %q has no models", provider)
 	}
 	pages.provider = clampPage(panelPages(countProviders(h.Providers)), pages.provider)
-	pages.model = clampPage(panelPages(len(models)), pages.model)
+	modelPages := modelMenuPages(len(models))
+	pages.model = clampPage(modelPages, pages.model)
 
 	content := sessionSettingsSummary(config) + "\nAgent: `" + string(panelAgentMode(config)) + "`"
 	if failure != "" {
 		content = "Model settings error: " + failure + "\n" + content
 	}
 	components := []discordgo.MessageComponent{
-		panelAgentRow(panelAgentMode(config)),
+		panelTopRow(panelAgentMode(config), modelPages, pages.model),
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.SelectMenu{CustomID: modelPanelProvider, MenuType: discordgo.StringSelectMenu, Placeholder: "Select provider", Options: pagedProviderOptions(h.Providers, pages.provider, string(config.Provider)), MinValues: intPtr(1), MaxValues: 1},
+			discordgo.SelectMenu{CustomID: modelPanelProvider, MenuType: discordgo.StringSelectMenu, Placeholder: "Select provider", Options: pagedProviderOptions(h.Providers, pages.provider), MinValues: intPtr(1), MaxValues: 1},
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.SelectMenu{CustomID: modelPanelModel, MenuType: discordgo.StringSelectMenu, Placeholder: "Select model", Options: pagedModelOptions(models, pages.model, config.Model), MinValues: intPtr(1), MaxValues: 1},
+			discordgo.SelectMenu{CustomID: modelPanelModel, MenuType: discordgo.StringSelectMenu, Placeholder: "Select model", Options: modelMenuOptions(models, pages.model, config.Model), MinValues: intPtr(1), MaxValues: 1},
 		}},
-		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.Button{CustomID: modelPanelThinking, Style: discordgo.SecondaryButton, Label: "Thinking: " + panelThinkingLabel(config)},
-			discordgo.Button{CustomID: modelPanelTemp, Style: discordgo.SecondaryButton, Label: "Temp: " + temperatureLabel(config.Temperature)},
-		}},
+		panelValueRow(pages.selector, config),
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			discordgo.SelectMenu{CustomID: modelPanelKey, MenuType: discordgo.StringSelectMenu, Placeholder: "Select API key pool", Options: makeKeyOptions(panelKeyCount(h, provider), strconv.Itoa(config.KeyIndex+1)), MinValues: intPtr(1), MaxValues: 1},
 		}},
@@ -441,17 +459,60 @@ func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages
 	return content, components, nil
 }
 
-func panelAgentRow(mode sdk.AgentMode) discordgo.ActionsRow {
+// panelTopRow holds the agent toggle plus, for multi-page catalogues, the
+// pager buttons with a page indicator: everything stays in one row so the
+// panel never exceeds five action rows.
+func panelTopRow(mode sdk.AgentMode, modelPages, modelPage int) discordgo.ActionsRow {
 	mainStyle, subStyle := discordgo.SecondaryButton, discordgo.SecondaryButton
 	if mode == sdk.AgentModeSub {
 		subStyle = discordgo.PrimaryButton
 	} else {
 		mainStyle = discordgo.PrimaryButton
 	}
-	return discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+	buttons := []discordgo.MessageComponent{
 		discordgo.Button{CustomID: modelPanelAgentMain, Style: mainStyle, Label: "Main agent"},
 		discordgo.Button{CustomID: modelPanelAgentSub, Style: subStyle, Label: "Sub agent"},
-	}}
+	}
+	if modelPages > 1 {
+		buttons = append(buttons,
+			discordgo.Button{CustomID: modelPanelPagePrev, Style: discordgo.SecondaryButton, Label: "◀ Prev", Disabled: modelPage <= 0},
+			discordgo.Button{CustomID: modelPanelPagePrev + ":label", Style: discordgo.SecondaryButton, Label: fmt.Sprintf("(%d/%d)", modelPage+1, modelPages), Disabled: true},
+			discordgo.Button{CustomID: modelPanelPageNext, Style: discordgo.SecondaryButton, Label: "Next ▶", Disabled: modelPage >= modelPages-1},
+		)
+	}
+	return discordgo.ActionsRow{Components: buttons}
+}
+
+// panelValueRow renders the Thinking/Temp buttons, or the unfolded value
+// selector when one of them was just pressed.
+func panelValueRow(selector string, config sdk.SessionConfig) discordgo.ActionsRow {
+	switch selector {
+	case panelSelectorThinking:
+		return discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.SelectMenu{CustomID: modelPanelThinkingMenu, MenuType: discordgo.StringSelectMenu, Placeholder: "Select thinking level", Options: makeThinkingOptions(panelThinkingLabel(config)), MinValues: intPtr(1), MaxValues: 1},
+		}}
+	case panelSelectorTemp:
+		return discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.SelectMenu{CustomID: modelPanelTempMenu, MenuType: discordgo.StringSelectMenu, Placeholder: "Select temperature", Options: makePanelTempOptions(temperatureLabel(config.Temperature)), MinValues: intPtr(1), MaxValues: 1},
+		}}
+	default:
+		return discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.Button{CustomID: modelPanelThinking, Style: discordgo.SecondaryButton, Label: "Thinking: " + panelThinkingLabel(config)},
+			discordgo.Button{CustomID: modelPanelTemp, Style: discordgo.SecondaryButton, Label: "Temp: " + temperatureLabel(config.Temperature)},
+		}}
+	}
+}
+
+func makePanelTempOptions(current string) []discordgo.SelectMenuOption {
+	options := make([]discordgo.SelectMenuOption, 0, 22)
+	for _, value := range panelTemperatures() {
+		label := value
+		if value == "default" {
+			label = "Default"
+		}
+		options = append(options, discordgo.SelectMenuOption{Label: label, Value: value, Default: value == current})
+	}
+	return options
 }
 
 func panelAgentMode(config sdk.SessionConfig) sdk.AgentMode {
@@ -526,16 +587,11 @@ func panelWindow(n, page int) (int, int) {
 
 // modelPageFor finds the option page holding the model, so opening the panel
 // or switching providers lands on the current model instead of page one.
+// Model pages hold a full 25 options; the pager buttons turn them.
 func modelPageFor(models []sdk.Model, model string) int {
 	for index, candidate := range models {
 		if candidate.ID == model {
-			if panelPages(len(models)) == 1 {
-				return 0
-			}
-			if index < panelPageItems {
-				return 0
-			}
-			return 1 + (index-panelPageItems)/23
+			return index / panelMenuOptions
 		}
 	}
 	return 0
@@ -562,27 +618,52 @@ func pagedOptions(items []discordgo.SelectMenuOption, page int) []discordgo.Sele
 	return options
 }
 
-func pagedProviderOptions(providers []sdk.ProviderID, page int, current string) []discordgo.SelectMenuOption {
+// pagedProviderOptions windows providers to one option page with
+// Previous/Next entries. Nothing is preselected: the panel shows the current
+// provider in its summary text, and the menu stays neutral (REQ-028).
+func pagedProviderOptions(providers []sdk.ProviderID, page int) []discordgo.SelectMenuOption {
 	items := make([]discordgo.SelectMenuOption, 0, len(providers))
 	for _, provider := range providers {
 		value := strings.TrimSpace(string(provider))
 		if value == "" {
 			continue
 		}
-		items = append(items, discordgo.SelectMenuOption{Label: value, Value: value, Default: value == current})
+		items = append(items, discordgo.SelectMenuOption{Label: value, Value: value})
 	}
 	return pagedOptions(items, page)
 }
 
-func pagedModelOptions(models []sdk.Model, page int, current string) []discordgo.SelectMenuOption {
-	items := make([]discordgo.SelectMenuOption, 0, len(models))
-	for _, model := range models {
+// modelMenuOptions windows the catalogue to one full 25-option page. Paging
+// rides the pager buttons on the top row, so the menu itself carries no
+// navigation entries and the current model stays preselected.
+func modelMenuOptions(models []sdk.Model, page int, current string) []discordgo.SelectMenuOption {
+	pages := (len(models) + panelMenuOptions - 1) / panelMenuOptions
+	if pages < 1 {
+		pages = 1
+	}
+	page = clampPage(pages, page)
+	start := page * panelMenuOptions
+	end := start + panelMenuOptions
+	if end > len(models) {
+		end = len(models)
+	}
+	options := make([]discordgo.SelectMenuOption, 0, end-start)
+	for _, model := range models[start:end] {
 		if strings.TrimSpace(model.ID) == "" {
 			continue
 		}
-		items = append(items, discordgo.SelectMenuOption{Label: model.ID, Value: model.ID, Default: model.ID == current})
+		options = append(options, discordgo.SelectMenuOption{Label: model.ID, Value: model.ID, Default: model.ID == current})
 	}
-	return pagedOptions(items, page)
+	return options
+}
+
+// modelMenuPages counts the 25-option model pages for a catalogue.
+func modelMenuPages(n int) int {
+	pages := (n + panelMenuOptions - 1) / panelMenuOptions
+	if pages < 1 {
+		return 1
+	}
+	return pages
 }
 
 func (h *ModelSettingsHandler) hasProvider(provider sdk.ProviderID) bool {

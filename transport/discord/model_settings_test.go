@@ -177,7 +177,7 @@ func TestPanelOpensOneRegularMessage(t *testing.T) {
 		}
 	}
 	// Both menus stay neutral: current values show in the summary text,
-// never as preselected options, so the (p/n) placeholder stays visible.
+	// never as preselected options, so the (p/n) placeholder stays visible.
 	for _, option := range panelProviderMenuOptions(t, edit) {
 		if option.Default {
 			t.Fatalf("provider must not preselect: %+v", option)
@@ -370,7 +370,7 @@ func TestPanelModelPickAppliesImmediately(t *testing.T) {
 	}
 }
 
-func TestPanelModelPagesUseFirstTwoOptions(t *testing.T) {
+func TestPanelModelPagesConditionalNav(t *testing.T) {
 	models := make([]sdk.Model, 0, 30)
 	for index := 1; index <= 30; index++ {
 		models = append(models, sdk.Model{ID: "model-" + strconv.Itoa(index)})
@@ -379,29 +379,27 @@ func TestPanelModelPagesUseFirstTwoOptions(t *testing.T) {
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1", Provider: "B.ai", Model: "model-1"}, keys)
 	handler := panelTestHandler(session, keys, models)
 	fake := &fakeInteractionAPI{}
-	// Opening lands on the page holding the current model, with Previous
-	// and Next as the first two options and the page in the menu name.
+	// Opening lands on the page holding the current model. The first page
+	// carries only Next plus 24 models, with the page in the menu name.
 	if err := handler.openPanel(fake, panelCommandInteraction()); err != nil {
 		t.Fatal(err)
 	}
 	edit := lastEdit(t, fake)
-	if placeholder := panelMenuPlaceholder(t, edit, modelPanelModel); placeholder != "Select model (1/2)" {
+	if placeholder := panelMenuPlaceholder(t, edit, modelPanelModel); placeholder != "🤖 Select model (1/2)" {
 		t.Fatalf("placeholder = %q", placeholder)
 	}
 	options := panelModelMenuOptions(t, edit)
 	if len(options) != 25 {
 		t.Fatalf("first page must fill the menu: %d", len(options))
 	}
-	if options[0].Value != panelNavPrev || options[1].Value != panelNavNext {
-		t.Fatalf("nav must be options 1-2: %+v", options[:3])
-	}
-	if options[2].Value != "model-1" || options[24].Value != "model-23" {
-		t.Fatalf("first page models wrong: %v", options[2:])
+	if options[0].Value != "model-1" || options[23].Value != "model-24" || options[24].Value != panelNavNext {
+		t.Fatalf("first page must trail with Next only: %+v", options[:2])
 	}
 	if buttons := editTopButtons(t, edit); len(buttons) != 2 {
 		t.Fatalf("top row must be agent buttons only: %+v", buttons)
 	}
-	// Next turns the page; the pick itself never applies a model.
+	// Next turns the page; the pick itself never applies a model. The last
+	// page carries only Previous plus the remaining models.
 	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelModel, panelNavNext)); err != nil {
 		t.Fatal(err)
 	}
@@ -409,31 +407,41 @@ func TestPanelModelPagesUseFirstTwoOptions(t *testing.T) {
 		t.Fatalf("navigation must not apply a model: %q", got)
 	}
 	edit = lastEdit(t, fake)
-	if placeholder := panelMenuPlaceholder(t, edit, modelPanelModel); placeholder != "Select model (2/2)" {
+	if placeholder := panelMenuPlaceholder(t, edit, modelPanelModel); placeholder != "🤖 Select model (2/2)" {
 		t.Fatalf("placeholder = %q", placeholder)
 	}
 	options = panelModelMenuOptions(t, edit)
-	if len(options) != 9 || options[0].Value != panelNavPrev || options[1].Value != panelNavNext || options[8].Value != "model-30" {
+	if len(options) != 7 || options[0].Value != panelNavPrev || options[6].Value != "model-30" {
 		t.Fatalf("second page wrong: %+v", options)
+	}
+	for _, option := range options {
+		if option.Value == panelNavNext {
+			t.Fatalf("last page must not offer Next: %+v", options)
+		}
+	}
+	for _, option := range options {
+		if option.Value == panelNavNext {
+			t.Fatalf("last page must not offer Next: %+v", options)
+		}
 	}
 	// Paging past the edges clamps; Previous returns.
 	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelModel, panelNavNext)); err != nil {
 		t.Fatal(err)
 	}
-	if placeholder := panelMenuPlaceholder(t, lastEdit(t, fake), modelPanelModel); placeholder != "Select model (2/2)" {
+	if placeholder := panelMenuPlaceholder(t, lastEdit(t, fake), modelPanelModel); placeholder != "🤖 Select model (2/2)" {
 		t.Fatalf("pager must clamp at the end: %q", placeholder)
 	}
 	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelModel, panelNavPrev)); err != nil {
 		t.Fatal(err)
 	}
-	if placeholder := panelMenuPlaceholder(t, lastEdit(t, fake), modelPanelModel); placeholder != "Select model (1/2)" {
+	if placeholder := panelMenuPlaceholder(t, lastEdit(t, fake), modelPanelModel); placeholder != "🤖 Select model (1/2)" {
 		t.Fatalf("pager must turn back: %q", placeholder)
 	}
 	// The retired v1.61 pager buttons still page.
 	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelPageNext)); err != nil {
 		t.Fatal(err)
 	}
-	if placeholder := panelMenuPlaceholder(t, lastEdit(t, fake), modelPanelModel); placeholder != "Select model (2/2)" {
+	if placeholder := panelMenuPlaceholder(t, lastEdit(t, fake), modelPanelModel); placeholder != "🤖 Select model (2/2)" {
 		t.Fatalf("old pager button must still work: %q", placeholder)
 	}
 	// A pick from the second page applies.
@@ -455,8 +463,8 @@ func TestPanelModelPagesUseFirstTwoOptions(t *testing.T) {
 	}
 }
 
-func TestPanelModelPagesCountedByTwentyThree(t *testing.T) {
-	cases := map[int]int{0: 1, 1: 1, 25: 1, 26: 2, 46: 2, 47: 3, 69: 3, 70: 4}
+func TestPanelModelPagesShareProviderScheme(t *testing.T) {
+	cases := map[int]int{0: 1, 1: 1, 25: 1, 26: 2, 47: 2, 48: 3, 49: 3, 70: 3, 71: 4}
 	for n, want := range cases {
 		if got := modelMenuPages(n); got != want {
 			t.Fatalf("modelMenuPages(%d) = %d, want %d", n, got, want)

@@ -199,3 +199,16 @@ Reason: pager ใน options ไม่เปลืองแถวและเห
 Impact: transport/discord/model_settings.go (model options paging, modal open/submit, ลบ selector), model_settings_test.go; ไม่แตะ sdk, gateway dispatch, /new, canonical contract
 Validation: หน้าเดียว/หลายหน้า options ถูก (nav อยู่ 1–2 เสมอ รวมไม่เกิน 25); placeholder มี (p/n); ไม่ preselect; modal fields ครบ + prefill ตรง; submit บันทึกทั้งสองค่าและแก้ panel เดิม; ค่าผิด error ชัดเจน; ปุ่ม pager เก่ายังใช้งานได้; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-015
+
+Date: 2026-09-15
+Type: revise
+Request: model pager หน้าแรกไม่ต้องมี Previous หน้าสุดท้ายไม่ต้องมี Next; เพิ่มอิโมจิตกแต่ง
+Conflict: CHANGE-014 (nav Previous/Next อยู่ทุกหน้า)
+Previous: CHANGE-014 model เกิน 25 ทุกหน้ามี Previous + Next เป็น options 1–2
+New: model paging ใช้ scheme เดียวกับ provider (หน้าแรก 24 รายการ + Next, หน้ากลาง Previous + 23 รายการ + Next, หน้าสุดท้าย Previous + รายการที่เหลือ) รวมไม่เกิน 25 options เสมอ; placeholder มี (p/n) เหมือนเดิม; ไม่ preselect เหมือนเดิม; ตกแต่ง panel (หัวข้อ explanation, ปุ่ม agent/thinking/temp, placeholder ทุกเมนู, modal title) ด้วยอิโมจิ โดยค่า/value ไม่เปลี่ยน
+Reason: ตัด nav ที่กดแล้วไม่ไปไหนออก; อิโมจิช่วยให้แยก control แต่ละแถวได้เร็ว
+Impact: transport/discord/model_settings.go (modelMenuOptions/modelPageFor ใช้ panelPages/panelWindow ร่วมกับ provider, emoji labels), model_settings_test.go; ไม่แตะ sdk, gateway, /new, canonical contract
+Validation: หน้าแรกมีแค่ Next + 24 รายการ / หน้ากลางครบ / หน้าสุดท้ายมีแค่ Previous; placeholder (p/n) ตรง; emoji ไม่ทำให้ custom ID/value เปลี่ยน; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: accepted

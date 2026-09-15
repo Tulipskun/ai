@@ -342,7 +342,7 @@ func (h *ModelSettingsHandler) openModal(s interactionAPI, i *discordgo.Interact
 		Type:     discordgo.InteractionResponseModal,
 		Data: &discordgo.InteractionResponseData{
 			CustomID: modelSettingsModalID,
-			Title:    "Thinking & Temperature",
+			Title:    "🧠 Thinking & Temperature",
 			Components: []discordgo.MessageComponent{
 				discordgo.Label{Label: "Thinking", Description: "Thinking level", Component: discordgo.SelectMenu{CustomID: "thinking", MenuType: discordgo.StringSelectMenu, Placeholder: "Select thinking level", Options: makeThinkingOptions(thinking)}},
 				discordgo.Label{Label: "Temperature", Description: "default or 0.0-2.0", Component: discordgo.TextInput{CustomID: "temperature", Style: discordgo.TextInputShort, Placeholder: "default", Value: temperature, Required: boolPtr(false), MaxLength: 8}},
@@ -462,17 +462,17 @@ func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages
 	components := []discordgo.MessageComponent{
 		panelAgentRow(panelAgentMode(config)),
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.SelectMenu{CustomID: modelPanelProvider, MenuType: discordgo.StringSelectMenu, Placeholder: "Select provider", Options: pagedProviderOptions(h.Providers, pages.provider), MinValues: intPtr(1), MaxValues: 1},
+			discordgo.SelectMenu{CustomID: modelPanelProvider, MenuType: discordgo.StringSelectMenu, Placeholder: "📦 Select provider", Options: pagedProviderOptions(h.Providers, pages.provider), MinValues: intPtr(1), MaxValues: 1},
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			discordgo.SelectMenu{CustomID: modelPanelModel, MenuType: discordgo.StringSelectMenu, Placeholder: modelPlaceholder, Options: modelOptions, MinValues: intPtr(1), MaxValues: 1},
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.Button{CustomID: modelPanelThinking, Style: discordgo.SecondaryButton, Label: "Thinking: " + panelThinkingLabel(config)},
-			discordgo.Button{CustomID: modelPanelTemp, Style: discordgo.SecondaryButton, Label: "Temp: " + temperatureLabel(config.Temperature)},
+			discordgo.Button{CustomID: modelPanelThinking, Style: discordgo.SecondaryButton, Label: "🧠 Thinking: " + panelThinkingLabel(config)},
+			discordgo.Button{CustomID: modelPanelTemp, Style: discordgo.SecondaryButton, Label: "🌡️ Temp: " + temperatureLabel(config.Temperature)},
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.SelectMenu{CustomID: modelPanelKey, MenuType: discordgo.StringSelectMenu, Placeholder: "Select API key pool", Options: makeKeyOptions(panelKeyCount(h, provider), strconv.Itoa(config.KeyIndex+1)), MinValues: intPtr(1), MaxValues: 1},
+			discordgo.SelectMenu{CustomID: modelPanelKey, MenuType: discordgo.StringSelectMenu, Placeholder: "🔑 Select API key pool", Options: makeKeyOptions(panelKeyCount(h, provider), strconv.Itoa(config.KeyIndex+1)), MinValues: intPtr(1), MaxValues: 1},
 		}},
 	}
 	return content, components, nil
@@ -488,8 +488,8 @@ func panelAgentRow(mode sdk.AgentMode) discordgo.ActionsRow {
 		mainStyle = discordgo.PrimaryButton
 	}
 	return discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-		discordgo.Button{CustomID: modelPanelAgentMain, Style: mainStyle, Label: "Main agent"},
-		discordgo.Button{CustomID: modelPanelAgentSub, Style: subStyle, Label: "Sub agent"},
+		discordgo.Button{CustomID: modelPanelAgentMain, Style: mainStyle, Label: "🤖 Main agent"},
+		discordgo.Button{CustomID: modelPanelAgentSub, Style: subStyle, Label: "⚡ Sub agent"},
 	}}
 }
 
@@ -563,20 +563,20 @@ func panelWindow(n, page int) (int, int) {
 	return start, end
 }
 
-// modelPageItems is the model count of one option page. Options 1-2 are
-// always Previous/Next, so a page holds 23 models within the 25-option
-// select limit (CHANGE-014).
-const modelPageItems = 23
-
 // modelPageFor finds the option page holding the model, so opening the panel
 // or switching providers lands on the current model instead of page one.
+// Model paging shares the provider scheme: a 24-item first page, then
+// 23-item later pages (CHANGE-015).
 func modelPageFor(models []sdk.Model, model string) int {
 	for index, candidate := range models {
 		if candidate.ID == model {
 			if len(models) <= panelMenuOptions {
 				return 0
 			}
-			return index / modelPageItems
+			if index < panelPageItems {
+				return 0
+			}
+			return 1 + (index-panelPageItems)/23
 		}
 	}
 	return 0
@@ -618,53 +618,31 @@ func pagedProviderOptions(providers []sdk.ProviderID, page int) []discordgo.Sele
 	return pagedOptions(items, page)
 }
 
-// modelMenuOptions windows the catalogue to one option page. Past 25
-// models, options 1-2 are always Previous/Next followed by up to 23 models,
-// and nothing is preselected: the current model shows in the summary text.
-// The menu placeholder names the page, e.g. Select model (1/2).
+// modelMenuOptions windows the catalogue to one option page with the
+// provider paging scheme: a single page while it fits, otherwise a 24-item
+// first page plus Next, 23-item middle pages plus both, and a Previous-led
+// last page. Nothing is preselected: the current model shows in the summary
+// text. The menu placeholder names the page, e.g. Select model (1/2).
 func modelMenuOptions(models []sdk.Model, page int) ([]discordgo.SelectMenuOption, string) {
-	pages := modelMenuPages(len(models))
-	page = clampPage(pages, page)
-	placeholder := "Select model"
-	if pages == 1 {
-		options := make([]discordgo.SelectMenuOption, 0, len(models))
-		for _, model := range models {
-			if strings.TrimSpace(model.ID) == "" {
-				continue
-			}
-			options = append(options, discordgo.SelectMenuOption{Label: model.ID, Value: model.ID})
-		}
-		return options, placeholder
-	}
-	start := page * modelPageItems
-	end := start + modelPageItems
-	if end > len(models) {
-		end = len(models)
-	}
-	options := []discordgo.SelectMenuOption{
-		{Label: "← Previous", Value: panelNavPrev},
-		{Label: "Next →", Value: panelNavNext},
-	}
-	for _, model := range models[start:end] {
+	items := make([]discordgo.SelectMenuOption, 0, len(models))
+	for _, model := range models {
 		if strings.TrimSpace(model.ID) == "" {
 			continue
 		}
-		options = append(options, discordgo.SelectMenuOption{Label: model.ID, Value: model.ID})
+		items = append(items, discordgo.SelectMenuOption{Label: model.ID, Value: model.ID})
 	}
-	return options, fmt.Sprintf("Select model (%d/%d)", page+1, pages)
+	pages := panelPages(len(items))
+	page = clampPage(pages, page)
+	if pages == 1 {
+		return items, "🤖 Select model"
+	}
+	return pagedOptions(items, page), fmt.Sprintf("🤖 Select model (%d/%d)", page+1, pages)
 }
 
-// modelMenuPages counts the model option pages: one page while the catalogue
-// fits a menu, otherwise 23-model pages behind Previous/Next options.
+// modelMenuPages counts the model option pages, sharing the provider paging
+// scheme (CHANGE-015).
 func modelMenuPages(n int) int {
-	if n <= panelMenuOptions {
-		return 1
-	}
-	pages := (n + modelPageItems - 1) / modelPageItems
-	if pages < 1 {
-		return 1
-	}
-	return pages
+	return panelPages(n)
 }
 
 func (h *ModelSettingsHandler) hasProvider(provider sdk.ProviderID) bool {
@@ -714,7 +692,7 @@ func sessionSettingsSummary(config sdk.SessionConfig) string {
 	if model == "" {
 		model = "not set"
 	}
-	return fmt.Sprintf("**Session Model Settings**\nProvider: `%s`\nModel: `%s`\nThinking: `%s`\nTemperature: `%s`\nAPI Pool: `%d`", config.Provider, model, thinking, temperatureLabel(config.Temperature), config.KeyIndex+1)
+	return fmt.Sprintf("⚙️ **Session Model Settings**\nProvider: `%s`\nModel: `%s`\nThinking: `%s`\nTemperature: `%s`\nAPI Pool: `%d`", config.Provider, model, thinking, temperatureLabel(config.Temperature), config.KeyIndex+1)
 }
 func temperatureLabel(value *float64) string {
 	if value == nil {

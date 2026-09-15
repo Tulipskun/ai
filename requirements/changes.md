@@ -264,3 +264,16 @@ Reason: ปุ่มกับสรุปอยู่ใน accent bar เดี
 Impact: transport/discord/model_settings.go (container builders, modal title), model_settings_test.go; ไม่แตะ sdk, /new logic (shared summary plain ตาม), gateway, canonical contract
 Validation: ปุ่มทุกปุ่มอยู่ใน container (sections) + selects ข้างนอก; สรุปไม่มีอิโมจิ; ปุ่ม/placeholder ยังมีอิโมจิ; custom ID/value ไม่เปลี่ยน; Save freeze เหมือนเดิม; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-020
+
+Date: 2026-09-15
+Type: revise
+Request: select menu เอาเข้า container ด้วย (ผู้ใช้ทักว่าทำได้)
+Conflict: CHANGE-019 (อ้างว่า container รับได้แค่ปุ่มผ่าน Section accessory ซึ่งผิด)
+Previous: CHANGE-019 ปุ่มเป็น sections ใน container, selects อยู่ข้างนอก
+New: ตรวจสอบ docs แล้ว ActionRow (ปุ่มและ select) อยู่ใน Container ได้จริง ย้าย controls ทั้งหมดเข้า container เดียว: title, main, sep, sub, แถวปุ่ม Main/Sub, provider, model, Thinking/Temp, pool, Save รวม 10 children พอดีลิมิต (ลบ section helpers ที่ไม่ใช้); top-level เหลือ Container เดียว; frozen เหลือ Container สรุป 5 children
+Reason: ทั้ง panel อยู่ใน accent bar เดียวกันตามที่ขอตั้งแต่แรก; แก้ข้อมูลผิดใน CHANGE-019
+Impact: transport/discord/model_settings.go (render/frozen layout), model_settings_test.go; ไม่แตะ sdk, /new, gateway, modal, canonical contract
+Validation: top-level มี Container เดียว; children ครบ 10 ตามลำดับ; custom ID ครบ; V2 flag ครบ; Save freeze เหลือ container เดียว; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: accepted

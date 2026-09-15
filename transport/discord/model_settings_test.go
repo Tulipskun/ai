@@ -72,35 +72,12 @@ func editContent(t *testing.T, edit *discordgo.WebhookEdit) string {
 
 func editOptionValues(t *testing.T, edit *discordgo.WebhookEdit, customID string) []string {
 	t.Helper()
-	if edit.Components == nil {
-		t.Fatal("edited message has no components")
+	options := panelMenuOptionsByID(t, edit, customID)
+	values := make([]string, 0, len(options))
+	for _, option := range options {
+		values = append(values, option.Value)
 	}
-	for _, component := range *edit.Components {
-		row, ok := component.(discordgo.ActionsRow)
-		if !ok {
-			continue
-		}
-		for _, child := range row.Components {
-			var menu *discordgo.SelectMenu
-			switch child := child.(type) {
-			case discordgo.SelectMenu:
-				menu = &child
-			case *discordgo.SelectMenu:
-				menu = child
-			default:
-				continue
-			}
-			if menu.CustomID == customID {
-				values := make([]string, 0, len(menu.Options))
-				for _, option := range menu.Options {
-					values = append(values, option.Value)
-				}
-				return values
-			}
-		}
-	}
-	t.Fatalf("no select %q in edited message", customID)
-	return nil
+	return values
 }
 
 func editCustomIDs(t *testing.T, edit *discordgo.WebhookEdit) []string {
@@ -132,28 +109,33 @@ func editCustomIDs(t *testing.T, edit *discordgo.WebhookEdit) []string {
 		case *discordgo.ActionsRow:
 			collectControlIDs(component.Components)
 		case discordgo.Container:
-			for _, child := range component.Components {
-				if section, ok := child.(discordgo.Section); ok {
-					collectControlIDs([]discordgo.MessageComponent{section.Accessory})
-				}
-				if section, ok := child.(*discordgo.Section); ok {
-					collectControlIDs([]discordgo.MessageComponent{section.Accessory})
-				}
-			}
+			collectControlIDs(containerRowControls(component.Components))
 		case *discordgo.Container:
-			for _, child := range component.Components {
-				if section, ok := child.(discordgo.Section); ok {
-					collectControlIDs([]discordgo.MessageComponent{section.Accessory})
-				}
-				if section, ok := child.(*discordgo.Section); ok {
-					collectControlIDs([]discordgo.MessageComponent{section.Accessory})
-				}
-			}
+			collectControlIDs(containerRowControls(component.Components))
 		default:
 			t.Fatalf("panel component is not a row or container: %T", component)
 		}
 	}
 	return ids
+}
+
+// containerRowControls flattens the interactive controls nested in container
+// rows (action rows hold buttons and selects directly).
+func containerRowControls(children []discordgo.MessageComponent) []discordgo.MessageComponent {
+	flat := []discordgo.MessageComponent{}
+	for _, child := range children {
+		switch child := child.(type) {
+		case discordgo.ActionsRow:
+			flat = append(flat, child.Components...)
+		case *discordgo.ActionsRow:
+			flat = append(flat, child.Components...)
+		case discordgo.Section:
+			flat = append(flat, child.Accessory)
+		case *discordgo.Section:
+			flat = append(flat, child.Accessory)
+		}
+	}
+	return flat
 }
 
 // panelContainerTexts returns the TextDisplay contents of the summary
@@ -208,27 +190,38 @@ func panelContainerOf(t *testing.T, edit *discordgo.WebhookEdit) discordgo.Conta
 	return discordgo.Container{}
 }
 
-// panelAccessoryStyles maps section accessory button IDs to their styles.
+// panelAccessoryStyles maps button IDs to their styles for every button in
+// the message, wherever rows nest (top level or inside the container).
 func panelAccessoryStyles(t *testing.T, edit *discordgo.WebhookEdit) map[string]discordgo.ButtonStyle {
 	t.Helper()
+	if edit.Components == nil {
+		t.Fatal("edited message has no components")
+	}
 	styles := map[string]discordgo.ButtonStyle{}
-	for _, child := range panelContainerOf(t, edit).Components {
-		var section discordgo.Section
-		switch child := child.(type) {
-		case discordgo.Section:
-			section = child
-		case *discordgo.Section:
-			section = *child
-		default:
-			continue
-		}
-		switch button := section.Accessory.(type) {
-		case discordgo.Button:
-			styles[button.CustomID] = button.Style
-		case *discordgo.Button:
-			styles[button.CustomID] = button.Style
+	var walk func(children []discordgo.MessageComponent)
+	walk = func(children []discordgo.MessageComponent) {
+		for _, child := range children {
+			switch child := child.(type) {
+			case discordgo.Button:
+				styles[child.CustomID] = child.Style
+			case *discordgo.Button:
+				styles[child.CustomID] = child.Style
+			case discordgo.ActionsRow:
+				walk(child.Components)
+			case *discordgo.ActionsRow:
+				walk(child.Components)
+			case discordgo.Container:
+				walk(child.Components)
+			case *discordgo.Container:
+				walk(child.Components)
+			case discordgo.Section:
+				walk(append(append([]discordgo.MessageComponent{}, child.Components...), child.Accessory))
+			case *discordgo.Section:
+				walk(append(append([]discordgo.MessageComponent{}, child.Components...), child.Accessory))
+			}
 		}
 	}
+	walk(*edit.Components)
 	return styles
 }
 
@@ -258,29 +251,32 @@ func TestPanelOpensOneRegularMessage(t *testing.T) {
 		t.Fatalf("panel edit must carry the V2 flag: %+v", edit.Flags)
 	}
 	top := *edit.Components
-	if len(top) != 5 {
-		t.Fatalf("panel must be container + separator + 3 menu rows: %d", len(top))
+	if len(top) != 1 {
+		t.Fatalf("panel must be one container: %d", len(top))
 	}
-	if _, ok := top[0].(discordgo.Container); !ok {
-		if _, ok := top[0].(*discordgo.Container); !ok {
-			t.Fatalf("first component must be the summary container: %T", top[0])
+	container, ok := top[0].(discordgo.Container)
+	if !ok {
+		if c, ok := top[0].(*discordgo.Container); ok {
+			container = *c
+		} else {
+			t.Fatalf("panel must be one container: %T", top[0])
 		}
 	}
-	if _, ok := top[1].(discordgo.Separator); !ok {
-		if _, ok := top[1].(*discordgo.Separator); !ok {
-			t.Fatalf("controls must follow a separator: %T", top[1])
-		}
-	}
-	for index, component := range top[2:] {
-		if _, ok := component.(discordgo.ActionsRow); !ok {
-			if _, ok := component.(*discordgo.ActionsRow); !ok {
-				t.Fatalf("panel row %d is not an action row: %T", index+1, component)
-			}
-		}
-	}
-	container := panelContainerOf(t, edit)
 	if len(container.Components) != 10 {
-		t.Fatalf("container must hold summary plus 5 button sections: %d", len(container.Components))
+		t.Fatalf("container must hold summary plus controls: %d", len(container.Components))
+	}
+	rows := 0
+	for _, child := range container.Components {
+		if _, ok := child.(discordgo.ActionsRow); ok {
+			rows++
+			continue
+		}
+		if _, ok := child.(*discordgo.ActionsRow); ok {
+			rows++
+		}
+	}
+	if rows != 6 {
+		t.Fatalf("container must hold 6 control rows: %d", rows)
 	}
 	ids := editCustomIDs(t, edit)
 	seen := map[string]bool{}
@@ -297,26 +293,28 @@ func TestPanelOpensOneRegularMessage(t *testing.T) {
 	}
 	save := false
 	for _, child := range container.Components {
-		section, ok := child.(discordgo.Section)
+		row, ok := child.(discordgo.ActionsRow)
 		if !ok {
-			if s, ok := child.(*discordgo.Section); ok {
-				section = *s
+			if r, ok := child.(*discordgo.ActionsRow); ok {
+				row = *r
 			} else {
 				continue
 			}
 		}
-		button, ok := section.Accessory.(discordgo.Button)
-		if !ok {
-			if b, ok := section.Accessory.(*discordgo.Button); ok {
-				button = *b
-			} else {
-				t.Fatalf("section accessory is not a button: %T", section.Accessory)
+		for _, grandchild := range row.Components {
+			button, ok := grandchild.(discordgo.Button)
+			if !ok {
+				if b, ok := grandchild.(*discordgo.Button); ok {
+					button = *b
+				} else {
+					continue
+				}
 			}
-		}
-		if button.CustomID == modelPanelSave {
-			save = true
-			if button.Style != discordgo.SuccessButton {
-				t.Fatalf("save must be green: %+v", button)
+			if button.CustomID == modelPanelSave {
+				save = true
+				if button.Style != discordgo.SuccessButton {
+					t.Fatalf("save must be green: %+v", button)
+				}
 			}
 		}
 	}
@@ -328,8 +326,8 @@ func TestPanelOpensOneRegularMessage(t *testing.T) {
 		t.Fatalf("panel content must stay empty next to the summary: %q", content)
 	}
 	texts := panelContainerTexts(t, edit)
-	if len(texts) != 8 {
-		t.Fatalf("summary must be title, sides and section labels: %q", texts)
+	if len(texts) != 3 {
+		t.Fatalf("summary must be title plus two sides: %q", texts)
 	}
 	if texts[0] != "**Session Model Settings**" {
 		t.Fatalf("title wrong: %q", texts[0])
@@ -373,14 +371,7 @@ func panelModelMenuOptions(t *testing.T, edit *discordgo.WebhookEdit) []discordg
 
 func panelMenuOptionsByID(t *testing.T, edit *discordgo.WebhookEdit, customID string) []discordgo.SelectMenuOption {
 	t.Helper()
-	if edit.Components == nil {
-		t.Fatal("edited message has no components")
-	}
-	for _, component := range *edit.Components {
-		row, ok := component.(discordgo.ActionsRow)
-		if !ok {
-			continue
-		}
+	for _, row := range panelMessageRows(t, edit) {
 		for _, child := range row.Components {
 			var menu *discordgo.SelectMenu
 			switch child := child.(type) {
@@ -402,14 +393,7 @@ func panelMenuOptionsByID(t *testing.T, edit *discordgo.WebhookEdit, customID st
 
 func panelMenuPlaceholder(t *testing.T, edit *discordgo.WebhookEdit, customID string) string {
 	t.Helper()
-	if edit.Components == nil {
-		t.Fatal("edited message has no components")
-	}
-	for _, component := range *edit.Components {
-		row, ok := component.(discordgo.ActionsRow)
-		if !ok {
-			continue
-		}
+	for _, row := range panelMessageRows(t, edit) {
 		for _, child := range row.Components {
 			var menu *discordgo.SelectMenu
 			switch child := child.(type) {
@@ -427,6 +411,33 @@ func panelMenuPlaceholder(t *testing.T, edit *discordgo.WebhookEdit, customID st
 	}
 	t.Fatalf("no select %q in edited message", customID)
 	return ""
+}
+
+// panelMessageRows returns every action row in the message, descending into
+// the container.
+func panelMessageRows(t *testing.T, edit *discordgo.WebhookEdit) []discordgo.ActionsRow {
+	t.Helper()
+	if edit.Components == nil {
+		t.Fatal("edited message has no components")
+	}
+	rows := []discordgo.ActionsRow{}
+	var collect func(children []discordgo.MessageComponent)
+	collect = func(children []discordgo.MessageComponent) {
+		for _, child := range children {
+			switch child := child.(type) {
+			case discordgo.ActionsRow:
+				rows = append(rows, child)
+			case *discordgo.ActionsRow:
+				rows = append(rows, *child)
+			case discordgo.Container:
+				collect(child.Components)
+			case *discordgo.Container:
+				collect(child.Components)
+			}
+		}
+	}
+	collect(*edit.Components)
+	return rows
 }
 
 func TestPanelPagesCountOptions(t *testing.T) {
@@ -710,7 +721,7 @@ func TestPanelThinkingAndTempModal(t *testing.T) {
 	if joined := strings.Join(texts, "\n"); !strings.Contains(joined, "`high`") || !strings.Contains(joined, "`1.5`") {
 		t.Fatalf("panel not rewritten: %q", joined)
 	}
-	if len(updated.Data.Components) != 5 {
+	if len(updated.Data.Components) != 1 {
 		t.Fatalf("rewritten panel must keep the full layout: %+v", updated.Data.Components)
 	}
 	// Default clears both overrides.

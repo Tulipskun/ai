@@ -248,7 +248,7 @@ func (h *ModelSettingsHandler) frozenPanel(i *discordgo.InteractionCreate) (stri
 		return "", nil, err
 	}
 	config := session.Config()
-	return "", []discordgo.MessageComponent{panelSummaryContainer(config, session.EffectiveConfig(), false)}, nil
+	return "", []discordgo.MessageComponent{panelSummaryContainer(config)}, nil
 }
 
 func (h *ModelSettingsHandler) resolve(i *discordgo.InteractionCreate) (*sdk.Session, error) {
@@ -504,14 +504,31 @@ func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages
 	if failure != "" {
 		content = "Model settings error: " + failure
 	}
+	modelOptions, modelPlaceholder := modelMenuOptions(models, pages.model)
+	components := []discordgo.MessageComponent{
+		panelLiveContainer(config, effective, h, provider, pages, modelOptions, modelPlaceholder),
+	}
+	return content, components, nil
+}
+
+// panelLiveContainer builds the whole live panel inside one container so
+// every control shares the accent bar: summary texts, then all controls as
+// action rows (ActionRows with buttons and selects are valid container
+// children), ending with Save. Ten children total (CHANGE-020).
+func panelLiveContainer(config, effective sdk.SessionConfig, h *ModelSettingsHandler, provider sdk.ProviderID, pages *modelPanelPages, modelOptions []discordgo.SelectMenuOption, modelPlaceholder string) discordgo.Container {
 	thinking := string(effective.ThinkingLevel)
 	if thinking == "" {
 		thinking = "default"
 	}
-	modelOptions, modelPlaceholder := modelMenuOptions(models, pages.model)
-	components := []discordgo.MessageComponent{
-		panelSummaryContainer(config, effective, true),
+	return panelContainer([]discordgo.MessageComponent{
+		discordgo.TextDisplay{Content: "**Session Model Settings**"},
+		discordgo.TextDisplay{Content: panelModeBlock("**Main agent**", config.Provider, config.Model, config.ThinkingLevel, config.Temperature, config.KeyIndex)},
 		discordgo.Separator{Divider: boolPtr(true)},
+		discordgo.TextDisplay{Content: panelModeBlock("**Sub agent**", config.Sub.Provider, config.Sub.Model, config.Sub.ThinkingLevel, config.Sub.Temperature, config.Sub.KeyIndex)},
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.Button{CustomID: modelPanelAgentMain, Style: panelAgentButtonStyle(config, sdk.AgentModeMain), Label: "🤖 Main agent"},
+			discordgo.Button{CustomID: modelPanelAgentSub, Style: panelAgentButtonStyle(config, sdk.AgentModeSub), Label: "⚡ Sub agent"},
+		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			discordgo.SelectMenu{CustomID: modelPanelProvider, MenuType: discordgo.StringSelectMenu, Placeholder: "📦 Select provider", Options: pagedProviderOptions(h.Providers, pages.provider), MinValues: intPtr(1), MaxValues: 1},
 		}},
@@ -519,10 +536,16 @@ func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages
 			discordgo.SelectMenu{CustomID: modelPanelModel, MenuType: discordgo.StringSelectMenu, Placeholder: modelPlaceholder, Options: modelOptions, MinValues: intPtr(1), MaxValues: 1},
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.Button{CustomID: modelPanelThinking, Style: discordgo.SecondaryButton, Label: "💭 Thinking: " + thinking},
+			discordgo.Button{CustomID: modelPanelTemp, Style: discordgo.SecondaryButton, Label: "🌡️ Temp: " + temperatureLabel(effective.Temperature)},
+		}},
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			discordgo.SelectMenu{CustomID: modelPanelKey, MenuType: discordgo.StringSelectMenu, Placeholder: "🔑 Select API key pool", Options: makeKeyOptions(panelKeyCount(h, provider)), MinValues: intPtr(1), MaxValues: 1},
 		}},
-	}
-	return content, components, nil
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.Button{CustomID: modelPanelSave, Style: discordgo.SuccessButton, Label: "💾 Save"},
+		}},
+	})
 }
 
 // panelAgentButtonStyle highlights the active side's toggle button.
@@ -533,51 +556,21 @@ func panelAgentButtonStyle(config sdk.SessionConfig, mode sdk.AgentMode) discord
 	return discordgo.SecondaryButton
 }
 
-// panelSummaryContainer renders the live session settings as a V2 container
-// under one accent bar: a title, the main block, a separator, the sub block,
-// then every button as a section (text left, button right). Select menus
-// cannot live in a container, so they stay as top-level rows outside.
-// Summaries are plain text; emoji lives only in buttons and menus
-// (REQ-028, CHANGE-019).
-func panelSummaryContainer(config, effective sdk.SessionConfig, live bool) discordgo.Container {
-	children := []discordgo.MessageComponent{
+// panelSummaryContainer renders the saved panel: the summary container
+// alone with no controls left to press (CHANGE-017).
+func panelSummaryContainer(config sdk.SessionConfig) discordgo.Container {
+	return panelContainer([]discordgo.MessageComponent{
 		discordgo.TextDisplay{Content: "**Session Model Settings**"},
 		discordgo.TextDisplay{Content: panelModeBlock("**Main agent**", config.Provider, config.Model, config.ThinkingLevel, config.Temperature, config.KeyIndex)},
 		discordgo.Separator{Divider: boolPtr(true)},
 		discordgo.TextDisplay{Content: panelModeBlock("**Sub agent**", config.Sub.Provider, config.Sub.Model, config.Sub.ThinkingLevel, config.Sub.Temperature, config.Sub.KeyIndex)},
-	}
-	if !live {
-		children = append(children, discordgo.TextDisplay{Content: panelModeStatus(config)})
-		return panelContainer(children)
-	}
-	thinking := string(effective.ThinkingLevel)
-	if thinking == "" {
-		thinking = "default"
-	}
-	children = append(children,
-		discordgo.Separator{Divider: boolPtr(true)},
-		panelButtonSection(modelPanelAgentMain, "🤖 Main agent", panelAgentButtonStyle(config, sdk.AgentModeMain), "**Main agent**\nPlans first, then delegates work to a sub-agent"),
-		panelButtonSection(modelPanelAgentSub, "⚡ Sub agent", panelAgentButtonStyle(config, sdk.AgentModeSub), "**Sub agent**\nExecutes directly with the full tool set"),
-		panelButtonSection(modelPanelThinking, "💭 Thinking", discordgo.SecondaryButton, "Thinking: `"+thinking+"`"),
-		panelButtonSection(modelPanelTemp, "🌡️ Temp", discordgo.SecondaryButton, "Temperature: `"+temperatureLabel(effective.Temperature)+"`"),
-		panelButtonSection(modelPanelSave, "💾 Save", discordgo.SuccessButton, "Save these settings and freeze the panel"),
-	)
-	return panelContainer(children)
+		discordgo.TextDisplay{Content: panelModeStatus(config)},
+	})
 }
 
 func panelContainer(children []discordgo.MessageComponent) discordgo.Container {
 	accent := 0x5865F2
 	return discordgo.Container{AccentColor: &accent, Components: children}
-}
-
-// panelButtonSection renders one button inside the container: its label on
-// the left, the button on the right. This is the only way buttons can share
-// the container's accent bar.
-func panelButtonSection(customID, label string, style discordgo.ButtonStyle, text string) discordgo.Section {
-	return discordgo.Section{
-		Components: []discordgo.MessageComponent{discordgo.TextDisplay{Content: text}},
-		Accessory:  discordgo.Button{CustomID: customID, Style: style, Label: label},
-	}
 }
 
 // panelModeBlock renders one agent side's five settings lines as plain text;

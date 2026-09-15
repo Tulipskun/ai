@@ -70,27 +70,6 @@ func editContent(t *testing.T, edit *discordgo.WebhookEdit) string {
 	return *edit.Content
 }
 
-func editEmbedFields(t *testing.T, edit *discordgo.WebhookEdit) map[string]string {
-	t.Helper()
-	if edit.Embeds == nil || len(*edit.Embeds) == 0 {
-		t.Fatal("edited message has no summary embed")
-	}
-	embed := (*edit.Embeds)[0]
-	if embed.Title != "⚙️ Session Model Settings" {
-		t.Fatalf("embed title = %q", embed.Title)
-	}
-	fields := make(map[string]string, len(embed.Fields))
-	for _, field := range embed.Fields {
-		fields[field.Name] = field.Value
-	}
-	for _, want := range []string{"Provider", "Model", "Agent", "Thinking", "Temperature", "API Pool"} {
-		if _, ok := fields[want]; !ok {
-			t.Fatalf("embed misses field %q: %+v", want, embed.Fields)
-		}
-	}
-	return fields
-}
-
 func editOptionValues(t *testing.T, edit *discordgo.WebhookEdit, customID string) []string {
 	t.Helper()
 	if edit.Components == nil {
@@ -130,12 +109,8 @@ func editCustomIDs(t *testing.T, edit *discordgo.WebhookEdit) []string {
 		t.Fatal("edited message has no components")
 	}
 	ids := []string{}
-	for _, component := range *edit.Components {
-		row, ok := component.(discordgo.ActionsRow)
-		if !ok {
-			t.Fatalf("panel component is not an action row: %T", component)
-		}
-		for _, child := range row.Components {
+	collectControlIDs := func(children []discordgo.MessageComponent) {
+		for _, child := range children {
 			switch child := child.(type) {
 			case discordgo.SelectMenu:
 				ids = append(ids, child.CustomID)
@@ -145,12 +120,118 @@ func editCustomIDs(t *testing.T, edit *discordgo.WebhookEdit) []string {
 				ids = append(ids, child.CustomID)
 			case *discordgo.Button:
 				ids = append(ids, child.CustomID)
-			default:
-				t.Fatalf("panel child is not a control: %T", child)
 			}
 		}
 	}
+	for _, component := range *edit.Components {
+		switch component := component.(type) {
+		case discordgo.ActionsRow:
+			collectControlIDs(component.Components)
+		case *discordgo.ActionsRow:
+			collectControlIDs(component.Components)
+		case discordgo.Container:
+			for _, child := range component.Components {
+				if section, ok := child.(discordgo.Section); ok {
+					collectControlIDs([]discordgo.MessageComponent{section.Accessory})
+				}
+				if section, ok := child.(*discordgo.Section); ok {
+					collectControlIDs([]discordgo.MessageComponent{section.Accessory})
+				}
+			}
+		case *discordgo.Container:
+			for _, child := range component.Components {
+				if section, ok := child.(discordgo.Section); ok {
+					collectControlIDs([]discordgo.MessageComponent{section.Accessory})
+				}
+				if section, ok := child.(*discordgo.Section); ok {
+					collectControlIDs([]discordgo.MessageComponent{section.Accessory})
+				}
+			}
+		default:
+			t.Fatalf("panel component is not a row or container: %T", component)
+		}
+	}
 	return ids
+}
+
+// panelContainerTexts returns the TextDisplay contents of the summary
+// container in order: title, values, then the mode sections' texts.
+func panelContainerTexts(t *testing.T, edit *discordgo.WebhookEdit) []string {
+	t.Helper()
+	container := panelContainerOf(t, edit)
+	texts := []string{}
+	for _, child := range container.Components {
+		switch child := child.(type) {
+		case discordgo.TextDisplay:
+			texts = append(texts, child.Content)
+		case *discordgo.TextDisplay:
+			texts = append(texts, child.Content)
+		case discordgo.Section:
+			for _, grandchild := range child.Components {
+				if text, ok := grandchild.(discordgo.TextDisplay); ok {
+					texts = append(texts, text.Content)
+				}
+				if text, ok := grandchild.(*discordgo.TextDisplay); ok {
+					texts = append(texts, text.Content)
+				}
+			}
+		case *discordgo.Section:
+			for _, grandchild := range child.Components {
+				if text, ok := grandchild.(discordgo.TextDisplay); ok {
+					texts = append(texts, text.Content)
+				}
+				if text, ok := grandchild.(*discordgo.TextDisplay); ok {
+					texts = append(texts, text.Content)
+				}
+			}
+		}
+	}
+	return texts
+}
+
+func panelContainerOf(t *testing.T, edit *discordgo.WebhookEdit) discordgo.Container {
+	t.Helper()
+	if edit.Components == nil {
+		t.Fatal("edited message has no components")
+	}
+	for _, component := range *edit.Components {
+		if container, ok := component.(discordgo.Container); ok {
+			return container
+		}
+		if container, ok := component.(*discordgo.Container); ok {
+			return *container
+		}
+	}
+	t.Fatal("edited message has no summary container")
+	return discordgo.Container{}
+}
+
+// panelSections returns the agent mode sections of the summary container.
+func panelSections(t *testing.T, edit *discordgo.WebhookEdit) []discordgo.Section {
+	t.Helper()
+	container := panelContainerOf(t, edit)
+	sections := []discordgo.Section{}
+	for _, child := range container.Components {
+		if section, ok := child.(discordgo.Section); ok {
+			sections = append(sections, section)
+		}
+		if section, ok := child.(*discordgo.Section); ok {
+			sections = append(sections, *section)
+		}
+	}
+	return sections
+}
+
+func sectionButton(t *testing.T, section discordgo.Section) discordgo.Button {
+	t.Helper()
+	if button, ok := section.Accessory.(discordgo.Button); ok {
+		return button
+	}
+	if button, ok := section.Accessory.(*discordgo.Button); ok {
+		return *button
+	}
+	t.Fatalf("section accessory is not a button: %T", section.Accessory)
+	return discordgo.Button{}
 }
 
 func TestPanelOpensOneRegularMessage(t *testing.T) {
@@ -175,8 +256,29 @@ func TestPanelOpensOneRegularMessage(t *testing.T) {
 		t.Fatalf("panel must render exactly one message: %+v", fake.edits)
 	}
 	edit := lastEdit(t, fake)
-	if rows := len(*edit.Components); rows != 5 {
-		t.Fatalf("panel must have 5 rows: %d", rows)
+	if edit.Flags&discordgo.MessageFlagsIsComponentsV2 == 0 {
+		t.Fatalf("panel edit must carry the V2 flag: %+v", edit.Flags)
+	}
+	top := *edit.Components
+	if len(top) != 6 {
+		t.Fatalf("panel must be a container plus 5 rows: %d", len(top))
+	}
+	if _, ok := top[0].(discordgo.Container); !ok {
+		if _, ok := top[0].(*discordgo.Container); !ok {
+			t.Fatalf("first component must be the summary container: %T", top[0])
+		}
+	}
+	rows := 0
+	for _, component := range top[1:] {
+		if _, ok := component.(discordgo.ActionsRow); !ok {
+			if _, ok := component.(*discordgo.ActionsRow); !ok {
+				t.Fatalf("panel row is not an action row: %T", component)
+			}
+		}
+		rows++
+	}
+	if rows != 5 {
+		t.Fatalf("panel must have 5 action rows: %d", rows)
 	}
 	ids := editCustomIDs(t, edit)
 	seen := map[string]bool{}
@@ -186,18 +288,39 @@ func TestPanelOpensOneRegularMessage(t *testing.T) {
 		}
 		seen[id] = true
 	}
-	for _, want := range []string{modelPanelAgentMain, modelPanelAgentSub, modelPanelProvider, modelPanelModel, modelPanelThinking, modelPanelTemp, modelPanelKey} {
+	for _, want := range []string{modelPanelAgentMain, modelPanelAgentSub, modelPanelProvider, modelPanelModel, modelPanelThinking, modelPanelTemp, modelPanelKey, modelPanelSave} {
 		if !seen[want] {
 			t.Fatalf("panel misses control %q: %v", want, ids)
 		}
 	}
+	save := false
+	for _, component := range top[5:] {
+		row, ok := component.(discordgo.ActionsRow)
+		if !ok {
+			continue
+		}
+		for _, child := range row.Components {
+			if button, ok := child.(discordgo.Button); ok && button.CustomID == modelPanelSave {
+				save = true
+				if button.Style != discordgo.SuccessButton {
+					t.Fatalf("save must be green: %+v", button)
+				}
+			}
+		}
+	}
+	if !save {
+		t.Fatalf("panel must end with a green save button: %v", ids)
+	}
 	content := editContent(t, edit)
 	if content != "" {
-		t.Fatalf("panel content must stay empty next to the embed: %q", content)
+		t.Fatalf("panel content must stay empty next to the summary: %q", content)
 	}
-	fields := editEmbedFields(t, edit)
-	if fields["Agent"] != "`main`" || fields["Model"] != "`not set`" {
-		t.Fatalf("embed fields wrong: %+v", fields)
+	texts := panelContainerTexts(t, edit)
+	joined := strings.Join(texts, "\n")
+	for _, want := range []string{"Session Model Settings", "not set", "Main agent", "Sub agent"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("summary misses %q: %q", want, joined)
+		}
 	}
 	// Both menus stay neutral: current values show in the summary text,
 	// never as preselected options, so the (p/n) placeholder stays visible.
@@ -284,30 +407,6 @@ func panelMenuPlaceholder(t *testing.T, edit *discordgo.WebhookEdit, customID st
 	return ""
 }
 
-func editTopButtons(t *testing.T, edit *discordgo.WebhookEdit) []discordgo.Button {
-	t.Helper()
-	if edit.Components == nil || len(*edit.Components) == 0 {
-		t.Fatal("edited message has no components")
-	}
-	row, ok := (*edit.Components)[0].(discordgo.ActionsRow)
-	if !ok {
-		t.Fatal("first row is not an action row")
-	}
-	buttons := []discordgo.Button{}
-	for _, child := range row.Components {
-		button, ok := child.(discordgo.Button)
-		if !ok {
-			if b, ok := child.(*discordgo.Button); ok {
-				button = *b
-			} else {
-				t.Fatalf("top row child is not a button: %T", child)
-			}
-		}
-		buttons = append(buttons, button)
-	}
-	return buttons
-}
-
 func TestPanelPagesCountOptions(t *testing.T) {
 	cases := map[int]int{0: 1, 1: 1, 25: 1, 26: 2, 27: 2, 47: 2, 48: 3, 49: 3, 70: 3, 71: 4}
 	for n, want := range cases {
@@ -385,8 +484,8 @@ func TestPanelModelPickAppliesImmediately(t *testing.T) {
 	if got := session.Config().Model; got != "m2" {
 		t.Fatalf("model not applied: %q", got)
 	}
-	if fields := editEmbedFields(t, lastEdit(t, fake)); fields["Model"] != "`m2`" {
-		t.Fatalf("panel must show the applied model: %+v", fields)
+	if joined := strings.Join(panelContainerTexts(t, lastEdit(t, fake)), "\n"); !strings.Contains(joined, "`m2`") {
+		t.Fatalf("panel must show the applied model: %q", joined)
 	}
 	if len(fake.followups) != 0 {
 		t.Fatalf("panel must reuse one message: %+v", fake.followups)
@@ -418,8 +517,15 @@ func TestPanelModelPagesConditionalNav(t *testing.T) {
 	if options[0].Value != panelNavNext || options[1].Value != "model-1" || options[24].Value != "model-24" {
 		t.Fatalf("first page must lead with Next: %+v", options[:3])
 	}
-	if buttons := editTopButtons(t, edit); len(buttons) != 2 {
-		t.Fatalf("top row must be agent buttons only: %+v", buttons)
+	sections := panelSections(t, edit)
+	if len(sections) != 2 {
+		t.Fatalf("summary must hold both mode sides: %d", len(sections))
+	}
+	if button := sectionButton(t, sections[0]); button.CustomID != modelPanelAgentMain {
+		t.Fatalf("first side must be main: %+v", button)
+	}
+	if button := sectionButton(t, sections[1]); button.CustomID != modelPanelAgentSub {
+		t.Fatalf("second side must be sub: %+v", button)
 	}
 	// Next turns the page; the pick itself never applies a model. The last
 	// page carries only Previous plus the remaining models.
@@ -562,21 +668,30 @@ func TestPanelThinkingAndTempModal(t *testing.T) {
 	if updated.Type != discordgo.InteractionResponseUpdateMessage {
 		t.Fatalf("submit must update the panel message: %+v", updated)
 	}
+	if updated.Data.Flags&discordgo.MessageFlagsIsComponentsV2 == 0 {
+		t.Fatalf("submit must stay on V2: %+v", updated.Data.Flags)
+	}
 	if got := session.Config(); got.ThinkingLevel != sdk.ThinkingHigh || got.Temperature == nil || *got.Temperature != 1.5 {
 		t.Fatalf("modal values not applied: %+v", got)
 	}
-	if len(updated.Data.Embeds) != 1 {
-		t.Fatalf("submit must rewrite the panel embed: %+v", updated.Data)
+	if len(updated.Data.Embeds) != 0 {
+		t.Fatalf("V2 messages must not carry embeds: %+v", updated.Data)
 	}
-	embedFields := map[string]string{}
-	for _, field := range updated.Data.Embeds[0].Fields {
-		embedFields[field.Name] = field.Value
+	texts := []string{}
+	for _, component := range updated.Data.Components {
+		if container, ok := component.(discordgo.Container); ok {
+			for _, child := range container.Components {
+				if text, ok := child.(discordgo.TextDisplay); ok {
+					texts = append(texts, text.Content)
+				}
+			}
+		}
 	}
-	if embedFields["Thinking"] != "`high`" || embedFields["Temperature"] != "`1.5`" {
-		t.Fatalf("panel embed not rewritten: %+v", embedFields)
+	if joined := strings.Join(texts, "\n"); !strings.Contains(joined, "`high`") || !strings.Contains(joined, "`1.5`") {
+		t.Fatalf("panel not rewritten: %q", joined)
 	}
-	if len(updated.Data.Components) != 5 {
-		t.Fatalf("rewritten panel must keep 5 rows: %+v", updated.Data.Components)
+	if len(updated.Data.Components) != 6 {
+		t.Fatalf("rewritten panel must keep container plus 5 rows: %+v", updated.Data.Components)
 	}
 	// Default clears both overrides.
 	if err := handler.Handle(fake, panelModalSubmit("default", "default")); err != nil {
@@ -643,8 +758,8 @@ func TestPanelProviderSwitchKeepsOrResetsModel(t *testing.T) {
 	if got := session.Config(); got.Provider != "D.ai" || got.Model != "d-only" {
 		t.Fatalf("model must reset: %+v", got)
 	}
-	if fields := editEmbedFields(t, lastEdit(t, fake)); fields["Model"] != "`d-only`" {
-		t.Fatalf("panel must show the reset model: %+v", fields)
+	if joined := strings.Join(panelContainerTexts(t, lastEdit(t, fake)), "\n"); !strings.Contains(joined, "`d-only`") {
+		t.Fatalf("panel must show the reset model: %q", joined)
 	}
 }
 
@@ -659,8 +774,25 @@ func TestPanelAgentModeButtonsPersist(t *testing.T) {
 	if got := session.Config().AgentMode; got != sdk.AgentModeSub {
 		t.Fatalf("agent mode = %q", got)
 	}
-	if fields := editEmbedFields(t, lastEdit(t, fake)); fields["Agent"] != "`sub`" {
-		t.Fatalf("panel must show sub mode: %+v", fields)
+	subActive := false
+	for _, section := range panelSections(t, lastEdit(t, fake)) {
+		button := sectionButton(t, section)
+		if button.CustomID != modelPanelAgentSub {
+			if button.Style != discordgo.SecondaryButton {
+				t.Fatalf("inactive side must stay secondary: %+v", button)
+			}
+			continue
+		}
+		if button.Style != discordgo.PrimaryButton {
+			t.Fatalf("active side must be primary: %+v", button)
+		}
+		subActive = true
+	}
+	if !subActive {
+		t.Fatal("sub side missing")
+	}
+	if joined := strings.Join(panelContainerTexts(t, lastEdit(t, fake)), "\n"); !strings.Contains(joined, "✅ Active") {
+		t.Fatalf("active side must be marked: %q", joined)
 	}
 	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelAgentMain)); err != nil {
 		t.Fatal(err)
@@ -685,6 +817,41 @@ func TestPanelKeyPoolPickApplies(t *testing.T) {
 		if option.Default {
 			t.Fatalf("pool must not preselect: %+v", option)
 		}
+	}
+}
+
+func TestPanelSaveFreezesPanel(t *testing.T) {
+	keys := sdk.NewKeyPool("k1")
+	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1", Provider: "B.ai", Model: "m1"}, keys)
+	handler := panelTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
+	fake := &fakeInteractionAPI{}
+	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelSave)); err != nil {
+		t.Fatal(err)
+	}
+	if fake.responds[len(fake.responds)-1].Type != discordgo.InteractionResponseDeferredMessageUpdate {
+		t.Fatalf("save must defer the button first: %+v", fake.responds)
+	}
+	edit := lastEdit(t, fake)
+	if edit.Flags&discordgo.MessageFlagsIsComponentsV2 == 0 {
+		t.Fatalf("frozen panel must stay on V2: %+v", edit.Flags)
+	}
+	top := *edit.Components
+	if len(top) != 1 {
+		t.Fatalf("frozen panel must be the summary alone: %d", len(top))
+	}
+	if _, ok := top[0].(discordgo.Container); !ok {
+		if _, ok := top[0].(*discordgo.Container); !ok {
+			t.Fatalf("frozen panel must be a container: %T", top[0])
+		}
+	}
+	if ids := editCustomIDs(t, edit); len(ids) != 0 {
+		t.Fatalf("frozen panel must hold no controls: %v", ids)
+	}
+	if joined := strings.Join(panelContainerTexts(t, edit), "\n"); !strings.Contains(joined, "`m1`") {
+		t.Fatalf("frozen panel must keep the values: %q", joined)
+	}
+	if len(fake.followups) != 0 {
+		t.Fatalf("save must not send new messages: %+v", fake.followups)
 	}
 }
 

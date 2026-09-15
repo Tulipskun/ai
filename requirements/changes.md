@@ -225,3 +225,16 @@ Reason: nav อยู่ด้านบนเห็นก่อนไม่ต�
 Impact: transport/discord/model_settings.go (pagedOptions order, makeKeyOptions ไม่ preselect, renderPanel คืน embed, editPanelMessage helper, modal title), model_settings_test.go; ไม่แตะ shared summary (ใช้กับ /new ต่อ), sdk, gateway, canonical contract
 Validation: หน้าแรก Next อยู่อันแรก / หน้ากลาง Prev+Next อยู่อันแรก / หน้าสุดท้ายมีแค่ Prev; key pool ไม่มี default; panel edit มี embed ครบ 6 fields ถูกค่า; submit modal อัพเดท embed; error เป็น text; emoji ไม่แตะ ID/value; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-017
+
+Date: 2026-09-15
+Type: revise
+Request: panel เป็น Components V2; ปุ่ม Save สีเขียวล่างสุด; สรุปแบ่ง 2 ฝั่งซ้ายขวา main/sub
+Conflict: CHANGE-016 (panel เป็น V1 + สรุป embed เดี่ยว)
+Previous: CHANGE-016 panel V1 (5 action rows) + สรุป embed + ปุ่ม agent แถวแรก
+New: REQ-028 panel ส่ง flag IsComponentsV2 ทุก response/edit (content/embeds เดิมใช้ไม่ได้ใน V2): Container (accent blurple) มี TextDisplay หัวข้อ, TextDisplay ค่า settings, Separator, Section ฝั่ง Main (accessory ปุ่ม Main) + Section ฝั่ง Sub (accessory ปุ่ม Sub) ฝั่ง active ปุ่ม Primary + ข้อความ ✅ Active (settings ชุดเดียวสลับแค่พฤติกรรม); ต่อด้วย ActionRow provider/model/thinking-temp/pool เหมือนเดิม + ActionRow ปุ่ม Save (Success สีเขียว) ล่างสุด; Save = freeze (defer-update + แก้ข้อความเป็น Container สรุปอย่างเดียว ไม่มี controls); modal submit ตอบ Update พร้อม V2 เช่นกัน; ลบ panelSummaryEmbed (V2 ห้าม embeds)
+Reason: V2 จัดสรุปกับปุ่มให้อยู่ด้วยกันได้โดยไม่เปลืองแถว; Save ปิดงานกันกดพลาด; สรุปคู่เห็นโหมดทั้งสองพร้อมตัวที่ active
+Impact: transport/discord/model_settings.go (V2 builders, save/freeze, ลบ embed), model_settings_test.go (V2-aware helpers); ไม่แตะ shared text summary (/new), sdk, gateway dispatch, modal, canonical contract
+Validation: open/defer/edit/submit ทุก response มี V2 flag; โครงสร้าง Container + 5 ActionRows (+Save); Section 2 ฝั่งครบ ปุ่ม active Primary + ✅ ถูกฝั่ง; Save แล้วเหลือ Container เดียวไม่มี controls; modal submit อัพเดท V2; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: accepted

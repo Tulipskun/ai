@@ -25,6 +25,7 @@ const (
 	modelPanelThinking  = "model:thinking"
 	modelPanelTemp      = "model:temp"
 	modelPanelKey       = "model:key"
+	modelPanelSave      = "model:save"
 )
 
 // modelSettingsModalID is the modal opened by the Thinking/Temp buttons. It
@@ -134,7 +135,7 @@ func (h *ModelSettingsHandler) Handle(s interactionAPI, i *discordgo.Interaction
 	switch i.MessageComponentData().CustomID {
 	case modelPanelAgentMain, modelPanelAgentSub, modelPanelPagePrev, modelPanelPageNext,
 		modelPanelProvider, modelPanelModel, modelPanelThinking,
-		modelPanelTemp, modelPanelKey:
+		modelPanelTemp, modelPanelKey, modelPanelSave:
 		return h.stepPanel(s, i)
 	default:
 		if strings.HasPrefix(i.MessageComponentData().CustomID, "model:") {
@@ -159,11 +160,11 @@ func (h *ModelSettingsHandler) openPanel(s interactionAPI, i *discordgo.Interact
 	}
 	pages := h.panelPagesFor(i.ChannelID, interactionUserID(i))
 	pages.provider, pages.model = 0, 0
-	content, embed, components, err := h.renderPanel(i, pages, "")
+	content, components, err := h.renderPanel(i, pages, "")
 	if err != nil {
 		return editOriginalMessage(s, i, "Model settings error: "+err.Error(), nil)
 	}
-	return editPanelMessage(s, i, content, embed, components)
+	return editPanelMessage(s, i, content, components)
 }
 
 // stepPanel serves every panel control: the Thinking/Temp buttons open the
@@ -183,29 +184,29 @@ func (h *ModelSettingsHandler) stepPanel(s interactionAPI, i *discordgo.Interact
 		return err
 	}
 	pages := h.panelPagesFor(i.ChannelID, userID)
-	content, embed, components, err := h.applyPick(i, pages, data)
+	content, components, err := h.applyPick(i, pages, data)
 	if err != nil {
 		// Re-render the current panel with the failure inline: the channel
 		// keeps one message and the next successful pick clears the notice.
-		content, embed, components, _ = h.renderPanel(i, pages, err.Error())
+		content, components, _ = h.renderPanel(i, pages, err.Error())
 	}
-	return editPanelMessage(s, i, content, embed, components)
+	return editPanelMessage(s, i, content, components)
 }
 
-// editPanelMessage rewrites the panel message with its summary embed,
-// keeping one message updated instead of sending new ones. A nil embed
-// leaves any previous embed untouched.
-func editPanelMessage(s interactionAPI, i *discordgo.InteractionCreate, content string, embed *discordgo.MessageEmbed, components []discordgo.MessageComponent) error {
-	edit := &discordgo.WebhookEdit{Content: &content, Components: &components}
-	if embed != nil {
-		edit.Embeds = &[]*discordgo.MessageEmbed{embed}
-	}
-	_, err := s.InteractionResponseEdit(i.Interaction, edit)
+// editPanelMessage rewrites the panel message as Components V2, keeping one
+// message updated instead of sending new ones. The V2 flag rides every edit
+// so the message keeps its layout.
+func editPanelMessage(s interactionAPI, i *discordgo.InteractionCreate, content string, components []discordgo.MessageComponent) error {
+	_, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+		Content:    &content,
+		Components: &components,
+		Flags:      discordgo.MessageFlagsIsComponentsV2,
+	})
 	return err
 }
 
 // applyPick applies one control interaction and renders the panel again.
-func (h *ModelSettingsHandler) applyPick(i *discordgo.InteractionCreate, pages *modelPanelPages, data discordgo.MessageComponentInteractionData) (string, *discordgo.MessageEmbed, []discordgo.MessageComponent, error) {
+func (h *ModelSettingsHandler) applyPick(i *discordgo.InteractionCreate, pages *modelPanelPages, data discordgo.MessageComponentInteractionData) (string, []discordgo.MessageComponent, error) {
 	choice := ""
 	if len(data.Values) > 0 {
 		choice = strings.TrimSpace(data.Values[0])
@@ -228,13 +229,25 @@ func (h *ModelSettingsHandler) applyPick(i *discordgo.InteractionCreate, pages *
 		err = h.pickModel(i, pages, choice)
 	case modelPanelKey:
 		err = h.pickKey(i, choice)
+	case modelPanelSave:
+		return h.frozenPanel(i)
 	default:
 		err = fmt.Errorf("unknown control")
 	}
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, err
 	}
 	return h.renderPanel(i, pages, "")
+}
+
+// frozenPanel renders the saved panel: the summary container alone, with no
+// controls left to press (CHANGE-017).
+func (h *ModelSettingsHandler) frozenPanel(i *discordgo.InteractionCreate) (string, []discordgo.MessageComponent, error) {
+	session, err := h.resolve(i)
+	if err != nil {
+		return "", nil, err
+	}
+	return "", []discordgo.MessageComponent{panelSummaryContainer(session.Config(), false)}, nil
 }
 
 func (h *ModelSettingsHandler) resolve(i *discordgo.InteractionCreate) (*sdk.Session, error) {
@@ -403,13 +416,13 @@ func (h *ModelSettingsHandler) submitModal(s interactionAPI, i *discordgo.Intera
 		return h.respondError(s, i, err.Error())
 	}
 	pages := h.panelPagesFor(i.ChannelID, interactionUserID(i))
-	content, embed, components, err := h.renderPanel(i, pages, "")
+	content, components, err := h.renderPanel(i, pages, "")
 	if err != nil {
 		return h.respondError(s, i, err.Error())
 	}
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
-		Data: &discordgo.InteractionResponseData{Content: content, Embeds: []*discordgo.MessageEmbed{embed}, Components: components},
+		Data: &discordgo.InteractionResponseData{Content: content, Components: components, Flags: discordgo.MessageFlagsIsComponentsV2},
 	})
 }
 
@@ -442,13 +455,14 @@ func (h *ModelSettingsHandler) loadModels(provider sdk.ProviderID) ([]sdk.Model,
 	return kept, nil
 }
 
-// renderPanel builds the one panel message: a summary embed plus the five
-// control rows. failure, when non-empty, is shown as message text above the
-// embed until the next successful pick clears it.
-func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages *modelPanelPages, failure string) (string, *discordgo.MessageEmbed, []discordgo.MessageComponent, error) {
+// renderPanel builds the one V2 panel message: a summary container plus the
+// control rows and the Save button at the bottom. failure, when non-empty,
+// is shown as message text above the container until the next successful
+// pick clears it.
+func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages *modelPanelPages, failure string) (string, []discordgo.MessageComponent, error) {
 	session, err := h.resolve(i)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, err
 	}
 	config := session.Config()
 	provider := config.Provider
@@ -457,10 +471,10 @@ func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages
 	}
 	models, err := h.loadModels(provider)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, err
 	}
 	if len(models) == 0 {
-		return "", nil, nil, fmt.Errorf("provider %q has no models", provider)
+		return "", nil, fmt.Errorf("provider %q has no models", provider)
 	}
 	pages.provider = clampPage(panelPages(countProviders(h.Providers)), pages.provider)
 	modelPages := modelMenuPages(len(models))
@@ -472,7 +486,7 @@ func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages
 	}
 	modelOptions, modelPlaceholder := modelMenuOptions(models, pages.model)
 	components := []discordgo.MessageComponent{
-		panelAgentRow(panelAgentMode(config)),
+		panelSummaryContainer(config, true),
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			discordgo.SelectMenu{CustomID: modelPanelProvider, MenuType: discordgo.StringSelectMenu, Placeholder: "📦 Select provider", Options: pagedProviderOptions(h.Providers, pages.provider), MinValues: intPtr(1), MaxValues: 1},
 		}},
@@ -486,14 +500,60 @@ func (h *ModelSettingsHandler) renderPanel(i *discordgo.InteractionCreate, pages
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			discordgo.SelectMenu{CustomID: modelPanelKey, MenuType: discordgo.StringSelectMenu, Placeholder: "🔑 Select API key pool", Options: makeKeyOptions(panelKeyCount(h, provider)), MinValues: intPtr(1), MaxValues: 1},
 		}},
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.Button{CustomID: modelPanelSave, Style: discordgo.SuccessButton, Label: "💾 Save"},
+		}},
 	}
-	return content, panelSummaryEmbed(config), components, nil
+	return content, components, nil
 }
 
-// panelSummaryEmbed renders the live session settings as an embed so the
-// values stay readable next to the controls (REQ-028, CHANGE-016). The
-// shared text summary stays untouched for /new.
-func panelSummaryEmbed(config sdk.SessionConfig) *discordgo.MessageEmbed {
+// panelSummaryContainer renders the live session settings as a V2 container:
+// a title, the values, then one section per agent mode with its button on
+// the right. Both modes share the single settings set; the active side is
+// highlighted (REQ-028, CHANGE-017).
+func panelSummaryContainer(config sdk.SessionConfig, live bool) discordgo.Container {
+	children := []discordgo.MessageComponent{
+		discordgo.TextDisplay{Content: "⚙️ **Session Model Settings**"},
+		discordgo.TextDisplay{Content: panelValuesText(config)},
+	}
+	if !live {
+		children = append(children, discordgo.TextDisplay{Content: panelModeStatus(config)})
+		return panelContainer(children)
+	}
+	children = append(children,
+		discordgo.Separator{Divider: boolPtr(true)},
+		panelModeSection(sdk.AgentModeMain, config, "🤖 **Main agent**\nPlans first, then delegates work to a sub-agent"),
+		panelModeSection(sdk.AgentModeSub, config, "⚡ **Sub agent**\nExecutes directly with the full tool set"),
+	)
+	return panelContainer(children)
+}
+
+func panelContainer(children []discordgo.MessageComponent) discordgo.Container {
+	accent := 0x5865F2
+	return discordgo.Container{AccentColor: &accent, Components: children}
+}
+
+// panelModeSection renders one agent side: its description on the left with
+// its button on the right. The active side gets the primary button and an
+// Active marker.
+func panelModeSection(mode sdk.AgentMode, config sdk.SessionConfig, text string) discordgo.Section {
+	customID, label := modelPanelAgentMain, "🤖 Main agent"
+	if mode == sdk.AgentModeSub {
+		customID, label = modelPanelAgentSub, "⚡ Sub agent"
+	}
+	style := discordgo.SecondaryButton
+	if panelAgentMode(config) == mode {
+		style = discordgo.PrimaryButton
+		text += "\n✅ Active"
+	}
+	return discordgo.Section{
+		Components: []discordgo.MessageComponent{discordgo.TextDisplay{Content: text}},
+		Accessory:  discordgo.Button{CustomID: customID, Style: style, Label: label},
+	}
+}
+
+// panelValuesText renders the shared settings values.
+func panelValuesText(config sdk.SessionConfig) string {
 	model := config.Model
 	if model == "" {
 		model = "not set"
@@ -502,36 +562,16 @@ func panelSummaryEmbed(config sdk.SessionConfig) *discordgo.MessageEmbed {
 	if provider == "" {
 		provider = "not set"
 	}
-	field := func(name, value string) *discordgo.MessageEmbedField {
-		return &discordgo.MessageEmbedField{Name: name, Value: "`" + value + "`", Inline: true}
-	}
-	return &discordgo.MessageEmbed{
-		Title: "⚙️ Session Model Settings",
-		Color: 0x5865F2,
-		Fields: []*discordgo.MessageEmbedField{
-			field("Provider", provider),
-			field("Model", model),
-			field("Agent", string(panelAgentMode(config))),
-			field("Thinking", panelThinkingLabel(config)),
-			field("Temperature", temperatureLabel(config.Temperature)),
-			field("API Pool", strconv.Itoa(config.KeyIndex+1)),
-		},
-	}
+	return fmt.Sprintf("📦 Provider: `%s`\n🤖 Model: `%s`\n💭 Thinking: `%s` · 🌡️ Temp: `%s`\n🔑 API Pool: `%d`",
+		provider, model, panelThinkingLabel(config), temperatureLabel(config.Temperature), config.KeyIndex+1)
 }
 
-// panelAgentRow holds the agent toggle. It stays two buttons so the panel
-// never exceeds five action rows.
-func panelAgentRow(mode sdk.AgentMode) discordgo.ActionsRow {
-	mainStyle, subStyle := discordgo.SecondaryButton, discordgo.SecondaryButton
-	if mode == sdk.AgentModeSub {
-		subStyle = discordgo.PrimaryButton
-	} else {
-		mainStyle = discordgo.PrimaryButton
+// panelModeStatus renders the frozen mode line once Save strips the buttons.
+func panelModeStatus(config sdk.SessionConfig) string {
+	if panelAgentMode(config) == sdk.AgentModeSub {
+		return "Mode: ⚡ Sub ✅"
 	}
-	return discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-		discordgo.Button{CustomID: modelPanelAgentMain, Style: mainStyle, Label: "🤖 Main agent"},
-		discordgo.Button{CustomID: modelPanelAgentSub, Style: subStyle, Label: "⚡ Sub agent"},
-	}}
+	return "Mode: 🤖 Main ✅"
 }
 
 func panelAgentMode(config sdk.SessionConfig) sdk.AgentMode {

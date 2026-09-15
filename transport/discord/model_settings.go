@@ -239,7 +239,7 @@ func applyModelStep2(session *sdk.Session, keys *sdk.KeyPool, provider sdk.Provi
 	return nil
 }
 
-func (h *ModelSettingsHandler) submitStep2(s *discordgo.Session, i *discordgo.InteractionCreate, customID string) error {
+func (h *ModelSettingsHandler) submitStep2(s interactionAPI, i *discordgo.InteractionCreate, customID string) error {
 	value := strings.TrimPrefix(customID, modelStep2Prefix)
 	parts := strings.SplitN(value, ":", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
@@ -253,21 +253,27 @@ func (h *ModelSettingsHandler) submitStep2(s *discordgo.Session, i *discordgo.In
 	if h.ResolveSession == nil {
 		return h.respondError(s, i, "session manager is not configured")
 	}
+	// Catalogue loads and session writes can outlast the 3-second
+	// interaction window, so defer first and report every outcome as a
+	// follow-up (REQ-024).
+	if err := deferEphemeralResponse(s, i); err != nil {
+		return err
+	}
 	session, err := h.ResolveSession(context.Background(), sdk.Input{SessionID: h.sessionIDFor(channelID)})
 	if err != nil {
-		return h.respondError(s, i, err.Error())
+		return followupEphemeral(s, i, "Model settings error: "+err.Error())
 	}
 	var models []sdk.Model
 	if h.Models != nil {
 		models, err = h.Models(context.Background(), provider)
 		if err != nil {
-			return h.respondError(s, i, err.Error())
+			return followupEphemeral(s, i, "Model settings error: "+err.Error())
 		}
 	}
 	if err := applyModelStep2(session, h.ProviderKeys[provider], provider, modalValues(i), models); err != nil {
-		return h.respondError(s, i, err.Error())
+		return followupEphemeral(s, i, "Model settings error: "+err.Error())
 	}
-	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Content: sessionSettingsSummary(session.Config()), Flags: discordgo.MessageFlagsEphemeral}})
+	return followupEphemeral(s, i, sessionSettingsSummary(session.Config()))
 }
 
 func modalValues(i *discordgo.InteractionCreate) map[string]string { values:=make(map[string]string,6);for _,component:=range i.ModalSubmitData().Components{label,ok:=component.(*discordgo.Label);if !ok{if valueLabel,valueOK:=component.(discordgo.Label);valueOK{label=&valueLabel}else{continue}};switch child:=label.Component.(type){case *discordgo.SelectMenu:if len(child.Values)>0{values[child.CustomID]=child.Values[0]};case discordgo.SelectMenu:if len(child.Values)>0{values[child.CustomID]=child.Values[0]};case *discordgo.TextInput:values[child.CustomID]=child.Value;case discordgo.TextInput:values[child.CustomID]=child.Value}};return values }
@@ -289,4 +295,4 @@ func makeModelOptionGroups(models []sdk.Model, current string) [][]discordgo.Sel
 func makeTemperatureOptions(current string) []discordgo.SelectMenuOption { return []discordgo.SelectMenuOption{{Label:current,Value:current,Default:true}} }
 func makeThinkingOptions(current string) []discordgo.SelectMenuOption {values:=[]string{"default",string(sdk.ThinkingNone),string(sdk.ThinkingLow),string(sdk.ThinkingMedium),string(sdk.ThinkingHigh)};options:=make([]discordgo.SelectMenuOption,0,len(values));for _,value:=range values{label:=value;if value=="default"{label="Default"};options=append(options,discordgo.SelectMenuOption{Label:label,Value:value,Default:value==current||(current==""&&value=="default")})};return options }
 func makeKeyOptions(count int,current string) []discordgo.SelectMenuOption {if count<1{count=1};if count>25{count=25};currentIndex,_:=strconv.Atoi(current);options:=make([]discordgo.SelectMenuOption,0,count);for index:=1;index<=count;index++{value:=strconv.Itoa(index);options=append(options,discordgo.SelectMenuOption{Label:"Pool "+value,Value:value,Default:index==currentIndex})};if currentIndex<1||currentIndex>count{options[0].Default=true};return options }
-func(h *ModelSettingsHandler)respondError(s *discordgo.Session,i *discordgo.InteractionCreate,message string)error{data:=&discordgo.InteractionResponseData{Content:"Model settings error: "+message,Flags:discordgo.MessageFlagsEphemeral};return s.InteractionRespond(i.Interaction,&discordgo.InteractionResponse{Type:discordgo.InteractionResponseChannelMessageWithSource,Data:data})}
+func(h *ModelSettingsHandler)respondError(s interactionAPI,i *discordgo.InteractionCreate,message string)error{data:=&discordgo.InteractionResponseData{Content:"Model settings error: "+message,Flags:discordgo.MessageFlagsEphemeral};return s.InteractionRespond(i.Interaction,&discordgo.InteractionResponse{Type:discordgo.InteractionResponseChannelMessageWithSource,Data:data})}

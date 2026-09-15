@@ -121,3 +121,16 @@ Reason: ลดจำนวนข้อความ ephemeral หลายชั�
 Impact: transport/discord/model_settings.go (flow + modal builders + submit logic), model_settings_test.go (เขียนใหม่ตาม flow ใหม่); ไม่แตะ gateway dispatch contract, cmd/ai wiring, sdk core
 Validation: modal ขั้นที่ 1 มี provider select ครบ + filter optional; modal ขั้นที่ 2 มี model ไม่เกิน 50 ตัว + temp/thinking/key พร้อมค่าเดิม; filter ตรง/ไม่ตรง/เกินลิมิตต้องจัดการถูก; submit ตรวจ model ใน catalogue + ตรวจ temperature/thinking/key ผิดพลาด; offline tests เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-009
+
+Date: 2026-09-15
+Type: revise
+Request: ทำ defer reply ให้ทุกคำสั่ง Discord ที่ทำงานใช้เวลา เพื่อกัน interaction หมดอายุ (3 วินาที)
+Conflict: none (ยกระดับความน่าเชื่อถือของการตอบ interaction ภายใน Discord module ตาม REQ-022/024; ไม่แตะ core orchestration, persistence, canonical contract)
+Previous: /new ตอบ ack ตรงหลังทำงานเสร็จ (สร้าง channel + resolve session + ส่งข้อความ) ถ้าเกิน 3 วินาที interaction จะ failed; /model submit ขั้น 2 และ /session list ตอบตรงหลังโหลด catalogue/อ่านรายการ; มีเพียง /provider submit ที่ defer อยู่แล้ว
+New: REQ-024 คำสั่งที่ใช้เวลาต้อง defer ephemeral ก่อนเริ่มงาน แล้วส่งผลลัพธ์/ข้อผิดพลาดทาง followup; ข้อยกเว้นคือการเปิด modal (ตอบทันทีเพราะ defer แล้วเปิด modal ต่อไม่ได้) — ครอบคลุม /new, /model submit ขั้น 2, /session list; /provider คงพฤติกรรมเดิมแต่ใช้ helper ร่วมกัน
+Reason: งานช้า (สร้าง channel, โหลด catalogue ผ่าน network, เขียน session) เกิน 3 วินาทีได้เมื่อระบบหน่วง ทำให้ผู้ใช้เห็น interaction failed ทั้งที่งานอาจสำเร็จไปแล้ว
+Impact: transport/discord (ไฟล์ใหม่ interactions.go รวม helper defer/followup, new_channel.go, model_settings.go submit ขั้น 2, session_command.go รายการ session, provider_settings.go ใช้ helper ร่วม); ไม่แตะ gateway dispatch contract, cmd/ai wiring, sdk core
+Validation: defer ต้องเกิดก่อนงานช้าเสมอ ผลลัพธ์/error หลัง defer ต้องไปทาง followup (ไม่ใช่ InteractionRespond ซ้ำ); modal-open path ต้องยังตอบทันทีแบบเดิม; offline tests ด้วย fake interaction API เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: accepted

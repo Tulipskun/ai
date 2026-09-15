@@ -1,6 +1,7 @@
 package discord
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"testing"
@@ -186,6 +187,75 @@ func TestModelInCatalog(t *testing.T) {
 	models := []sdk.Model{{ID: "m1"}, {ID: "m2"}}
 	if !modelInCatalog(models, "m1") { t.Fatal("expected m1 in catalog") }
 	if modelInCatalog(models, "m3") { t.Fatal("did not expect m3 in catalog") }
+}
+
+func step2SubmitInteraction(values map[string]string) *discordgo.InteractionCreate {
+	components := []discordgo.MessageComponent{
+		discordgo.Label{Label: "Model", Component: discordgo.SelectMenu{CustomID: "model_0", MenuType: discordgo.StringSelectMenu, Values: []string{values["model_0"]}}},
+		discordgo.Label{Label: "Temperature", Component: discordgo.TextInput{CustomID: "temperature", Value: values["temperature"]}},
+		discordgo.Label{Label: "Thinking", Component: discordgo.SelectMenu{CustomID: "thinking", MenuType: discordgo.StringSelectMenu, Values: []string{values["thinking"]}}},
+		discordgo.Label{Label: "API Pool", Component: discordgo.SelectMenu{CustomID: "key", MenuType: discordgo.StringSelectMenu, Values: []string{values["key"]}}},
+	}
+	return &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		Type:      discordgo.InteractionModalSubmit,
+		ChannelID: "c1",
+		Data:      discordgo.ModalSubmitInteractionData{CustomID: "model:step2:c1:B.ai", Components: components},
+	}}
+}
+
+func step2SubmitHandler(session *sdk.Session, keys *sdk.KeyPool) *ModelSettingsHandler {
+	return &ModelSettingsHandler{
+		Providers:    []sdk.ProviderID{"B.ai"},
+		ProviderKeys: map[sdk.ProviderID]*sdk.KeyPool{"B.ai": keys},
+		Models: func(_ context.Context, _ sdk.ProviderID) ([]sdk.Model, error) {
+			return []sdk.Model{{ID: "m1"}, {ID: "m2"}}, nil
+		},
+		ResolveSession: func(_ context.Context, _ sdk.Input) (*sdk.Session, error) {
+			return session, nil
+		},
+	}
+}
+
+func TestSubmitStep2DefersThenFollowsUpSummary(t *testing.T) {
+	keys := sdk.NewKeyPool("k1", "k2")
+	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1"}, keys)
+	handler := step2SubmitHandler(session, keys)
+	fake := &fakeInteractionAPI{}
+	values := map[string]string{"model_0": "m2", "temperature": "0.7", "thinking": "high", "key": "2"}
+	if err := handler.submitStep2(fake, step2SubmitInteraction(values), "model:step2:c1:B.ai"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.responds) != 1 || fake.responds[0].Type != discordgo.InteractionResponseDeferredChannelMessageWithSource {
+		t.Fatalf("submit must defer first: %+v", fake.responds)
+	}
+	if len(fake.followups) != 1 {
+		t.Fatalf("submit outcome must be a followup: %+v", fake.followups)
+	}
+	for _, want := range []string{"m2", "0.7", "high", "API Pool: `2`"} {
+		if !strings.Contains(fake.followups[0].Content, want) {
+			t.Fatalf("summary missing %q: %s", want, fake.followups[0].Content)
+		}
+	}
+	if got := session.Config(); got.Model != "m2" || got.KeyIndex != 1 {
+		t.Fatalf("settings not applied: %+v", got)
+	}
+}
+
+func TestSubmitStep2FailureFollowsUpError(t *testing.T) {
+	keys := sdk.NewKeyPool("k1")
+	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1"}, keys)
+	handler := step2SubmitHandler(session, keys)
+	fake := &fakeInteractionAPI{}
+	values := map[string]string{"model_0": "nope", "temperature": "", "thinking": "default", "key": "1"}
+	if err := handler.submitStep2(fake, step2SubmitInteraction(values), "model:step2:c1:B.ai"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.responds) != 1 || len(fake.followups) != 1 {
+		t.Fatalf("failure must defer then follow up: %+v %+v", fake.responds, fake.followups)
+	}
+	if !strings.Contains(fake.followups[0].Content, "not available") {
+		t.Fatalf("followup must carry the error: %s", fake.followups[0].Content)
+	}
 }
 
 func TestSessionIDForChannelUsesMapping(t *testing.T) {

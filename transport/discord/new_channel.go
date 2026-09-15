@@ -18,8 +18,8 @@ const newChannelNamePrefix = "ai-"
 // *discordgo.Session satisfies it; tests inject a fake so no live Discord is
 // ever required (REQ-027).
 type newChannelDiscord interface {
+	interactionAPI
 	GuildChannelCreate(guildID, name string, ctype discordgo.ChannelType, options ...discordgo.RequestOption) (*discordgo.Channel, error)
-	InteractionRespond(interaction *discordgo.Interaction, resp *discordgo.InteractionResponse, options ...discordgo.RequestOption) error
 	ChannelMessageSend(channelID, content string, options ...discordgo.RequestOption) (*discordgo.Message, error)
 }
 
@@ -125,9 +125,11 @@ func (h *NewChannelHandler) respondEphemeral(s newChannelDiscord, i *discordgo.I
 	})
 }
 
-// Handle serves the /new application command. Failures answer ephemerally in
-// the invoking channel and never create a session for a channel that does not
-// exist (REQ-027).
+// Handle serves the /new application command. Fast validation failures answer
+// immediately; everything from channel creation onward runs behind a deferred
+// ephemeral response with outcomes delivered as follow-ups, so slow Discord
+// or session work cannot expire the interaction (REQ-024). Failures never
+// create a session for a channel that does not exist (REQ-027).
 func (h *NewChannelHandler) Handle(s newChannelDiscord, i *discordgo.InteractionCreate) error {
 	if h == nil || s == nil || i == nil {
 		return nil
@@ -147,16 +149,19 @@ func (h *NewChannelHandler) Handle(s newChannelDiscord, i *discordgo.Interaction
 	if err != nil {
 		return h.respondEphemeral(s, i, err.Error())
 	}
+	if err := deferEphemeralResponse(s, i); err != nil {
+		return err
+	}
 	channel, err := s.GuildChannelCreate(guildID, newChannelName(h.now()), discordgo.ChannelTypeGuildText)
 	if err != nil || channel == nil || strings.TrimSpace(channel.ID) == "" {
-		return h.respondEphemeral(s, i, "Could not create the channel; the bot needs the Manage Channels permission.")
+		return followupEphemeral(s, i, "Could not create the channel; the bot needs the Manage Channels permission.")
 	}
 	applied, err := h.applySettings(context.Background(), h.sessionIDFor(channel.ID), config, keys)
 	if err != nil {
-		return h.respondEphemeral(s, i, "Channel created, but settings were not copied: "+err.Error())
+		return followupEphemeral(s, i, "Channel created, but settings were not copied: "+err.Error())
 	}
 	if _, err := s.ChannelMessageSend(channel.ID, sessionSettingsSummary(applied)); err != nil {
-		return h.respondEphemeral(s, i, fmt.Sprintf("Channel created as <#%s> with the same model settings, but the summary message could not be delivered.", channel.ID))
+		return followupEphemeral(s, i, fmt.Sprintf("Channel created as <#%s> with the same model settings, but the summary message could not be delivered.", channel.ID))
 	}
-	return h.respondEphemeral(s, i, fmt.Sprintf("Created <#%s> with the same model settings as this channel.", channel.ID))
+	return followupEphemeral(s, i, fmt.Sprintf("Created <#%s> with the same model settings as this channel.", channel.ID))
 }

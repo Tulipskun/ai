@@ -21,11 +21,15 @@ type fakeNewChannelDiscord struct {
 	newID      string
 	sentTo     string
 	sentText   string
+	deferred   bool
+	calls      []string
 	ephemerals []string
+	followups  []string
 }
 
 func (f *fakeNewChannelDiscord) GuildChannelCreate(guildID, name string, ctype discordgo.ChannelType, _ ...discordgo.RequestOption) (*discordgo.Channel, error) {
 	f.guildID, f.name, f.ctype = guildID, name, ctype
+	f.calls = append(f.calls, "create")
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
@@ -36,8 +40,19 @@ func (f *fakeNewChannelDiscord) InteractionRespond(_ *discordgo.Interaction, res
 	if resp == nil || resp.Data == nil {
 		return errors.New("empty response")
 	}
+	if resp.Type == discordgo.InteractionResponseDeferredChannelMessageWithSource {
+		f.deferred = true
+		f.calls = append(f.calls, "defer")
+		return nil
+	}
 	f.ephemerals = append(f.ephemerals, resp.Data.Content)
 	return nil
+}
+
+func (f *fakeNewChannelDiscord) FollowupMessageCreate(_ *discordgo.Interaction, _ bool, data *discordgo.WebhookParams, _ ...discordgo.RequestOption) (*discordgo.Message, error) {
+	f.followups = append(f.followups, data.Content)
+	f.calls = append(f.calls, "followup")
+	return &discordgo.Message{ID: "msg-1"}, nil
 }
 
 func (f *fakeNewChannelDiscord) ChannelMessageSend(channelID, content string, _ ...discordgo.RequestOption) (*discordgo.Message, error) {
@@ -113,6 +128,20 @@ func TestNewChannelClonesSettingsAndReports(t *testing.T) {
 	if fake.guildID != "guild-1" || fake.name != "ai-2026-09-15-1430" || fake.ctype != discordgo.ChannelTypeGuildText {
 		t.Fatalf("channel not created in guild with dated name: %+v", fake)
 	}
+	// The defer must precede the slow channel creation, and the outcome must
+	// arrive as a follow-up rather than a second direct response.
+	wantCalls := []string{"defer", "create", "followup"}
+	if len(fake.calls) != len(wantCalls) {
+		t.Fatalf("calls = %v, want %v", fake.calls, wantCalls)
+	}
+	for index, want := range wantCalls {
+		if fake.calls[index] != want {
+			t.Fatalf("calls = %v, want %v", fake.calls, wantCalls)
+		}
+	}
+	if len(fake.ephemerals) != 0 {
+		t.Fatalf("outcome must use followup, not a direct response: %v", fake.ephemerals)
+	}
 	got := target.Config()
 	if got.Provider != "B.ai" || got.Model != "qwen3.8-flash" || got.ThinkingLevel != sdk.ThinkingMedium || got.KeyIndex != 1 {
 		t.Fatalf("settings not cloned: %+v", got)
@@ -128,8 +157,8 @@ func TestNewChannelClonesSettingsAndReports(t *testing.T) {
 			t.Fatalf("summary missing %q: %s", want, fake.sentText)
 		}
 	}
-	if len(fake.ephemerals) != 1 || !strings.Contains(fake.ephemerals[0], "<#chan-new>") {
-		t.Fatalf("ack missing new channel mention: %v", fake.ephemerals)
+	if len(fake.followups) != 1 || !strings.Contains(fake.followups[0], "<#chan-new>") {
+		t.Fatalf("ack missing new channel mention: %v", fake.followups)
 	}
 }
 
@@ -142,6 +171,9 @@ func TestNewChannelRejectsDirectMessages(t *testing.T) {
 	}
 	if fake.name != "" {
 		t.Fatal("channel must not be created from a direct message")
+	}
+	if fake.deferred {
+		t.Fatal("fast validation failures must answer immediately without deferring")
 	}
 	if len(fake.ephemerals) != 1 || !strings.Contains(fake.ephemerals[0], "server") {
 		t.Fatalf("expected guild guidance: %v", fake.ephemerals)
@@ -165,6 +197,9 @@ func TestNewChannelRequiresSourceSettings(t *testing.T) {
 	if fake.name != "" || fake.sentTo != "" {
 		t.Fatal("nothing must be created when the source has no settings")
 	}
+	if fake.deferred {
+		t.Fatal("fast validation failures must answer immediately without deferring")
+	}
 	if len(fake.ephemerals) != 1 || !strings.Contains(fake.ephemerals[0], "/model") {
 		t.Fatalf("expected /model guidance: %v", fake.ephemerals)
 	}
@@ -180,8 +215,8 @@ func TestNewChannelCreateFailureStaysEphemeral(t *testing.T) {
 	if fake.sentTo != "" {
 		t.Fatal("no summary may be sent when creation failed")
 	}
-	if len(fake.ephemerals) != 1 || !strings.Contains(fake.ephemerals[0], "Manage Channels") {
-		t.Fatalf("expected permission guidance: %v", fake.ephemerals)
+	if !fake.deferred || len(fake.followups) != 1 || !strings.Contains(fake.followups[0], "Manage Channels") {
+		t.Fatalf("expected deferred permission guidance: deferred=%v followups=%v", fake.deferred, fake.followups)
 	}
 }
 

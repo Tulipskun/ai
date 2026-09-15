@@ -58,9 +58,9 @@ func (h *ProviderSettingsHandler) submit(s *discordgo.Session, i *discordgo.Inte
 	values := modalValues(i)
 	name := strings.TrimSpace(values["name"]); adapter := strings.TrimSpace(strings.ToLower(values["adapter"])); endpoint := strings.TrimSpace(values["url"]); apiKey := strings.TrimSpace(values["api_key"])
 	if name == "" || adapter == "" || endpoint == "" || apiKey == "" { return respondProviderError(s, i, "name, adapter, URL, and API key are required") }
-	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral}}); err != nil { return err }
-	freeOnly := strings.EqualFold(strings.TrimSpace(values["free_only"]), "true"); if err := h.Upsert(context.Background(), name, adapter, endpoint, apiKey, freeOnly); err != nil { _, ferr := s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: "Provider settings error: " + err.Error()}); return ferr }
-	_, err := s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: fmt.Sprintf("Provider `%s` saved and model catalogue refreshed.", name)}); return err
+	if err := deferEphemeralResponse(s, i); err != nil { return err }
+	freeOnly := strings.EqualFold(strings.TrimSpace(values["free_only"]), "true"); if err := h.Upsert(context.Background(), name, adapter, endpoint, apiKey, freeOnly); err != nil { return followupEphemeral(s, i, "Provider settings error: "+err.Error()) }
+	return followupEphemeral(s, i, fmt.Sprintf("Provider `%s` saved and model catalogue refreshed.", name))
 }
 
 func respondProviderError(s *discordgo.Session, i *discordgo.InteractionCreate, message string) error {

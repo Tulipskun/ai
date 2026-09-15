@@ -143,11 +143,15 @@ func (h *ModelSettingsHandler) Handle(s *discordgo.Session, i *discordgo.Interac
 	if i.Type != discordgo.InteractionMessageComponent {
 		return nil
 	}
-	switch i.MessageComponentData().CustomID {
-	case modelWizardProvider, modelWizardModel, modelWizardPagePrev, modelWizardPageNext,
+	customID := i.MessageComponentData().CustomID
+	switch customID {
+	case modelWizardProvider, modelWizardPagePrev, modelWizardPageNext,
 		modelWizardTemp, modelWizardThinking, modelWizardKey, modelWizardBack:
 		return h.stepWizard(s, i)
 	default:
+		if isModelMenuID(customID) {
+			return h.stepWizard(s, i)
+		}
 		return nil
 	}
 }
@@ -199,7 +203,7 @@ func modelPageMessage(provider sdk.ProviderID, models []sdk.Model, page int, cur
 			label = fmt.Sprintf("Models %d-%d", start+index*modelMenuOptions+1, start+index*modelMenuOptions+len(options))
 		}
 		components = append(components, discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.SelectMenu{CustomID: modelWizardModel, MenuType: discordgo.StringSelectMenu, Placeholder: label, Options: options, MinValues: intPtr(1), MaxValues: 1},
+			discordgo.SelectMenu{CustomID: modelMenuID(index), MenuType: discordgo.StringSelectMenu, Placeholder: label, Options: options, MinValues: intPtr(1), MaxValues: 1},
 		}})
 	}
 	content := fmt.Sprintf("Select a model for `%s`:", provider)
@@ -216,6 +220,18 @@ func modelPageMessage(provider sdk.ProviderID, models []sdk.Model, page int, cur
 		}})
 	}
 	return content, components
+}
+
+// modelMenuID gives each model menu on a catalogue page its own custom ID.
+// Discord rejects a message whose components share a custom ID, so a page
+// with several menus cannot reuse one ID for all of them.
+func modelMenuID(index int) string {
+	return fmt.Sprintf("%s:%d", modelWizardModel, index+1)
+}
+
+// isModelMenuID reports whether customID belongs to one of the model menus.
+func isModelMenuID(customID string) bool {
+	return strings.HasPrefix(customID, modelWizardModel+":")
 }
 
 // modelPages counts the wizard pages for a catalogue of size n.
@@ -321,8 +337,6 @@ func (h *ModelSettingsHandler) advance(i *discordgo.InteractionCreate, wizard *m
 	case modelWizardPageNext:
 		wizard.page++
 		return h.renderModelPage(i, wizard)
-	case modelWizardModel:
-		return h.pickModel(i, wizard, choice)
 	case modelWizardTemp:
 		return h.pickTemperature(wizard, choice)
 	case modelWizardThinking:
@@ -332,6 +346,9 @@ func (h *ModelSettingsHandler) advance(i *discordgo.InteractionCreate, wizard *m
 	case modelWizardBack:
 		return h.goBack(i, wizard)
 	default:
+		if isModelMenuID(data.CustomID) {
+			return h.pickModel(i, wizard, choice)
+		}
 		return "", nil, false, fmt.Errorf("unknown menu")
 	}
 }

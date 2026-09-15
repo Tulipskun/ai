@@ -121,19 +121,28 @@ func TestModelPagesCoverLargeCatalogues(t *testing.T) {
 	}
 	menus := 0
 	pager := false
+	seen := map[string]bool{}
 	for _, component := range components {
 		row := component.(discordgo.ActionsRow)
 		for _, child := range row.Components {
 			switch child := child.(type) {
 			case discordgo.SelectMenu:
-				if child.CustomID != modelWizardModel {
+				if !isModelMenuID(child.CustomID) {
 					t.Fatalf("model menu custom ID = %q", child.CustomID)
 				}
+				if seen[child.CustomID] {
+					t.Fatalf("duplicated custom ID %q: Discord rejects the message", child.CustomID)
+				}
+				seen[child.CustomID] = true
 				if len(child.Options) > modelMenuOptions {
 					t.Fatalf("menu has %d options", len(child.Options))
 				}
 				menus++
 			case discordgo.Button:
+				if seen[child.CustomID] {
+					t.Fatalf("duplicated custom ID %q: Discord rejects the message", child.CustomID)
+				}
+				seen[child.CustomID] = true
 				if child.CustomID == modelWizardPageNext || child.CustomID == modelWizardPagePrev {
 					pager = true
 				}
@@ -151,7 +160,7 @@ func TestModelPagesCoverLargeCatalogues(t *testing.T) {
 	for _, component := range components {
 		row := component.(discordgo.ActionsRow)
 		for _, child := range row.Components {
-			if menu, ok := child.(discordgo.SelectMenu); ok && menu.CustomID == modelWizardModel {
+			if menu, ok := child.(discordgo.SelectMenu); ok && isModelMenuID(menu.CustomID) {
 				menus++
 				if len(menu.Options) != 5 {
 					t.Fatalf("last page menu has %d options", len(menu.Options))
@@ -211,7 +220,7 @@ func TestWizardAppliesEverythingAtTheEnd(t *testing.T) {
 		wantEdit string
 	}{
 		{modelWizardProvider, []string{"B.ai"}, "Select a model"},
-		{modelWizardModel, []string{"m2"}, "temperature"},
+		{modelMenuID(1), []string{"m2"}, "temperature"},
 		{modelWizardTemp, []string{"0.7"}, "thinking"},
 		{modelWizardThinking, []string{"high"}, "API key pool"},
 		{modelWizardKey, []string{"2"}, "Session Model Settings"},
@@ -256,7 +265,7 @@ func TestWizardBackReturnsOneStage(t *testing.T) {
 		t.Fatal(err)
 	}
 	// From the temperature stage, Back must return to the model list.
-	if err := handler.stepWizard(fake, wizardComponentInteraction(modelWizardModel, "m1")); err != nil {
+	if err := handler.stepWizard(fake, wizardComponentInteraction(modelMenuID(0), "m1")); err != nil {
 		t.Fatal(err)
 	}
 	if err := handler.stepWizard(fake, wizardComponentInteraction(modelWizardBack)); err != nil {
@@ -282,7 +291,7 @@ func TestWizardPagerTurnsCataloguePages(t *testing.T) {
 	}
 	// A pick from a user with no pending wizard (for example after a
 	// restart) must fail loudly and immediately instead of acting stale.
-	other := wizardComponentInteraction(modelWizardModel, "model-1")
+	other := wizardComponentInteraction(modelMenuID(0), "model-1")
 	other.ChannelID = "other"
 	other.Member.User.ID = "u9"
 	responds, edits := len(fake.responds), len(fake.edits)
@@ -307,6 +316,15 @@ func TestWizardPagerTurnsCataloguePages(t *testing.T) {
 	if content := editContent(t, lastEdit(t, fake)); !strings.Contains(content, "page 1 of 2") {
 		t.Fatalf("pager must turn back: %q", content)
 	}
+	if err := handler.stepWizard(fake, wizardComponentInteraction(modelWizardPageNext)); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.stepWizard(fake, wizardComponentInteraction(modelMenuID(0), "model-126")); err != nil {
+		t.Fatal(err)
+	}
+	if content := editContent(t, lastEdit(t, fake)); !strings.Contains(content, "temperature") {
+		t.Fatalf("a pick from the second page menu must advance: %q", content)
+	}
 }
 
 func TestWizardExpiredPendingFailsLoudly(t *testing.T) {
@@ -314,7 +332,7 @@ func TestWizardExpiredPendingFailsLoudly(t *testing.T) {
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1"}, keys)
 	handler := wizardTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
 	fake := &fakeInteractionAPI{}
-	if err := handler.stepWizard(fake, wizardComponentInteraction(modelWizardModel, "m1")); err != nil {
+	if err := handler.stepWizard(fake, wizardComponentInteraction(modelMenuID(0), "m1")); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.responds) != 1 || len(fake.edits) != 0 {

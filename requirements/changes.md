@@ -186,3 +186,16 @@ Reason: ไม่ preselect provider เพื่อไม่ชี้นำค�
 Impact: transport/discord/model_settings.go (selector state, pager row, thinking/temp select), model_settings_test.go; ไม่แตะ sdk, gateway dispatch, /new, canonical contract
 Validation: เปิด panel ได้ 5 แถวเสมอ (หน้าเดียวไม่มี pager); pager เปลี่ยนหน้าไปกลับ + disabled ถูกข้าง + (p/n) ตรง; thinking/temp select บันทึกค่าและกลับเป็นปุ่ม; provider ไม่มี default; model หน้าเต็ม 25 ไม่มี sentinel; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-014
+
+Date: 2026-09-15
+Type: revise
+Request: pager ไม่ใช่ปุ่ม แต่เป็นตัวเลือกที่ 1–2 (Previous/Next) ในเมนู model และ (1/2) อยู่ในชื่อเมนู Select model (1/2); ปุ่ม thinking/temperature กดแล้วเปิด modal (thinking เป็น select menu, temperature กรอกตัวอักษร) submit แล้วอัพเดทข้อความเดิม
+Conflict: CHANGE-013 (ยกเลิก pager แบบปุ่มบนแถวแรก และ thinking/temp แบบ select ในข้อความ)
+Previous: CHANGE-013 pager เป็นปุ่มบนแถว agent, thinking/temp กดแล้วกลายเป็น select ในข้อความ
+New: REQ-028 แถวแรกเหลือปุ่ม agent ล้วน (คง handler ปุ่ม pager เก่าไว้ให้ข้อความ v1.61 กดต่อได้); model catalogue เกิน 25 ตัวเลือกที่ 1–2 คือ Previous/Next เสมอ + models สูงสุด 23 ตัว (รวมไม่เกิน 25) ชื่อเมนูบอกหน้า `Select model (p/n)` หน้าเดียวไม่มี nav; model เลิก preselect; ปุ่ม Thinking/Temp เปิด modal เดียวกัน (thinking select preselect ค่าปัจจุบัน + temperature text prefill ค่าปัจจุบัน) submit แล้ว validate + apply + ตอบ InteractionResponseUpdate แก้ panel เดิม (catalogue ใช้ cache อยู่แล้ว) ค่าผิดตอบ ephemeral error; ลบ selector state ทั้งหมด
+Reason: pager ใน options ไม่เปลืองแถวและเห็นตำแหน่งพร้อมรายการ; modal กรอก temp เร็วกว่าไล่ select 22 options และพิมพ์ทศนิยมอิสระได้ในกรอบ 0.0–2.0
+Impact: transport/discord/model_settings.go (model options paging, modal open/submit, ลบ selector), model_settings_test.go; ไม่แตะ sdk, gateway dispatch, /new, canonical contract
+Validation: หน้าเดียว/หลายหน้า options ถูก (nav อยู่ 1–2 เสมอ รวมไม่เกิน 25); placeholder มี (p/n); ไม่ preselect; modal fields ครบ + prefill ตรง; submit บันทึกทั้งสองค่าและแก้ panel เดิม; ค่าผิด error ชัดเจน; ปุ่ม pager เก่ายังใช้งานได้; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: accepted

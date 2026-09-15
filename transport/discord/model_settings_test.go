@@ -176,11 +176,16 @@ func TestPanelOpensOneRegularMessage(t *testing.T) {
 			t.Fatalf("panel content misses %q: %q", want, content)
 		}
 	}
-	// The provider menu stays neutral: the current provider shows in the
-	// summary text, never as a preselected option.
+	// Both menus stay neutral: current values show in the summary text,
+// never as preselected options, so the (p/n) placeholder stays visible.
 	for _, option := range panelProviderMenuOptions(t, edit) {
 		if option.Default {
 			t.Fatalf("provider must not preselect: %+v", option)
+		}
+	}
+	for _, option := range panelModelMenuOptions(t, edit) {
+		if option.Default {
+			t.Fatalf("model must not preselect: %+v", option)
 		}
 	}
 	if len(fake.followups) != 0 {
@@ -189,6 +194,16 @@ func TestPanelOpensOneRegularMessage(t *testing.T) {
 }
 
 func panelProviderMenuOptions(t *testing.T, edit *discordgo.WebhookEdit) []discordgo.SelectMenuOption {
+	t.Helper()
+	return panelMenuOptionsByID(t, edit, modelPanelProvider)
+}
+
+func panelModelMenuOptions(t *testing.T, edit *discordgo.WebhookEdit) []discordgo.SelectMenuOption {
+	t.Helper()
+	return panelMenuOptionsByID(t, edit, modelPanelModel)
+}
+
+func panelMenuOptionsByID(t *testing.T, edit *discordgo.WebhookEdit, customID string) []discordgo.SelectMenuOption {
 	t.Helper()
 	if edit.Components == nil {
 		t.Fatal("edited message has no components")
@@ -208,13 +223,42 @@ func panelProviderMenuOptions(t *testing.T, edit *discordgo.WebhookEdit) []disco
 			default:
 				continue
 			}
-			if menu.CustomID == modelPanelProvider {
+			if menu.CustomID == customID {
 				return menu.Options
 			}
 		}
 	}
-	t.Fatalf("no provider select in edited message")
+	t.Fatalf("no select %q in edited message", customID)
 	return nil
+}
+
+func panelMenuPlaceholder(t *testing.T, edit *discordgo.WebhookEdit, customID string) string {
+	t.Helper()
+	if edit.Components == nil {
+		t.Fatal("edited message has no components")
+	}
+	for _, component := range *edit.Components {
+		row, ok := component.(discordgo.ActionsRow)
+		if !ok {
+			continue
+		}
+		for _, child := range row.Components {
+			var menu *discordgo.SelectMenu
+			switch child := child.(type) {
+			case discordgo.SelectMenu:
+				menu = &child
+			case *discordgo.SelectMenu:
+				menu = child
+			default:
+				continue
+			}
+			if menu.CustomID == customID {
+				return menu.Placeholder
+			}
+		}
+	}
+	t.Fatalf("no select %q in edited message", customID)
+	return ""
 }
 
 func editTopButtons(t *testing.T, edit *discordgo.WebhookEdit) []discordgo.Button {
@@ -326,7 +370,7 @@ func TestPanelModelPickAppliesImmediately(t *testing.T) {
 	}
 }
 
-func TestPanelPagerButtonsTurnModelPages(t *testing.T) {
+func TestPanelModelPagesUseFirstTwoOptions(t *testing.T) {
 	models := make([]sdk.Model, 0, 30)
 	for index := 1; index <= 30; index++ {
 		models = append(models, sdk.Model{ID: "model-" + strconv.Itoa(index)})
@@ -335,61 +379,64 @@ func TestPanelPagerButtonsTurnModelPages(t *testing.T) {
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1", Provider: "B.ai", Model: "model-1"}, keys)
 	handler := panelTestHandler(session, keys, models)
 	fake := &fakeInteractionAPI{}
-	// Opening lands on the page holding the current model.
+	// Opening lands on the page holding the current model, with Previous
+	// and Next as the first two options and the page in the menu name.
 	if err := handler.openPanel(fake, panelCommandInteraction()); err != nil {
 		t.Fatal(err)
 	}
-	buttons := editTopButtons(t, lastEdit(t, fake))
-	if len(buttons) != 5 {
-		t.Fatalf("top row must hold agent + pager buttons: %+v", buttons)
+	edit := lastEdit(t, fake)
+	if placeholder := panelMenuPlaceholder(t, edit, modelPanelModel); placeholder != "Select model (1/2)" {
+		t.Fatalf("placeholder = %q", placeholder)
 	}
-	if buttons[2].CustomID != modelPanelPagePrev || buttons[4].CustomID != modelPanelPageNext {
-		t.Fatalf("pager buttons misplaced: %+v", buttons)
+	options := panelModelMenuOptions(t, edit)
+	if len(options) != 25 {
+		t.Fatalf("first page must fill the menu: %d", len(options))
 	}
-	if !buttons[2].Disabled || buttons[4].Disabled {
-		t.Fatalf("first page must disable Prev only: %+v", buttons)
+	if options[0].Value != panelNavPrev || options[1].Value != panelNavNext {
+		t.Fatalf("nav must be options 1-2: %+v", options[:3])
 	}
-	if buttons[3].Label != "(1/2)" || !buttons[3].Disabled {
-		t.Fatalf("page indicator wrong: %+v", buttons[3])
+	if options[2].Value != "model-1" || options[24].Value != "model-23" {
+		t.Fatalf("first page models wrong: %v", options[2:])
 	}
-	values := editOptionValues(t, lastEdit(t, fake), modelPanelModel)
-	if len(values) != 25 {
-		t.Fatalf("first page must offer 25 models: %d", len(values))
+	if buttons := editTopButtons(t, edit); len(buttons) != 2 {
+		t.Fatalf("top row must be agent buttons only: %+v", buttons)
 	}
-	for _, value := range values {
-		if value == panelNavNext || value == panelNavPrev {
-			t.Fatalf("model menu must not carry nav entries: %v", values)
-		}
+	// Next turns the page; the pick itself never applies a model.
+	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelModel, panelNavNext)); err != nil {
+		t.Fatal(err)
 	}
-	// Next turns the page; the indicator and disabled sides follow.
+	if got := session.Config().Model; got != "model-1" {
+		t.Fatalf("navigation must not apply a model: %q", got)
+	}
+	edit = lastEdit(t, fake)
+	if placeholder := panelMenuPlaceholder(t, edit, modelPanelModel); placeholder != "Select model (2/2)" {
+		t.Fatalf("placeholder = %q", placeholder)
+	}
+	options = panelModelMenuOptions(t, edit)
+	if len(options) != 9 || options[0].Value != panelNavPrev || options[1].Value != panelNavNext || options[8].Value != "model-30" {
+		t.Fatalf("second page wrong: %+v", options)
+	}
+	// Paging past the edges clamps; Previous returns.
+	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelModel, panelNavNext)); err != nil {
+		t.Fatal(err)
+	}
+	if placeholder := panelMenuPlaceholder(t, lastEdit(t, fake), modelPanelModel); placeholder != "Select model (2/2)" {
+		t.Fatalf("pager must clamp at the end: %q", placeholder)
+	}
+	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelModel, panelNavPrev)); err != nil {
+		t.Fatal(err)
+	}
+	if placeholder := panelMenuPlaceholder(t, lastEdit(t, fake), modelPanelModel); placeholder != "Select model (1/2)" {
+		t.Fatalf("pager must turn back: %q", placeholder)
+	}
+	// The retired v1.61 pager buttons still page.
 	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelPageNext)); err != nil {
 		t.Fatal(err)
 	}
-	buttons = editTopButtons(t, lastEdit(t, fake))
-	if buttons[3].Label != "(2/2)" || buttons[2].Disabled || !buttons[4].Disabled {
-		t.Fatalf("last page buttons wrong: %+v", buttons)
-	}
-	values = editOptionValues(t, lastEdit(t, fake), modelPanelModel)
-	if len(values) != 5 || values[4] != "model-30" {
-		t.Fatalf("second page must offer the last models: %v", values)
-	}
-	// Paging past the end clamps; Back returns.
-	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelPageNext)); err != nil {
-		t.Fatal(err)
-	}
-	if label := editTopButtons(t, lastEdit(t, fake))[3].Label; label != "(2/2)" {
-		t.Fatalf("pager must clamp at the end: %q", label)
-	}
-	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelPagePrev)); err != nil {
-		t.Fatal(err)
-	}
-	if label := editTopButtons(t, lastEdit(t, fake))[3].Label; label != "(1/2)" {
-		t.Fatalf("pager must turn back: %q", label)
+	if placeholder := panelMenuPlaceholder(t, lastEdit(t, fake), modelPanelModel); placeholder != "Select model (2/2)" {
+		t.Fatalf("old pager button must still work: %q", placeholder)
 	}
 	// A pick from the second page applies.
-	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelPageNext)); err != nil {
-		t.Fatal(err)
-	}
 	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelModel, "model-30")); err != nil {
 		t.Fatal(err)
 	}
@@ -408,87 +455,109 @@ func TestPanelPagerButtonsTurnModelPages(t *testing.T) {
 	}
 }
 
-func TestPanelThinkingAndTempSelects(t *testing.T) {
+func TestPanelModelPagesCountedByTwentyThree(t *testing.T) {
+	cases := map[int]int{0: 1, 1: 1, 25: 1, 26: 2, 46: 2, 47: 3, 69: 3, 70: 4}
+	for n, want := range cases {
+		if got := modelMenuPages(n); got != want {
+			t.Fatalf("modelMenuPages(%d) = %d, want %d", n, got, want)
+		}
+	}
+	if got := modelPageFor([]sdk.Model{{ID: "a"}, {ID: "b"}}, "b"); got != 0 {
+		t.Fatalf("single page must be 0: %d", got)
+	}
+}
+
+func panelModalSubmit(thinking, temperature string) *discordgo.InteractionCreate {
+	return &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		Type:      discordgo.InteractionModalSubmit,
+		ChannelID: "c1",
+		Member:    &discordgo.Member{User: &discordgo.User{ID: "u1"}},
+		Data: discordgo.ModalSubmitInteractionData{
+			CustomID: modelSettingsModalID,
+			Components: []discordgo.MessageComponent{
+				discordgo.Label{Label: "Thinking", Component: discordgo.SelectMenu{CustomID: "thinking", Values: []string{thinking}}},
+				discordgo.Label{Label: "Temperature", Component: discordgo.TextInput{CustomID: "temperature", Value: temperature}},
+			},
+		},
+	}}
+}
+
+func TestPanelThinkingAndTempModal(t *testing.T) {
 	keys := sdk.NewKeyPool("k1")
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1"}, keys)
 	handler := panelTestHandler(session, keys, []sdk.Model{{ID: "m1"}})
 	fake := &fakeInteractionAPI{}
-	// Pressing the Thinking button unfolds a select menu without applying.
-	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelThinking)); err != nil {
-		t.Fatal(err)
-	}
-	if got := session.Config().ThinkingLevel; got != "" {
-		t.Fatalf("unfolding must not apply: %q", got)
-	}
-	values := editOptionValues(t, lastEdit(t, fake), modelPanelThinkingMenu)
-	if len(values) != 5 {
-		t.Fatalf("thinking menu must offer 5 levels: %v", values)
-	}
-	// Picking applies and folds the row back to buttons.
-	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelThinkingMenu, "high")); err != nil {
-		t.Fatal(err)
-	}
-	if got := session.Config().ThinkingLevel; got != sdk.ThinkingHigh {
-		t.Fatalf("thinking = %q", got)
-	}
-	if content := editContent(t, lastEdit(t, fake)); !strings.Contains(content, "Thinking: `high`") {
-		t.Fatalf("panel must show applied thinking: %q", content)
-	}
-	ids := editCustomIDs(t, lastEdit(t, fake))
-	for _, id := range ids {
-		if id == modelPanelThinkingMenu {
-			t.Fatalf("row must fold back to buttons: %v", ids)
+	// Either button opens the same modal immediately, without deferring.
+	for _, button := range []string{modelPanelThinking, modelPanelTemp} {
+		responds := len(fake.responds)
+		if err := handler.stepPanel(fake, panelButtonInteraction(button)); err != nil {
+			t.Fatal(err)
+		}
+		if len(fake.responds) != responds+1 {
+			t.Fatalf("%s must answer once: %+v", button, fake.responds)
+		}
+		opened := fake.responds[len(fake.responds)-1]
+		if opened.Type != discordgo.InteractionResponseModal {
+			t.Fatalf("%s must open a modal: %+v", button, opened)
+		}
+		if opened.Data.CustomID != modelSettingsModalID {
+			t.Fatalf("modal ID = %q", opened.Data.CustomID)
+		}
+		if len(opened.Data.Components) != 2 {
+			t.Fatalf("modal must hold thinking + temperature: %+v", opened.Data.Components)
 		}
 	}
-	// Pressing the same button twice folds back without changing anything.
-	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelTemp)); err != nil {
+	if len(fake.edits) != 0 || len(fake.followups) != 0 {
+		t.Fatalf("opening a modal must not touch messages: %+v %+v", fake.edits, fake.followups)
+	}
+	if session.Config().ThinkingLevel != "" || session.Config().Temperature != nil {
+		t.Fatalf("opening a modal must not apply: %+v", session.Config())
+	}
+	// Submitting applies both values and rewrites the panel message itself.
+	if err := handler.Handle(fake, panelModalSubmit("high", "1.5")); err != nil {
 		t.Fatal(err)
 	}
-	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelTemp)); err != nil {
+	updated := fake.responds[len(fake.responds)-1]
+	if updated.Type != discordgo.InteractionResponseUpdateMessage {
+		t.Fatalf("submit must update the panel message: %+v", updated)
+	}
+	if got := session.Config(); got.ThinkingLevel != sdk.ThinkingHigh || got.Temperature == nil || *got.Temperature != 1.5 {
+		t.Fatalf("modal values not applied: %+v", got)
+	}
+	if !strings.Contains(updated.Data.Content, "Thinking: `high`") || !strings.Contains(updated.Data.Content, "Temperature: `1.5`") {
+		t.Fatalf("panel not rewritten: %q", updated.Data.Content)
+	}
+	if len(updated.Data.Components) != 5 {
+		t.Fatalf("rewritten panel must keep 5 rows: %+v", updated.Data.Components)
+	}
+	// Default clears both overrides.
+	if err := handler.Handle(fake, panelModalSubmit("default", "default")); err != nil {
 		t.Fatal(err)
 	}
-	if session.Config().Temperature != nil {
-		t.Fatalf("folding back must not apply: %+v", session.Config().Temperature)
+	if got := session.Config(); got.ThinkingLevel != "" || got.Temperature != nil {
+		t.Fatalf("default must clear: %+v", got)
 	}
-	// The Temp menu offers default plus 0.0-2.0 with the current preselected.
-	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelTemp)); err != nil {
+	// Garbage fails ephemeral with the session untouched.
+	before := session.Config()
+	if err := handler.Handle(fake, panelModalSubmit("high", "abc")); err != nil {
 		t.Fatal(err)
 	}
-	edit := lastEdit(t, fake)
-	values = editOptionValues(t, edit, modelPanelTempMenu)
-	if len(values) != 22 || values[0] != "default" || values[1] != "0.0" || values[21] != "2.0" {
-		t.Fatalf("temp menu must span default + 0.0-2.0: %v", values)
+	failed := fake.responds[len(fake.responds)-1]
+	if failed.Type != discordgo.InteractionResponseChannelMessageWithSource || failed.Data.Flags&discordgo.MessageFlagsEphemeral == 0 {
+		t.Fatalf("bad temp must fail ephemeral: %+v", failed)
 	}
-	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelTempMenu, "1.5")); err != nil {
+	if !strings.Contains(failed.Data.Content, "temperature") {
+		t.Fatalf("bad temp error wrong: %q", failed.Data.Content)
+	}
+	if session.Config() != before {
+		t.Fatalf("bad temp must not apply: %+v", session.Config())
+	}
+	if err := handler.Handle(fake, panelModalSubmit("ultra", "0.7")); err != nil {
 		t.Fatal(err)
 	}
-	if got := session.Config().Temperature; got == nil || *got != 1.5 {
-		t.Fatalf("temp not applied: %+v", session.Config().Temperature)
-	}
-	if content := editContent(t, lastEdit(t, fake)); !strings.Contains(content, "Temperature: `1.5`") {
-		t.Fatalf("panel must show the temp: %q", content)
-	}
-	// Default clears the override; garbage fails inline.
-	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelTemp)); err != nil {
-		t.Fatal(err)
-	}
-	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelTempMenu, "default")); err != nil {
-		t.Fatal(err)
-	}
-	if session.Config().Temperature != nil {
-		t.Fatalf("default must clear temp: %+v", session.Config().Temperature)
-	}
-	if err := handler.stepPanel(fake, panelButtonInteraction(modelPanelThinking)); err != nil {
-		t.Fatal(err)
-	}
-	if err := handler.stepPanel(fake, panelComponentInteraction(modelPanelThinkingMenu, "ultra")); err != nil {
-		t.Fatal(err)
-	}
-	if got := session.Config().ThinkingLevel; got != sdk.ThinkingHigh {
-		t.Fatalf("bad pick must not apply: %q", got)
-	}
-	if content := editContent(t, lastEdit(t, fake)); !strings.Contains(content, "invalid thinking level") {
-		t.Fatalf("bad pick must fail inline: %q", content)
+	failed = fake.responds[len(fake.responds)-1]
+	if !strings.Contains(failed.Data.Content, "thinking") {
+		t.Fatalf("bad thinking error wrong: %q", failed.Data.Content)
 	}
 }
 

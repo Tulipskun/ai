@@ -289,6 +289,7 @@ func NewGateway(token string) (*Gateway, error) {
 		}
 		if gateway.sessionCommand != nil {
 			if err := gateway.sessionCommand.Handle(s, event); err != nil {
+				log.Printf("discord: session command failed: %v", err)
 				return
 			}
 			if data, ok := event.Interaction.Data.(discordgo.ApplicationCommandInteractionData); ok && data.Name == "session" {
@@ -296,15 +297,21 @@ func NewGateway(token string) (*Gateway, error) {
 			}
 		}
 		if gateway.modelSettings != nil {
-			if err := gateway.modelSettings.Handle(s, event); err != nil && event.Type == discordgo.InteractionApplicationCommand && event.ApplicationCommandData().Name == "model" {
+			if err := gateway.modelSettings.Handle(s, event); err != nil {
+				log.Printf("discord: model settings failed: %v", err)
+			}
+			if event.Type == discordgo.InteractionApplicationCommand && event.ApplicationCommandData().Name == "model" {
 				return
 			}
 		}
 		if gateway.providerSettings != nil {
-			_ = gateway.providerSettings.Handle(s, event)
+			if err := gateway.providerSettings.Handle(s, event); err != nil {
+				log.Printf("discord: provider settings failed: %v", err)
+			}
 		}
 		if gateway.newChannel != nil {
 			if err := gateway.newChannel.Handle(s, event); err != nil {
+				log.Printf("discord: new channel failed: %v", err)
 				return
 			}
 			if data, ok := event.Interaction.Data.(discordgo.ApplicationCommandInteractionData); ok && data.Name == "new" {

@@ -134,3 +134,16 @@ Reason: งานช้า (สร้าง channel, โหลด catalogue ผ�
 Impact: transport/discord (ไฟล์ใหม่ interactions.go รวม helper defer/followup, new_channel.go, model_settings.go submit ขั้น 2, session_command.go รายการ session, provider_settings.go ใช้ helper ร่วม); ไม่แตะ gateway dispatch contract, cmd/ai wiring, sdk core
 Validation: defer ต้องเกิดก่อนงานช้าเสมอ ผลลัพธ์/error หลัง defer ต้องไปทาง followup (ไม่ใช่ InteractionRespond ซ้ำ); modal-open path ต้องยังตอบทันทีแบบเดิม; offline tests ด้วย fake interaction API เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-010
+
+Date: 2026-09-15
+Type: revise
+Request: ใช้ /model แล้ว modal แสดงแต่กด submit ขึ้นผิดพลาด (บอทยังรันอยู่)
+Conflict: CHANGE-008 (flow สอง modal ต่อกันทำไม่ได้จริงบน Discord API)
+Previous: CHANGE-008 /model เปิด modal ขั้นที่ 1 (provider+filter) แล้ว submit เปิด modal ขั้นที่ 2 (model+temperature/thinking/pool)
+New: /model เปิด modal เดียวจบ 5 components พอดีลิมิต (provider select, model text input รับ exact ID หรือ unique substring, temperature text, thinking select, API pool text เฉพาะตัวเลข/ว่างคือคงเดิม) → submit แล้ว defer, ตรวจ catalogue, apply, ตอบสรุปทาง followup; gateway ต้อง log interaction handler errors ลง ai.log แทนการกลืนเงียบ
+Reason: Discord API ไม่อนุญาตให้เปิด modal เพื่อตอบ modal submit ("Modals can not be sent when responding to a modal") ทำให้ submit ขั้นที่ 1 ถูกปฏิเสธทุกครั้ง; นอกจากนี้ gateway กลืน error ของ handler เงียบจน ai.log ไม่มีร่องรอย ทำให้วินิจฉัยไม่ได้
+Impact: transport/discord/model_settings.go (modal เดียว + smart model resolution + submit ใหม่), model_settings_test.go, gateway.go (log handler errors); ไม่แตะ cmd/ai wiring, sdk core, canonical contract
+Validation: modal มีครบ 5 fields พร้อม preselect ค่าเดิม; model รับ exact ID และ unique substring, ปฏิเสธชื่อกำกวมพร้อมรายชื่อ และชื่อที่ไม่มีพร้อม error ชัดเจน; key ว่างคง index เดิม; handler error ต้องปรากฏใน log; offline tests เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: accepted

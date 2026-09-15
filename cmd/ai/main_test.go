@@ -12,7 +12,7 @@ import (
 
 func TestNewAgentWithTools(t *testing.T) {
 	client := sdk.NewRouterClient(sdk.NewRouter())
-	agent, err := newAgent(client, t.TempDir(), nil, false, filepath.Join(t.TempDir(), "data", "jobs.json"))
+	agent, err := newAgent(client, t.TempDir(), nil, false, filepath.Join(t.TempDir(), "data", "jobs.json"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func (testPromptTools) Execute(_ context.Context, _ sdk.ToolCall) sdk.ToolResult
 
 func TestDefaultPromptRequiresSameSessionRetryAndAcceptance(t *testing.T) {
 	prompt := defaultSystemPrompt(nil)
-	for _, name := range []string{"subagent_history", "subagent_status", "follow_up_subagent", "accept_subagent_result"} {
+	for _, name := range []string{"subagent_history", "subagent_status", "follow_up_subagent", "continue_subagent", "accept_subagent_result"} {
 		if !strings.Contains(prompt, "`"+name+"`") {
 			t.Fatalf("missing orchestration tool %s", name)
 		}

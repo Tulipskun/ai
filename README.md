@@ -44,15 +44,21 @@ Runtime configuration is file-based and stored separately from executable files.
 │   ├── entry.json
 │   ├── provider.json
 │   ├── browser.json
-│   └── system.json
+│   ├── system.json
+│   └── attachment.json
 ├── data/
 │   ├── jobs.json
 │   ├── browser/
 │   │   └── profile/
-│   └── sessions/
-│       ├── <session-1>.db
-│       ├── <session-2>.db
-│       └── ...
+│   ├── sessions/
+│   │   ├── <session-1>.db
+│   │   ├── <session-2>.db
+│   │   └── ...
+│   └── attachments/
+│       └── <session>/
+│           ├── manifest.json
+│           └── files/
+│               └── <attachment-id>
 ├── ai.pid
 └── ai.log
 ```
@@ -157,6 +163,36 @@ browser_screenshot
 
 Providers may also be added from Discord with `/provider`, or from the CLI with `/provider add <name> <adapter> <url> <api-key> [free]`. Append `free` (or set `"free_only": true` in `config/provider.json`) to keep only `-free` models in discovery. Extra per-provider HTTP headers go in `"headers"` (for example `"headers": {"HTTP-Referer": "https://example.com", "X-Title": "my-app"}`); auth headers always win over custom ones.
 
+### Attachment configuration
+
+`config/attachment.json`:
+
+```json
+{
+  "enabled": true,
+  "root": "data/attachments",
+  "max_file_bytes": 26214400,
+  "max_session_bytes": 104857600,
+  "ttl": "168h0m0s",
+  "download_timeout": "30s",
+  "upload_timeout": "2m0s",
+  "max_send_file_bytes": 8388608,
+  "max_send_file_count": 10
+}
+```
+
+`root` is relative to the state directory and must stay inside it, so the attachment store can never land in the working tree or in `data/sessions/`. Omitted values fall back to the defaults shown (25 MiB per file, 100 MiB per session, 7 days). A negative limit, a session limit smaller than the file limit, a non-positive `ttl`, or a `root` that is present but blank is rejected when the file is loaded. The store API hands out metadata only — attachment ID, name, content type, size, and relative path — so file content never travels through a reference.
+
+The four transfer budgets bound the Discord file boundary rather than the store: `download_timeout` for one inbound fetch, `upload_timeout` for one outbound multipart send, and `max_send_file_bytes` / `max_send_file_count` for one outbound message. They are deliberately separate from the harness display timeout, which stays a text-reply budget. Omitted or absent, each keeps the default shown.
+
+## Discord attachments
+
+A file a user posts in Discord is downloaded by the transport into the session's attachment store and reaches the agent only as a reference: `Input.Metadata` carries `attachment_count`, `attachment_ids`, and one `attachment_<n>_` group of `id`, `name`, `content_type`, `size`, `path` per stored file (indexes start at 1), plus `attachment_problem_count` and `attachment_problems` for files that could not be stored. The original `channel_id`, `message_id`, `author_id`, and `author_name` keys are unchanged, the canonical `Turn`/`ContentPart` contract is untouched, and a message with only attachments still carries reference text, so it never becomes an empty turn. A file that is broken, oversized, or unreachable leaves a safe note behind instead of losing the turn, and no download URL or raw error text is ever included.
+
+Sending a file back is a transport responsibility, and `transport/discord` is the only module that uploads one. It reads three optional keys from `sdk.Output.Metadata` — `out_attachment_ids` (comma-separated store reference IDs), `out_attachments` (`manifest` or `latest`), and `out_attachment_raw` (refused by design, reported instead of ignored) — resolves them against that output's own session only, and uploads with one multipart message after the text has been delivered. A file that cannot be sent, or a request no sender can honour, is reported with a short safe indicator, never with raw REST error text, a path, or another session's identity.
+
+Nothing outside the transport interprets those keys, and the harness currently has no way to produce them: `HarnessLoop` builds `sdk.Output.Metadata` as a copy of the input's, so no runtime caller sets an outbound key today. The outbound half of REQ-026 is therefore consumer-complete and offline-tested, and the producer needs a canonical change in `sdk/` (see the `TODO(stage-7)` in `transport/discord/attachments.go`).
+
 ## CLI
 
 The application entry point is `cmd/ai`. Build it as the `ai` command and start the Harness with:
@@ -223,6 +259,12 @@ Each session is stored in its own SQLite database under `data/sessions/`. The fi
 ## Web fetch and browser automation
 
 `web_fetch` is the lightweight path for static HTTP/HTTPS pages, documentation, and APIs. Browser automation is a built-in Go CDP tool with no Node.js or Playwright runtime dependency.
+
+## Attachment tools
+
+The worker registry also carries three read-only tools for the attachment file store: `list_attachments` (no arguments; the current session's references — id, name, content type, size, relative path — and no content), `read_attachment` (`ref_id`, optional `max_bytes`; text-like attachments only, capped at 2 MiB read and 20 000 characters with a `truncated` flag, and a clear refusal that names the content type and size for binary payloads), and `describe_attachment` (`ref_id`; metadata analysed with the standard library only — PNG/JPEG/GIF dimensions, and for PDFs a page count plus best-effort text from FlateDecode content streams).
+
+Every one of them resolves the session from the tool context, never from a model-supplied argument, so a session cannot read another session's attachments, and all path, traversal, and symlink checks stay inside the store. Results are always bounded text plus a file reference: raw bytes and base64 never enter the canonical SDK text path. Sending files is a transport responsibility and is not implemented in `tools/`. The tools report `attachment store is not configured` when no store is injected.
 
 ## Input and display architecture
 

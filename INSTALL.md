@@ -33,13 +33,18 @@ Runtime state is stored in `~/.local/share/ai` by default:
 ├── config/
 │   ├── entry.json
 │   ├── provider.json
-│   └── browser.json
+│   ├── browser.json
+│   └── attachment.json
 ├── data/
 │   ├── jobs.json
-│   └── sessions/
-│       ├── <session-1>.db
-│       ├── <session-2>.db
-│       └── ...
+│   ├── sessions/
+│   │   ├── <session-1>.db
+│   │   ├── <session-2>.db
+│   │   └── ...
+│   └── attachments/
+│       └── <session>/
+│           ├── manifest.json
+│           └── files/
 ├── ai.pid
 └── ai.log
 ```
@@ -53,6 +58,8 @@ Each session is stored independently as `<session-id>.db` under `data/sessions/`
 Background jobs are persisted in `data/jobs.json`. Every job records its owning session ID, and job inspection/termination is restricted to that session.
 
 For browser automation, configure `config/browser.json`. Browser automation uses the installed Chrome, Chromium, or Edge browser through Chrome DevTools Protocol and is headed by default. Playwright and a separate Node.js browser worker are not used.
+
+The attachment file store lives under `data/attachments/`: one directory per session, each holding a `manifest.json` of metadata and a `files/` directory named by opaque attachment ID. File content is never stored in a session database, and a caller receives only a name, content type, size, and relative path. Configure the store in `config/attachment.json` (`enabled`, `root`, `max_file_bytes`, `max_session_bytes`, `ttl`); `root` is relative to the state directory and must stay inside it. Four optional keys bound the Discord file transfers instead of the store: `download_timeout`, `upload_timeout`, `max_send_file_bytes`, and `max_send_file_count`; each falls back to its own default when omitted.
 
 Example:
 

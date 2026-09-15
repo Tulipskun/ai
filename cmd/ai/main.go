@@ -561,12 +561,30 @@ func run(ctx context.Context, cliOnly bool) error {
 	if !cliOnly && !transportConfig.Discord.Enabled {
 		log.Printf("no Discord transport enabled; configure config/entry.json")
 	}
+	// The attachment file store is opened from config/attachment.json under the
+	// state root (CON-011) and shared by both directions of the file boundary:
+	// the Discord transport writes inbound files into it, and the worker
+	// registry reads references back out of it (REQ-025, REQ-026).
+	attachmentConfig, err := runtime.LoadAttachmentConfig(filepath.Join(state, runtime.DefaultAttachmentConfigPath))
+	if err != nil {
+		return err
+	}
+	attachmentStore, err := attachmentConfig.Open(state)
+	if err != nil {
+		// A store that cannot be opened must not stop the runtime: text turns
+		// keep working and the intake path reports each file as not stored.
+		log.Printf("attachment store unavailable, continuing without file attachments: %v", err)
+		attachmentStore = nil
+	}
+	if attachmentStore != nil {
+		startAttachmentCleanup(ctx, attachmentStore, attachmentCleanupInterval)
+	}
 	workspace, err := resolveWorkspace()
 	if err != nil {
 		return err
 	}
 	jobsPath := filepath.Join(state, "data", "jobs.json")
-	agent, err := newAgent(rt.Client, workspace, rt.Browser, browserConfig.AllowPrivate, jobsPath)
+	agent, err := newAgent(rt.Client, workspace, rt.Browser, browserConfig.AllowPrivate, jobsPath, attachmentToolStore(attachmentStore))
 	if err != nil {
 		return err
 	}
@@ -613,6 +631,16 @@ func run(ctx context.Context, cliOnly bool) error {
 			return nil
 		}})
 		discord.ConfigureStop(agent.Interrupt)
+		// Both directions of the Discord file boundary run on the same store the
+		// worker registry reads (REQ-025, REQ-026). A nil store is the disabled
+		// case: inbound files then stay readable as reference notes and outbound
+		// uploads are refused with a safe indicator instead of being dropped.
+		discord.ConfigureAttachments(attachmentDiscordStore(attachmentStore), attachmentDownloadClient(attachmentConfig), discordtransport.AttachmentFileConfig{
+			DownloadTimeout:  attachmentConfig.DownloadTimeout,
+			UploadTimeout:    attachmentConfig.UploadTimeout,
+			MaxSendFileBytes: attachmentConfig.MaxSendFileBytes,
+			MaxSendFileCount: attachmentConfig.MaxSendFileCount,
+		})
 		if err := discord.Start(ctx); err != nil {
 			return err
 		}
@@ -672,11 +700,20 @@ func run(ctx context.Context, cliOnly bool) error {
 	return err
 }
 func processAlive(pid int) bool { return pid > 0 && syscall.Kill(pid, 0) == nil }
-func newAgent(client *sdk.RouterClient, workspace string, browser *tools.BrowserClient, allowPrivate bool, jobsPath string) (*sdk.Agent, error) {
+
+// newAgent builds the shared agent and injects the attachment store into its
+// worker tool registry. The registry is the single tool executor both roles use
+// — the SDK hands the same executor to a worker — so one injection gives
+// list_attachments, read_attachment, and describe_attachment to the worker while
+// the Main Agent still sees only planning and orchestration tools, because
+// planning filters by name (REQ-016, REQ-017, REQ-026). A nil store leaves the
+// tools present but reporting that no store is configured.
+func newAgent(client *sdk.RouterClient, workspace string, browser *tools.BrowserClient, allowPrivate bool, jobsPath string, attachments tools.AttachmentStore) (*sdk.Agent, error) {
 	registry, err := tools.NewRegistryWithBrowser(workspace, browser, allowPrivate, jobsPath)
 	if err != nil {
 		return nil, err
 	}
+	registry.SetAttachmentStore(attachments)
 	agent := &sdk.Agent{Client: client, Tools: registry}
 	state := filepath.Dir(filepath.Dir(jobsPath))
 	cfg, err := runtime.LoadSystemConfig(filepath.Join(state, runtime.DefaultSystemConfigPath))
@@ -740,7 +777,7 @@ func defaultSystemPrompt(agent *sdk.Agent) string {
 	b.WriteString("Before creating the plan, use the sub-agent to inspect relevant source code and repository requirements, then use its summary to understand the current system. Do not read repository source directly.\n")
 	b.WriteString("Create one ordered execution plan. The plan is the authoritative sequence of steps. Delegate only the current step at a time.\n")
 	b.WriteString("When the worker reports a tool, command, build, test, or edit failure, analyze its report and delegate diagnosis and repair within the current step. A failure is not a reason to abandon the task or move to an unrelated step.\n")
-	b.WriteString("For implementation work, delegate the current plan step to `delegate_to_subagent`. When the sub-agent loop ends, the orchestration system notifies you. Read the terminal result with `subagent_history` or `subagent_status` and verify the assigned work. Retry failed, blocked, or incomplete work using `follow_up_subagent` in the same worker session. Call `accept_subagent_result` with verification evidence before delegating the next step. Wait for completion events rather than polling. The worker has a separate session and never communicates with the user.\n")
+	b.WriteString("For implementation work, delegate the current plan step to `delegate_to_subagent`. When the sub-agent loop ends, the orchestration system notifies you. Read the terminal result with `subagent_history` or `subagent_status` (`subagent_history` lists every worker tool with name, arguments/details, and result) and verify the assigned work. Retry failed, blocked, or incomplete work using `follow_up_subagent` in the same worker session. Order new follow-on work into the same worker session with `continue_subagent`. Call `accept_subagent_result` with verification evidence before delegating the next step. Wait for completion events rather than polling. The worker has a separate session and never communicates with the user.\n")
 	b.WriteString("Only mark a step complete after verifying that its intended result is actually achieved. After the final goal is complete, stop and send the final result.\n")
 	b.WriteString("After tool results, summarize briefly what you did. Match the user's language.\n")
 	b.WriteString("Only when the task is complete and you are sending the final message to the user, start that final message with \u2728\u2728\u2728. Do not use \u2728\u2728\u2728 in intermediate progress, tool-related, or continuation messages.\n")

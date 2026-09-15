@@ -9,22 +9,98 @@ import (
 	"time"
 
 	"github.com/Tulipskun/ai/sdk"
+	"github.com/bwmarrin/discordgo"
 )
 
+// InputMessage is one normalised inbound Discord message. Attachments carries
+// what the gateway was told about, Stored carries what actually reached the file
+// store, and Problems carries a safe note for each file that did not (REQ-025).
+// The last two are filled by Attachments.Hydrate before the message is
+// converted, so a transport that never stores files leaves them empty.
 type InputMessage struct {
-	SessionID  string
-	ChannelID  string
-	MessageID  string
-	AuthorID   string
-	AuthorName string
-	Content    string
+	SessionID   string
+	ChannelID   string
+	MessageID   string
+	AuthorID    string
+	AuthorName  string
+	Content     string
+	Attachments []InputAttachment
+	Stored      []StoredAttachment
+	Problems    []AttachmentProblem
+
+	// hydrated records that a pipeline has already resolved this message's
+	// files, so a second consumer cannot download them again or replace real
+	// references with "not stored" notes. The gateway pump sets it, and
+	// Attachments.Hydrate is the only other writer.
+	hydrated bool
 }
 
+// ToInput converts a hydrated message into the canonical Harness input.
+//
+// The Turn contract is deliberately untouched: a Discord file becomes an
+// opaque reference in Input.Metadata plus a one-line reference in the text,
+// never a new ContentPart type and never bytes, so no provider sees MIME data
+// and the session history stays bounded (REQ-025, REQ-016, CON-003). The four
+// original keys stay exactly as they were, because lifecycle continuation and
+// reply routing depend on them (REQ-021).
+//
+// Inbound metadata schema (all values are strings; index suffixes start at 1 in
+// delivery order):
+//
+//	attachment_count             stored references, = len(attachment_ids)
+//	attachment_ids               store reference IDs, comma joined
+//	attachment_<i>_id            one store reference ID (what read_attachment takes)
+//	attachment_<i>_name          display filename, sanitised
+//	attachment_<i>_content_type  type detected from magic bytes, else declared
+//	attachment_<i>_size          bytes
+//	attachment_<i>_path          relative path inside the attachment store
+//	attachment_problem_count     files that were not stored
+//	attachment_problems          sanitised names of those files, comma joined
+//
+// The per-attachment keys are the authoritative record: attachment_ids is a
+// convenience join of the same values. A message with no files gains no keys,
+// so a plain Discord turn keeps the exact map it had before attachments
+// existed.
 func ToInput(message InputMessage) sdk.Input {
-	return sdk.Input{Source: "discord", SessionID: message.SessionID, Turn: sdk.Turn{Role: sdk.RoleUser, Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: message.Content}}}, Metadata: map[string]string{"channel_id": message.ChannelID, "message_id": message.MessageID, "author_id": message.AuthorID, "author_name": message.AuthorName}}
+	metadata := map[string]string{"channel_id": message.ChannelID, "message_id": message.MessageID, "author_id": message.AuthorID, "author_name": message.AuthorName}
+	if count := len(message.Stored); count > 0 {
+		metadata[MetaAttachmentCount] = strconv.Itoa(count)
+		ids := make([]string, 0, count)
+		for index, file := range message.Stored {
+			ids = append(ids, file.RefID)
+			metadata[AttachmentKey(index, MetaAttachmentID)] = file.RefID
+			metadata[AttachmentKey(index, MetaAttachmentName)] = file.Name
+			metadata[AttachmentKey(index, MetaAttachmentContentType)] = file.ContentType
+			metadata[AttachmentKey(index, MetaAttachmentSize)] = strconv.FormatInt(file.Size, 10)
+			metadata[AttachmentKey(index, MetaAttachmentPath)] = file.Path
+		}
+		metadata[MetaAttachmentIDs] = strings.Join(ids, ",")
+	}
+	if count := len(message.Problems); count > 0 {
+		metadata[MetaAttachmentProblemCount] = strconv.Itoa(count)
+		names := make([]string, 0, count)
+		for _, problem := range message.Problems {
+			names = append(names, problem.Name)
+		}
+		metadata[MetaAttachmentProblems] = strings.Join(names, ",")
+	}
+	return sdk.Input{Source: "discord", SessionID: message.SessionID, Turn: sdk.Turn{Role: sdk.RoleUser, Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: message.Content}}}, Metadata: metadata}
 }
 
-type InputSource struct{ Messages <-chan InputMessage }
+// InputSource turns the gateway's message channel into canonical Harness
+// inputs. Attachments is optional: when it is set, every message that carries
+// files is hydrated — the files are downloaded into the session's store — before
+// the input is emitted, so the reference metadata and the reference text are
+// already resolved when the turn starts.
+//
+// Hydration happens in this consumer goroutine rather than in the gateway event
+// handler on purpose: a download must never block the Discord read loop, and a
+// message that is queued behind a slow intake still reaches the harness intact
+// instead of being dropped.
+type InputSource struct {
+	Messages    <-chan InputMessage
+	Attachments *Attachments
+}
 
 func (s InputSource) Receive(ctx context.Context) (<-chan sdk.Input, error) {
 	if s.Messages == nil {
@@ -41,6 +117,7 @@ func (s InputSource) Receive(ctx context.Context) (<-chan sdk.Input, error) {
 				if !ok {
 					return
 				}
+				message = s.Attachments.Hydrate(ctx, message)
 				select {
 				case out <- ToInput(message):
 				case <-ctx.Done():
@@ -80,28 +157,122 @@ type retryStatusManager interface {
 	updateRetryStatus(context.Context, string, string) error
 	clearRetryStatus(context.Context, string) error
 }
-type Display struct{ Sender Sender }
+
+// Display renders Harness outputs to one Discord channel. Attachments is
+// optional: a nil value (the zero state every pre-attachment caller already
+// used) disables outbound uploads and reports the request instead of dropping it
+// silently.
+type Display struct {
+	Sender      Sender
+	Attachments *Attachments
+}
+
+// attachments returns the configured pipeline or an inert one, so callers never
+// need a nil check.
+func (d Display) attachments() *Attachments {
+	if d.Attachments != nil {
+		return d.Attachments
+	}
+	return &Attachments{}
+}
 
 func (d Display) Source() string { return "discord" }
 func (d Display) Display(ctx context.Context, output sdk.Output) error {
 	if d.Sender == nil {
 		return errors.New("discord: display has no sender")
 	}
-	if gateway, ok := d.Sender.(*Gateway); ok && output.Metadata["trace_actor"] != "" {
-		return gateway.displayActorOutput(ctx, output)
-	}
 	channelID := output.Metadata["channel_id"]
+	if gateway, ok := d.Sender.(*Gateway); ok && output.Metadata["trace_actor"] != "" {
+		if channelID == "" {
+			return errors.New("discord: output has no channel_id")
+		}
+		return errors.Join(gateway.displayActorOutput(ctx, output), d.sendOutbound(ctx, channelID, output))
+	}
 	if channelID == "" {
 		return errors.New("discord: output has no channel_id")
 	}
 	if output.Trace != nil {
-		return d.displayTrace(ctx, channelID, *output.Trace)
+		return errors.Join(d.displayTrace(ctx, channelID, *output.Trace), d.sendOutbound(ctx, channelID, output))
 	}
 	text := responseContent(&sdk.Response{Content: output.Content})
 	if text == "" {
 		text = responseContent(&output.Response)
 	}
 	for _, chunk := range discordChunks(text, 1900) {
+		if err := d.Sender.SendMessage(ctx, channelID, chunk); err != nil {
+			return err
+		}
+	}
+	return d.sendOutbound(ctx, channelID, output)
+}
+
+// sendOutbound uploads the files an output asks for, after its text has been
+// delivered. It is a no-op for the overwhelming majority of turns: only output
+// metadata that names attachment references triggers an upload, so the plain
+// text path, its chunking, and its error behaviour are unchanged (REQ-002).
+//
+// Uploads run on a context derived with context.WithoutCancel plus the
+// transport's own upload timeout. The harness display timeout bounds a text
+// reply, and it is far too short for a design file; keeping the budget here
+// means a large upload can finish without lengthening the text-reply timeout for
+// the whole system. A cancelled shutdown still cannot half-send a file, because
+// the timeout is what bounds the operation.
+func (d Display) sendOutbound(ctx context.Context, channelID string, output sdk.Output) error {
+	request, requested := outboundRequested(output.Metadata)
+	if !requested {
+		return nil
+	}
+	attachments := d.attachments()
+	sender, ok := d.Sender.(fileSender)
+	if !ok {
+		// A sender without upload capability must say so rather than drop the
+		// files silently (REQ-022).
+		return d.sendOutboundNotes(ctx, channelID, []string{outboundUnsupportedNote})
+	}
+	if !attachments.markSent(channelID, sentKey(request)) {
+		return nil
+	}
+	uploadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), attachments.uploadTimeout())
+	defer cancel()
+	files, notes := attachments.resolveOutbound(uploadCtx, output.SessionID, request)
+	defer func() {
+		for _, file := range files {
+			file.close()
+		}
+	}()
+	// Text-first, files-next is deliberate: the readable answer must not be lost
+	// because an upload failed.
+	if len(files) == 0 {
+		if len(notes) == 0 {
+			return nil
+		}
+		return d.sendOutboundNotes(ctx, channelID, notes)
+	}
+	discordFiles := make([]*discordgo.File, 0, len(files))
+	for _, file := range files {
+		discordFiles = append(discordFiles, file.file)
+	}
+	if len(notes) > 0 {
+		notes = append(notes, fmt.Sprintf("📎 %d file(s) attached", len(discordFiles)))
+	}
+	content := strings.Join(notes, "\n")
+	if err := sender.SendFiles(uploadCtx, channelID, content, discordFiles); err != nil {
+		// One safe indicator, never the raw error text: a REST failure can carry
+		// a URL or a response body (REQ-022).
+		if sendErr := d.sendOutboundNotes(ctx, channelID, []string{outboundSendFailureNote}); sendErr != nil {
+			return errors.Join(err, sendErr)
+		}
+		return err
+	}
+	return nil
+}
+
+func (d Display) sendOutboundNotes(ctx context.Context, channelID string, notes []string) error {
+	text := strings.Join(notes, "\n")
+	if text == "" {
+		return nil
+	}
+	for _, chunk := range discordChunks(truncateText(text, maxEmbedChars), 1900) {
 		if err := d.Sender.SendMessage(ctx, channelID, chunk); err != nil {
 			return err
 		}
@@ -194,8 +365,30 @@ func (d Display) displayTrace(ctx context.Context, channelID string, trace sdk.T
 	}
 }
 
-const maxToolTraceLength = 500
-const maxTextTraceLength = 4000
+const (
+	maxToolTraceLength = 500
+	maxTextTraceLength = 4000
+
+	// Safe outbound indicators. REQ-022 forbids leaking raw tool output or
+	// network error text into a channel, so these are the only strings the
+	// upload path may show, and none of them names a path, a URL, or another
+	// session.
+	outboundUnsupportedNote = "⚠️ no file was sent; this Discord sender cannot upload files"
+	outboundSendFailureNote = "❌ the file upload failed; please try again"
+)
+
+// Outbound metadata schema (written by a caller into sdk.Output.Metadata, read
+// only inside this transport):
+//
+//	out_attachment_ids   comma-separated filestore reference IDs to upload
+//	out_attachments      "manifest" (everything the session's store holds) or
+//	                     "latest" (the newest one); ignored when IDs are named
+//	out_attachment_raw   refused by design: inline bytes/base64 are never sent,
+//	                     and the refusal is reported instead of swallowed
+//
+// The store manifest of output.SessionID is the fallback source because the
+// canonical path cannot carry a file; it stays scoped to that one session, so no
+// other session's attachment can be named into a channel.
 
 func withElapsed(text string, elapsed time.Duration) string {
 	if elapsed <= 0 {
@@ -253,6 +446,8 @@ func formatToolTraceCall(call *sdk.ToolCall) string {
 		return "Working on your task"
 	case "follow_up_subagent":
 		return "Retrying task"
+	case "continue_subagent":
+		return "Continuing task in the same session"
 	case "stop_subagent":
 		return "Stopping task"
 	default:

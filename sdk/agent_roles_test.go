@@ -66,7 +66,7 @@ func TestAgentRoleSeparation(t *testing.T) {
 							}
 							want := []string{"plan"}
 							if configured {
-								want = append(want, "delegate_to_subagent", "subagent_status", "subagent_history", "stop_subagent", "follow_up_subagent", "accept_subagent_result")
+								want = append(want, "delegate_to_subagent", "subagent_status", "subagent_history", "stop_subagent", "follow_up_subagent", "continue_subagent", "accept_subagent_result")
 							}
 							names := make(map[string]bool)
 							for _, tool := range req.Tools {

@@ -81,7 +81,7 @@ func TestDelegatedWorkerRetainsRealToolsAndContext(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			agent, err := newAgent(client, workspace, nil, false, filepath.Join(state, "data/jobs.json"))
+			agent, err := newAgent(client, workspace, nil, false, filepath.Join(state, "data/jobs.json"), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -119,7 +119,7 @@ func TestDelegatedWorkerRetainsRealToolsAndContext(t *testing.T) {
 				}
 				for _, tool := range req.Tools {
 					switch tool.Name {
-					case "plan", "delegate_to_subagent", "subagent_status", "subagent_history", "stop_subagent", "follow_up_subagent", "accept_subagent_result":
+					case "plan", "delegate_to_subagent", "subagent_status", "subagent_history", "stop_subagent", "follow_up_subagent", "continue_subagent", "accept_subagent_result":
 						t.Fatalf("worker exposed %s", tool.Name)
 					}
 				}

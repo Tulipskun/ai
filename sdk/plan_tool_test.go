@@ -50,6 +50,9 @@ type subAgentStub struct{ called bool }
 func (s *subAgentStub) FollowUp(context.Context, string, string) (string, error) {
 	return "followup", nil
 }
+func (s *subAgentStub) Continue(context.Context, string, string) (string, error) {
+	return "continued", nil
+}
 func (s *subAgentStub) Accept(string, string) error { return nil }
 func (s *subAgentStub) Delegate(context.Context, string) (string, error) {
 	s.called = true
@@ -85,7 +88,7 @@ func TestMainAgentDefinitionsContainNoExecutionTools(t *testing.T) {
 	defs := e.Definitions()
 	for _, d := range defs {
 		switch d.Name {
-		case planningToolName, "delegate_to_subagent", "subagent_status", "subagent_history", "stop_subagent", "follow_up_subagent", "accept_subagent_result":
+		case planningToolName, "delegate_to_subagent", "subagent_status", "subagent_history", "stop_subagent", "follow_up_subagent", "continue_subagent", "accept_subagent_result":
 		default:
 			t.Fatalf("Main Agent exposed non-orchestration tool %q", d.Name)
 		}

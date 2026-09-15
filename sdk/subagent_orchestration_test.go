@@ -275,7 +275,7 @@ func TestSubAgentCrossParentOperationsDenied(t *testing.T) {
 }
 
 func TestPlanningGuidanceWaitsForEventsAndExplicitAcceptance(t *testing.T) {
-	for _, want := range []string{"Do not repeatedly poll", "wait for completion events", "explicit status requests", "follow_up_subagent", "accept_subagent_result", "NOT verified success"} {
+	for _, want := range []string{"Do not repeatedly poll", "wait for completion events", "explicit status requests", "follow_up_subagent", "continue_subagent", "accept_subagent_result", "NOT verified success"} {
 		if !strings.Contains(planningSystemInstruction, want) {
 			t.Fatalf("missing guidance %q", want)
 		}
@@ -408,7 +408,7 @@ func TestSubAgentLifecycleGuidanceUsesExposedTools(t *testing.T) {
 			event.PlanStep = PlanStep{Index: 2}
 		}
 		message := event.Message()
-		for _, name := range []string{"subagent_history", "subagent_status", "follow_up_subagent"} {
+		for _, name := range []string{"subagent_history", "subagent_status", "follow_up_subagent", "continue_subagent"} {
 			if !strings.Contains(message, "`"+name+"`") {
 				t.Fatalf("missing tool %s: %s", name, message)
 			}

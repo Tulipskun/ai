@@ -315,6 +315,32 @@ func (s *Session) reserveSubAgent(id string, retry *subAgentJob) (PlanState, Pla
 	return snapshot, step, planned, nil
 }
 
+// reserveSubAgentForContinue binds a new-work reservation to the current plan
+// state while reusing an existing worker session. Unlike retry it does not
+// require the same revision/step: after acceptance or plan completion the new
+// job attaches to the current ready step, or runs as investigation when no
+// step is ready.
+func (s *Session) reserveSubAgentForContinue(id string) (PlanState, PlanStep, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeJob != "" {
+		return PlanState{}, PlanStep{}, false, errors.New("sdk: parent already has a running sub-agent")
+	}
+	planned := s.plan.Current < len(s.plan.Steps)
+	step := PlanStep{}
+	if planned {
+		step = s.plan.Steps[s.plan.Current]
+		if step.Status != "ready" {
+			return PlanState{}, PlanStep{}, false, errors.New("sdk: current step requires review/acceptance or follow-up of its existing job")
+		}
+		s.plan.Steps[s.plan.Current].Status = "running"
+	}
+	s.activeJob = id
+	snapshot := s.plan
+	snapshot.Steps = append([]PlanStep(nil), s.plan.Steps...)
+	return snapshot, step, planned, nil
+}
+
 func (s *Session) finishSubAgent(job *subAgentJob, status string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

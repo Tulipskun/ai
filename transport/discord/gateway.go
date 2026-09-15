@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,9 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
+// discordMessage is the slice of a Discord MESSAGE_CREATE payload the transport
+// cares about. Attachments carries the files reported on the message, so
+// normalizeMessage can convert them instead of dropping them (REQ-025).
 type discordMessage struct {
 	ID          string
 	ChannelID   string
@@ -19,14 +23,53 @@ type discordMessage struct {
 	AuthorName  string
 	Content     string
 	AuthorIsBot bool
+	Attachments []InputAttachment
 }
 
+// normalizeMessage turns that slice into a canonical inbound message. Files are
+// converted but not downloaded here: downloading belongs to the intake pump, so
+// a slow CDN cannot block the gateway event handler.
 func normalizeMessage(message discordMessage) (InputMessage, bool) {
 	if message.AuthorIsBot || message.ID == "" || message.ChannelID == "" || message.AuthorID == "" {
 		return InputMessage{}, false
 	}
-	return InputMessage{SessionID: "discord:channel:" + message.ChannelID, ChannelID: message.ChannelID, MessageID: message.ID, AuthorID: message.AuthorID, AuthorName: message.AuthorName, Content: message.Content}, true
+	return InputMessage{SessionID: "discord:channel:" + message.ChannelID, ChannelID: message.ChannelID, MessageID: message.ID, AuthorID: message.AuthorID, AuthorName: message.AuthorName, Content: message.Content, Attachments: convertAttachments(message.Attachments)}, true
 }
+
+// convertAttachments copies the attachment list behind a stable, transport-local
+// shape. Nothing is filtered: an entry with no download location must still
+// reach the intake pump, where it becomes a readable "not stored" note instead
+// of vanishing from the message the user sent.
+func convertAttachments(attachments []InputAttachment) []InputAttachment {
+	if len(attachments) == 0 {
+		return nil
+	}
+	out := make([]InputAttachment, len(attachments))
+	copy(out, attachments)
+	return out
+}
+
+// inputAttachments converts the wire struct Discord delivers. Both URL and
+// ProxyURL are kept: the downloader prefers the proxy location, which is the
+// channel-scoped one, and falls back to the raw CDN URL.
+func inputAttachments(attachments []*discordgo.MessageAttachment) []InputAttachment {
+	if len(attachments) == 0 {
+		return nil
+	}
+	out := make([]InputAttachment, 0, len(attachments))
+	for _, attachment := range attachments {
+		if attachment == nil {
+			continue
+		}
+		out = append(out, InputAttachment{ID: attachment.ID, Name: attachment.Filename, ContentType: attachment.ContentType, Size: int64(attachment.Size), URL: attachment.URL, ProxyURL: attachment.ProxyURL})
+	}
+	return out
+}
+
+// gatewayIntents stays free of IntentsGuilds on purpose: attachment downloads go
+// through the message's own proxy/CDN URL over REST, which needs no guild object
+// and no guild subscription. Adding the intent would widen the privileged
+// surface and the subscription the bot asks for without unlocking anything.
 func gatewayIntents() discordgo.Intent {
 	return discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent
 }
@@ -130,12 +173,45 @@ func traceFlushDelay(lastPushMs int64) time.Duration {
 	return 0
 }
 
+// AttachmentFileConfig is the file-transfer budget of the Discord transport,
+// resolved from config/*.json by the caller (CON-001). Every zero field falls
+// back to the transport default, so a caller that passes only what it configured
+// still gets a bounded pipeline.
+type AttachmentFileConfig struct {
+	// DownloadTimeout bounds one attachment fetch.
+	DownloadTimeout time.Duration
+	// UploadTimeout bounds one multipart send. It is the transport's own budget,
+	// deliberately separate from the harness display timeout.
+	UploadTimeout time.Duration
+	// MaxSendFileBytes and MaxSendFileCount bound one outbound message.
+	MaxSendFileBytes int64
+	MaxSendFileCount int
+}
+
+func (c AttachmentFileConfig) apply(a *Attachments) {
+	if c.DownloadTimeout > 0 {
+		a.DownloadTimeout = c.DownloadTimeout
+	}
+	if c.UploadTimeout > 0 {
+		a.UploadTimeout = c.UploadTimeout
+	}
+	if c.MaxSendFileBytes > 0 {
+		a.MaxSendFileBytes = c.MaxSendFileBytes
+	}
+	if c.MaxSendFileCount > 0 {
+		a.MaxSendFileCount = c.MaxSendFileCount
+	}
+}
+
 type Gateway struct {
 	session          *discordgo.Session
+	raw              chan InputMessage
 	messages         chan InputMessage
 	done             chan struct{}
 	closeMu          sync.Mutex
 	closed           bool
+	attachments      *Attachments
+	intake           sync.Once
 	modelSettings    *ModelSettingsHandler
 	providerSettings *ProviderSettingsHandler
 	sessionCommand   *SessionCommandHandler
@@ -148,6 +224,17 @@ type Gateway struct {
 	toolTrace        map[string]*toolTraceState
 }
 
+// The gateway receives Discord events in per-event goroutines (discordgo
+// dispatches each handler call with `go`), so messages of one channel can reach
+// the handler out of order. Every message therefore goes through raw into a
+// single pump goroutine, which stores its files and forwards it in arrival
+// order: strictly better ordering than pushing straight into messages from
+// concurrent handlers, and it keeps a slow CDN download off the websocket
+// dispatch goroutine.
+var (
+	inboundBuffer = 256
+)
+
 func NewGateway(token string) (*Gateway, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("discord: bot token is required")
@@ -156,23 +243,26 @@ func NewGateway(token string) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
-	gateway := &Gateway{session: session, messages: make(chan InputMessage, 256), done: make(chan struct{}), retryStatus: make(map[string]string), toolTrace: make(map[string]*toolTraceState), sessionMapping: NewSessionMapping()}
+	gateway := &Gateway{session: session, raw: make(chan InputMessage, inboundBuffer), messages: make(chan InputMessage, inboundBuffer), done: make(chan struct{}), retryStatus: make(map[string]string), toolTrace: make(map[string]*toolTraceState), sessionMapping: NewSessionMapping()}
 	session.Identify.Intents = gatewayIntents()
 	session.AddHandler(func(_ *discordgo.Session, event *discordgo.MessageCreate) {
 		if event == nil || event.Author == nil {
 			return
 		}
-		message, ok := normalizeMessage(discordMessage{ID: event.ID, ChannelID: event.ChannelID, AuthorID: event.Author.ID, AuthorName: event.Author.Username, Content: event.Content, AuthorIsBot: event.Author.Bot})
+		message, ok := normalizeMessage(discordMessage{ID: event.ID, ChannelID: event.ChannelID, AuthorID: event.Author.ID, AuthorName: event.Author.Username, Content: event.Content, AuthorIsBot: event.Author.Bot, Attachments: inputAttachments(event.Attachments)})
 		if !ok {
 			return
 		}
 		message.SessionID = gateway.SessionIDForChannel(message.ChannelID)
 		gateway.resetToolTrace(message.ChannelID)
+		// A new turn supersedes the outbound record of the previous one, so a
+		// later turn can upload the same reference again.
+		gateway.attachments.forgetSent(message.ChannelID)
 		if gateway.stop != nil {
 			_ = gateway.stop(message.SessionID)
 		}
 		select {
-		case gateway.messages <- message:
+		case gateway.raw <- message:
 		case <-gateway.done:
 		}
 	})
@@ -265,6 +355,59 @@ func (g *Gateway) ConfigureStop(handler func(string) bool) {
 		g.stop = handler
 	}
 }
+
+// ConfigureAttachments injects the file pipeline built on top of the attachment
+// store opened from config/attachment.json (CON-011). Passing a nil store turns
+// both directions off: inbound files still become reference notes in the text,
+// but nothing is downloaded, which is the correct behaviour for a runtime with
+// attachments disabled. cfg may be zero-valued to keep the transport defaults.
+func (g *Gateway) ConfigureAttachments(store AttachmentStore, client *http.Client, cfg AttachmentFileConfig) {
+	if g == nil {
+		return
+	}
+	attachments := &Attachments{Store: store, Client: client}
+	cfg.apply(attachments)
+	g.attachments = attachments
+}
+
+// startIntake launches the pump that turns raw inbound messages into hydrated
+// ones. It runs exactly once; both Start and Receive call it, because a test or
+// an embedder may consume messages without ever opening the gateway.
+func (g *Gateway) startIntake(ctx context.Context) {
+	if g == nil {
+		return
+	}
+	g.intake.Do(func() {
+		go g.pumpIntake(ctx)
+	})
+}
+
+// pumpIntake downloads and stores the attachments of each inbound message
+// outside the Discord event handler, then forwards it. One goroutine per gateway
+// is what keeps per-channel arrival order intact; a message with no files costs
+// nothing but the hand-off.
+func (g *Gateway) pumpIntake(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-g.done:
+			return
+		case message, ok := <-g.raw:
+			if !ok {
+				return
+			}
+			hydrated := g.attachments.Hydrate(ctx, message)
+			select {
+			case g.messages <- hydrated:
+			case <-ctx.Done():
+				return
+			case <-g.done:
+				return
+			}
+		}
+	}
+}
 func (g *Gateway) Start(ctx context.Context) error {
 	if g == nil || g.session == nil {
 		return errors.New("discord: gateway is not initialized")
@@ -272,6 +415,10 @@ func (g *Gateway) Start(ctx context.Context) error {
 	if g.authorizedUserID == "" {
 		return errors.New("discord: authorized user ID is required")
 	}
+	// The intake pump must exist before the first event can arrive, so it starts
+	// here as well as in Receive: an embedder may open the gateway and consume
+	// inputs through either entry point.
+	g.startIntake(ctx)
 	if err := g.session.Open(); err != nil {
 		return err
 	}
@@ -316,6 +463,7 @@ func (g *Gateway) Receive(ctx context.Context) (<-chan sdk.Input, error) {
 	if g == nil || g.messages == nil {
 		return nil, errors.New("discord: input source is not initialized")
 	}
+	g.startIntake(ctx)
 	return InputSource{Messages: g.messages}.Receive(ctx)
 }
 func (g *Gateway) SendMessage(ctx context.Context, channelID, content string) error {
@@ -331,6 +479,32 @@ func (g *Gateway) SendMessage(ctx context.Context, channelID, content string) er
 	_, err := g.session.ChannelMessageSend(channelID, content)
 	return err
 }
+
+// SendFiles delivers one message with attachments through Discord's multipart
+// endpoint. It is the outbound half of REQ-026 and lives here, in the Discord
+// module, because the wire format is a transport concern: the agent core only
+// ever sees a reference (CON-004).
+//
+// The callers pass an upload context that already carries the transport's own
+// timeout, so this method only checks it; it does not impose a text-reply budget
+// on a file transfer.
+func (g *Gateway) SendFiles(ctx context.Context, channelID, content string, files []*discordgo.File) error {
+	if g == nil || g.session == nil {
+		return errors.New("discord: gateway is not initialized")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if channelID == "" {
+		return errors.New("discord: channel ID is required")
+	}
+	if len(files) == 0 {
+		return errors.New("discord: at least one file is required")
+	}
+	_, err := g.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{Content: content, Files: files}, discordgo.WithContext(ctx))
+	return err
+}
+
 func (g *Gateway) SendStatusMessage(ctx context.Context, channelID, content string) (string, error) {
 	if g == nil || g.session == nil {
 		return "", errors.New("discord: gateway is not initialized")
@@ -731,7 +905,7 @@ func (g *Gateway) clearRetryStatus(ctx context.Context, channelID string) error 
 	return nil
 }
 func (g *Gateway) Display(ctx context.Context, output sdk.Output) error {
-	return (Display{Sender: g}).Display(ctx, output)
+	return (Display{Sender: g, Attachments: g.attachments}).Display(ctx, output)
 }
 func (g *Gateway) Source() string { return "discord" }
 func (g *Gateway) Close(_ context.Context) error {

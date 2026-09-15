@@ -7,13 +7,14 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	"github.com/Tulipskun/ai/sdk"
 )
 
 type handler func(context.Context, json.RawMessage) (string, error)
 
-type Registry struct { workspace string; jobs *JobManager; handlers map[string]handler; defs []sdk.Tool }
+type Registry struct { workspace string; jobs *JobManager; handlers map[string]handler; defs []sdk.Tool; attachments AttachmentStore; attachmentMu sync.RWMutex }
 
 func NewRegistry(workspace string) (*Registry, error) { return NewRegistryWithBrowser(workspace, nil, false, "") }
 
@@ -33,6 +34,9 @@ func NewRegistryWithBrowser(workspace string, browser *BrowserClient, allowPriva
 
 	policy:=NewNetworkPolicy(allowPrivate)
 	r.register("web_fetch",`Fetch readable content from an HTTP/HTTPS webpage or API.`,newWebFetchTool(policy),browserSchema(map[string]any{"url":stringProperty()},[]string{"url"}))
+	r.register("list_attachments",`List the attachment file references stored for the current session: id, name, content type, size, and relative path inside the attachment store. Returns no file content.`,r.listAttachmentsHandler(),browserSchema(nil,nil))
+	r.register("read_attachment",`Read the text content of one attachment owned by the current session, addressed by ref_id from list_attachments. Text-like content only, size-bounded with a truncated flag; binary files are refused and described instead.`,r.readAttachmentHandler(),browserSchema(map[string]any{"ref_id":stringProperty(),"max_bytes":intProperty()},[]string{"ref_id"}))
+	r.register("describe_attachment",`Describe one attachment owned by the current session: size, content type, PNG/JPEG/GIF dimensions, and for PDFs a page count plus best-effort extracted text. Metadata only; never returns raw bytes.`,r.describeAttachmentHandler(),browserSchema(map[string]any{"ref_id":stringProperty(),"max_bytes":intProperty()},[]string{"ref_id"}))
 	if browser != nil {
 		r.register("browser_list_pages",`List browser tabs currently available through the configured browser CDP endpoint.`,newBrowserListPagesTool(browser),browserSchema(nil,nil))
 		r.register("browser_attach",`Attach the current AI browser session to an existing browser tab by target_id.`,newBrowserAttachTool(browser),browserSchema(map[string]any{"session_id":stringProperty(),"target_id":stringProperty()},[]string{"session_id","target_id"}))

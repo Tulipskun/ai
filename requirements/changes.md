@@ -251,3 +251,16 @@ Reason: main/sub ใช้งานจริงคนละ model/pool กัน
 Impact: sdk/types.go (ModeSettings), sdk/session_settings.go (setters ฝั่ง active + EnsureSubSettings + SetSubKeyPool), sdk/routing.go (subKeys + EffectiveConfig + APIKey/Rotate), sdk/router_client.go, sdk/agent.go (labels), sdk/subagent.go (inherit effective), runtime/session_manager.go (re-attach), transport/discord/model_settings.go (layout ตาม sketch + active side), model_settings_test.go, sdk/mode_settings_test.go (ใหม่), transport/discord/new_channel.go (copy สองฝั่ง); ไม่แตะ gateway dispatch, modal, canonical contract
 Validation: setters เขียนถูกฝั่งตาม mode; effective overlay ครบทุก field; sub turn ใช้ pool/index/model ฝั่ง sub (stream/non-stream); seed ครั้งแรก; restart แล้ว pool สองฝั่งกลับมา; worker inherit effective; panel/controls/modal อ่านเขียนฝั่ง active; summary สองบล็อกค่าถูก; /new copy ครบ; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-019
+
+Date: 2026-09-15
+Type: revise
+Request: ปุ่มทั้งหมดอยู่ใน container แถบสีเดียวกัน; สรุปไม่ใส่อิโมจิ อิโมจิอยู่แค่ปุ่ม/เมนู
+Conflict: CHANGE-018 (ปุ่มอยู่นอก container; สรุปมีอิโมจิ)
+Previous: CHANGE-018 container มีแค่สรุป ปุ่มอยู่ action rows ข้างนอก สรุปมีอิโมจิทุกบรรทัด
+New: REQ-028 Container ประกอบด้วยหัวข้อ + บล็อก Main + sep + บล็อก Sub + ปุ่ม 5 ปุ่มในรูปแบบ Section (Main/Sub/Thinking/Temp/Save ข้อความซ้ายปุ่มขวา ปุ่ม active เป็น Primary); select menu (provider/model/pool) อยู่ข้างนอกเป็น top-level ActionRows เพราะ Discord ไม่ยอมรับ select ใน container (ได้เฉพาะปุ่มผ่าน Section accessory); สรุปเป็น plain text ทั้งหมด (หัวข้อ บล็อก โหมด) อิโมจิเหลือแค่ปุ่ม labels, select placeholders และ nav options; modal title เป็น plain
+Reason: ปุ่มกับสรุปอยู่ใน accent bar เดียวกันอ่านเป็นกล่องเดียว; สรุป plain อ่านค่าชัด ไม่แย่งซีนกับ controls
+Impact: transport/discord/model_settings.go (container builders, modal title), model_settings_test.go; ไม่แตะ sdk, /new logic (shared summary plain ตาม), gateway, canonical contract
+Validation: ปุ่มทุกปุ่มอยู่ใน container (sections) + selects ข้างนอก; สรุปไม่มีอิโมจิ; ปุ่ม/placeholder ยังมีอิโมจิ; custom ID/value ไม่เปลี่ยน; Save freeze เหมือนเดิม; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
+Status: accepted

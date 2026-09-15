@@ -169,7 +169,7 @@ func TestNewChannelClonesSettingsAndReports(t *testing.T) {
 	if fake.sentTo != "chan-new" {
 		t.Fatalf("summary not sent to new channel: %+v", fake)
 	}
-	for _, want := range []string{"B.ai", "qwen3.8-flash", "medium", "0.7", "API Pool: `2`", "🤖 **Main agent**", "⚡ **Sub agent**", "C.ai", "c1"} {
+	for _, want := range []string{"B.ai", "qwen3.8-flash", "medium", "0.7", "API Pool: `2`", "**Main agent**", "**Sub agent**", "C.ai", "c1"} {
 		if !strings.Contains(fake.sentText, want) {
 			t.Fatalf("summary missing %q: %s", want, fake.sentText)
 		}

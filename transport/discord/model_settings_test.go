@@ -208,6 +208,30 @@ func panelContainerOf(t *testing.T, edit *discordgo.WebhookEdit) discordgo.Conta
 	return discordgo.Container{}
 }
 
+// panelAccessoryStyles maps section accessory button IDs to their styles.
+func panelAccessoryStyles(t *testing.T, edit *discordgo.WebhookEdit) map[string]discordgo.ButtonStyle {
+	t.Helper()
+	styles := map[string]discordgo.ButtonStyle{}
+	for _, child := range panelContainerOf(t, edit).Components {
+		var section discordgo.Section
+		switch child := child.(type) {
+		case discordgo.Section:
+			section = child
+		case *discordgo.Section:
+			section = *child
+		default:
+			continue
+		}
+		switch button := section.Accessory.(type) {
+		case discordgo.Button:
+			styles[button.CustomID] = button.Style
+		case *discordgo.Button:
+			styles[button.CustomID] = button.Style
+		}
+	}
+	return styles
+}
+
 func TestPanelOpensOneRegularMessage(t *testing.T) {
 	keys := sdk.NewKeyPool("k1", "k2")
 	session := sdk.NewSession(sdk.SessionConfig{ID: "discord:channel:c1"}, keys)
@@ -234,27 +258,29 @@ func TestPanelOpensOneRegularMessage(t *testing.T) {
 		t.Fatalf("panel edit must carry the V2 flag: %+v", edit.Flags)
 	}
 	top := *edit.Components
-	if len(top) != 9 {
-		t.Fatalf("panel must be container + separator + 5 rows + separator + save: %d", len(top))
+	if len(top) != 5 {
+		t.Fatalf("panel must be container + separator + 3 menu rows: %d", len(top))
 	}
 	if _, ok := top[0].(discordgo.Container); !ok {
 		if _, ok := top[0].(*discordgo.Container); !ok {
 			t.Fatalf("first component must be the summary container: %T", top[0])
 		}
 	}
-	for index, component := range top[2:7] {
+	if _, ok := top[1].(discordgo.Separator); !ok {
+		if _, ok := top[1].(*discordgo.Separator); !ok {
+			t.Fatalf("controls must follow a separator: %T", top[1])
+		}
+	}
+	for index, component := range top[2:] {
 		if _, ok := component.(discordgo.ActionsRow); !ok {
 			if _, ok := component.(*discordgo.ActionsRow); !ok {
 				t.Fatalf("panel row %d is not an action row: %T", index+1, component)
 			}
 		}
 	}
-	for _, index := range []int{1, 7} {
-		if _, ok := top[index].(discordgo.Separator); !ok {
-			if _, ok := top[index].(*discordgo.Separator); !ok {
-				t.Fatalf("component %d must be a separator: %T", index, top[index])
-			}
-		}
+	container := panelContainerOf(t, edit)
+	if len(container.Components) != 10 {
+		t.Fatalf("container must hold summary plus 5 button sections: %d", len(container.Components))
 	}
 	ids := editCustomIDs(t, edit)
 	seen := map[string]bool{}
@@ -270,22 +296,24 @@ func TestPanelOpensOneRegularMessage(t *testing.T) {
 		}
 	}
 	save := false
-	row, ok := top[8].(discordgo.ActionsRow)
-	if !ok {
-		if r, ok := top[8].(*discordgo.ActionsRow); ok {
-			row = *r
-		} else {
-			t.Fatalf("last component must be the save row: %T", top[8])
-		}
-	}
-	for _, child := range row.Components {
-		if button, ok := child.(discordgo.Button); ok && button.CustomID == modelPanelSave {
-			save = true
-			if button.Style != discordgo.SuccessButton {
-				t.Fatalf("save must be green: %+v", button)
+	for _, child := range container.Components {
+		section, ok := child.(discordgo.Section)
+		if !ok {
+			if s, ok := child.(*discordgo.Section); ok {
+				section = *s
+			} else {
+				continue
 			}
 		}
-		if button, ok := child.(*discordgo.Button); ok && button.CustomID == modelPanelSave {
+		button, ok := section.Accessory.(discordgo.Button)
+		if !ok {
+			if b, ok := section.Accessory.(*discordgo.Button); ok {
+				button = *b
+			} else {
+				t.Fatalf("section accessory is not a button: %T", section.Accessory)
+			}
+		}
+		if button.CustomID == modelPanelSave {
 			save = true
 			if button.Style != discordgo.SuccessButton {
 				t.Fatalf("save must be green: %+v", button)
@@ -293,21 +321,28 @@ func TestPanelOpensOneRegularMessage(t *testing.T) {
 		}
 	}
 	if !save {
-		t.Fatalf("panel must end with a green save button: %v", ids)
+		t.Fatalf("container must end with a green save button: %v", ids)
 	}
 	content := editContent(t, edit)
 	if content != "" {
 		t.Fatalf("panel content must stay empty next to the summary: %q", content)
 	}
 	texts := panelContainerTexts(t, edit)
-	if len(texts) != 3 {
-		t.Fatalf("summary must be title plus two sides: %q", texts)
+	if len(texts) != 8 {
+		t.Fatalf("summary must be title, sides and section labels: %q", texts)
 	}
-	if texts[0] != "⚙️ **Session Model Settings**" {
+	if texts[0] != "**Session Model Settings**" {
 		t.Fatalf("title wrong: %q", texts[0])
 	}
-	if !strings.Contains(texts[1], "🤖 **Main agent**") || !strings.Contains(texts[2], "⚡ **Sub agent**") {
+	if !strings.Contains(texts[1], "**Main agent**") || !strings.Contains(texts[2], "**Sub agent**") {
 		t.Fatalf("summary must hold both sides: %q", texts)
+	}
+	for _, text := range texts {
+		for _, emoji := range []string{"⚙️", "🤖", "⚡", "📦", "💭", "🌡️", "🔑", "💾", "✅"} {
+			if strings.Contains(text, emoji) {
+				t.Fatalf("summary must stay plain, found %q in %q", emoji, text)
+			}
+		}
 	}
 	// Both menus stay neutral: current values show in the summary text,
 	// never as preselected options, so the (p/n) placeholder stays visible.
@@ -504,22 +539,13 @@ func TestPanelModelPagesConditionalNav(t *testing.T) {
 	if options[0].Value != panelNavNext || options[1].Value != "model-1" || options[24].Value != "model-24" {
 		t.Fatalf("first page must lead with Next: %+v", options[:3])
 	}
-	// The toggle buttons live in their own row right after the summary.
-	toggle, ok := (*lastEdit(t, fake).Components)[2].(discordgo.ActionsRow)
-	if !ok {
-		t.Fatal("second component must be the toggle row")
+	// The toggle buttons live in the container sections.
+	styles := panelAccessoryStyles(t, lastEdit(t, fake))
+	if _, ok := styles[modelPanelAgentMain]; !ok {
+		t.Fatalf("main toggle missing: %+v", styles)
 	}
-	toggleIDs := map[string]bool{}
-	for _, child := range toggle.Components {
-		if button, ok := child.(discordgo.Button); ok {
-			toggleIDs[button.CustomID] = true
-		}
-		if button, ok := child.(*discordgo.Button); ok {
-			toggleIDs[button.CustomID] = true
-		}
-	}
-	if !toggleIDs[modelPanelAgentMain] || !toggleIDs[modelPanelAgentSub] {
-		t.Fatalf("toggle row wrong: %+v", toggle.Components)
+	if _, ok := styles[modelPanelAgentSub]; !ok {
+		t.Fatalf("sub toggle missing: %+v", styles)
 	}
 	// Next turns the page; the pick itself never applies a model. The last
 	// page carries only Previous plus the remaining models.
@@ -684,7 +710,7 @@ func TestPanelThinkingAndTempModal(t *testing.T) {
 	if joined := strings.Join(texts, "\n"); !strings.Contains(joined, "`high`") || !strings.Contains(joined, "`1.5`") {
 		t.Fatalf("panel not rewritten: %q", joined)
 	}
-	if len(updated.Data.Components) != 9 {
+	if len(updated.Data.Components) != 5 {
 		t.Fatalf("rewritten panel must keep the full layout: %+v", updated.Data.Components)
 	}
 	// Default clears both overrides.
@@ -794,16 +820,7 @@ func TestPanelAgentModeSeedsAndEditsSubSide(t *testing.T) {
 		t.Fatalf("summary must show both sides: %q", texts)
 	}
 	// The active toggle button is primary.
-	toggle, ok := (*lastEdit(t, fake).Components)[2].(discordgo.ActionsRow)
-	if !ok {
-		t.Fatal("second component must be the toggle row")
-	}
-	styles := map[string]discordgo.ButtonStyle{}
-	for _, child := range toggle.Components {
-		if button, ok := child.(discordgo.Button); ok {
-			styles[button.CustomID] = button.Style
-		}
-	}
+	styles := panelAccessoryStyles(t, lastEdit(t, fake))
 	if styles[modelPanelAgentSub] != discordgo.PrimaryButton || styles[modelPanelAgentMain] != discordgo.SecondaryButton {
 		t.Fatalf("toggle styles wrong: %+v", styles)
 	}

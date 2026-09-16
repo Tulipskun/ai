@@ -140,6 +140,8 @@ func (s *SessionDB) init() error {
 
 func (s *SessionDB) ensureSessionColumns() error {
 	columns := []string{
+		"agent_mode TEXT NOT NULL DEFAULT ''",
+		"workspace TEXT",
 		"input_tokens INTEGER NOT NULL DEFAULT 0",
 		"output_tokens INTEGER NOT NULL DEFAULT 0",
 		"total_tokens INTEGER NOT NULL DEFAULT 0",
@@ -197,14 +199,16 @@ func (s *SessionDB) SaveSession(config SessionConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(`
-		INSERT INTO sessions(id,provider,model,key_index,thinking_level,temperature,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?)
+		INSERT INTO sessions(id,provider,model,key_index,thinking_level,temperature,agent_mode,workspace,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			provider=excluded.provider,
 			model=excluded.model,
 			key_index=excluded.key_index,
 			thinking_level=excluded.thinking_level,
 			temperature=excluded.temperature,
+			agent_mode=excluded.agent_mode,
+			workspace=excluded.workspace,
 			updated_at=excluded.updated_at`,
 		config.ID,
 		config.Provider,
@@ -212,6 +216,8 @@ func (s *SessionDB) SaveSession(config SessionConfig) error {
 		config.KeyIndex,
 		config.ThinkingLevel,
 		nullableFloat(config.Temperature),
+		string(config.AgentMode),
+		nullableString(config.Workspace),
 		now,
 		now,
 	)
@@ -223,8 +229,10 @@ func (s *SessionDB) LoadSession(sessionID string) (SessionConfig, error) {
 	defer s.mu.Unlock()
 	var config SessionConfig
 	var temperature sql.NullFloat64
+	var agentMode string
+	var workspace sql.NullString
 	err := s.db.QueryRow(`
-		SELECT id,provider,model,key_index,thinking_level,temperature
+		SELECT id,provider,model,key_index,thinking_level,temperature,agent_mode,workspace
 		FROM sessions WHERE id=?`, sessionID).Scan(
 		&config.ID,
 		&config.Provider,
@@ -232,6 +240,8 @@ func (s *SessionDB) LoadSession(sessionID string) (SessionConfig, error) {
 		&config.KeyIndex,
 		&config.ThinkingLevel,
 		&temperature,
+		&agentMode,
+		&workspace,
 	)
 	if err != nil {
 		return SessionConfig{}, err
@@ -239,6 +249,10 @@ func (s *SessionDB) LoadSession(sessionID string) (SessionConfig, error) {
 	if temperature.Valid {
 		v := temperature.Float64
 		config.Temperature = &v
+	}
+	config.AgentMode = AgentMode(agentMode)
+	if workspace.Valid {
+		config.Workspace = workspace.String
 	}
 	return config, nil
 }

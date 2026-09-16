@@ -22,15 +22,14 @@ func (p *toolUsingProvider) Generate(_ context.Context, req Request) (Response, 
 	return Response{Content: []ContentPart{{Type: ContentText, Text: "worker done after tool"}}}, nil
 }
 
-func TestSubAgentReportShowsToolsArgsAndResults(t *testing.T) {
-	agent, parent := newSubAgentTest(t, &toolUsingProvider{})
-	manager := newSubAgentManager(agent, agent.SubAgentConfig)
-	r := &subAgentRunner{manager: manager, parent: parent}
-	report, err := r.Delegate(context.Background(), "use tools")
-	if err != nil {
+func TestSubAgentFinalReportShowsToolsArgsAndResults(t *testing.T) {
+	r, events := orchestrationRunner(t, &toolUsingProvider{})
+	if _, err := r.Delegate(context.Background(), "use tools"); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"read_file", "a.txt", "tools_used:", "worker done after tool", "task: use tools"} {
+	event := awaitReport(t, events, "final")
+	report := event.Report
+	for _, want := range []string{"read_file", `{"path":"a.txt"}`, "tools_used:", "worker done after tool", "task: use tools"} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q:\n%s", want, report)
 		}
@@ -42,27 +41,25 @@ func TestSubAgentReportShowsToolsArgsAndResults(t *testing.T) {
 
 func TestSubAgentContinueReusesWorkerSession(t *testing.T) {
 	provider := &subAgentCaptureProvider{}
-	agent, parent := newSubAgentTest(t, provider)
-	manager := newSubAgentManager(agent, agent.SubAgentConfig)
-	r := &subAgentRunner{manager: manager, parent: parent}
-	_ = parent.SetPlan([]string{"step one"})
-	report, err := r.Delegate(context.Background(), "step one")
+	r, events := orchestrationRunner(t, provider)
+	_ = r.parent.SetPlan([]string{"step one"})
+	id, err := r.Delegate(context.Background(), "step one")
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := jobIDFromReport(report)
+	awaitReport(t, events, "final")
 	if err := r.Accept(id, "verified step one"); err != nil {
 		t.Fatal(err)
 	}
 	// New work into the same worker session must be allowed after acceptance.
-	nextReport, err := r.Continue(context.Background(), id, "follow-on work in same session")
+	next, err := r.Continue(context.Background(), id, "follow-on work in same session")
 	if err != nil {
 		t.Fatalf("continue rejected: %v", err)
 	}
-	next := jobIDFromReport(nextReport)
 	if next == id {
 		t.Fatal("continue reused job identity")
 	}
+	manager := r.manager
 	manager.mu.RLock()
 	first, ok1 := manager.jobs[id]
 	second, ok2 := manager.jobs[next]
@@ -73,6 +70,7 @@ func TestSubAgentContinueReusesWorkerSession(t *testing.T) {
 	if first.workerID != second.workerID {
 		t.Fatalf("worker session not reused: %q vs %q", first.workerID, second.workerID)
 	}
+	awaitReport(t, events, "final")
 	req := provider.lastRequest()
 	var history strings.Builder
 	for _, turn := range req.Messages {
@@ -94,11 +92,9 @@ func TestSubAgentContinueReusesWorkerSession(t *testing.T) {
 	}
 	// Continue while running must be denied.
 	blocking := &subAgentBlockingProvider{started: make(chan struct{})}
-	agentB, parentB := newSubAgentTest(t, blocking)
-	managerB := newSubAgentManager(agentB, agentB.SubAgentConfig)
-	rb := &subAgentRunner{manager: managerB, parent: parentB}
-	_ = parentB.SetPlan([]string{"long"})
-	running, err := managerB.startAndRegister(parentB, "long")
+	rb, evts := orchestrationRunner(t, blocking)
+	_ = rb.parent.SetPlan([]string{"long"})
+	running, err := rb.manager.startAndRegister(rb.parent, "long")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,23 +105,26 @@ func TestSubAgentContinueReusesWorkerSession(t *testing.T) {
 	if _, err := rb.Stop(context.Background(), running); err != nil {
 		t.Fatal(err)
 	}
+	select {
+	case event := <-evts:
+		t.Fatalf("stopped job leaked a report: %+v", event)
+	default:
+	}
 }
 
 func TestSubAgentContinueToolValidation(t *testing.T) {
-	agent, parent := newSubAgentTest(t, &subAgentImmediateProvider{})
-	manager := newSubAgentManager(agent, agent.SubAgentConfig)
-	r := &subAgentRunner{manager: manager, parent: parent}
-	tool := newPlanningToolExecutor(nil, parent)
+	r, events := orchestrationRunner(t, &subAgentImmediateProvider{})
+	tool := newPlanningToolExecutor(nil, r.parent)
 	tool.ConfigureSubAgent(r)
 	if result := tool.Execute(context.Background(), ToolCall{Name: "continue_subagent", Arguments: `{"task":"missing id"}`}); !result.IsError {
 		t.Fatal("continue without ID started work")
 	}
-	_ = parent.SetPlan([]string{"step"})
-	report, err := r.Delegate(context.Background(), "step")
+	_ = r.parent.SetPlan([]string{"step"})
+	id, err := r.Delegate(context.Background(), "step")
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := jobIDFromReport(report)
+	awaitReport(t, events, "final")
 	if err := r.Accept(id, "verified"); err != nil {
 		t.Fatal(err)
 	}
@@ -147,4 +146,5 @@ func TestSubAgentContinueToolValidation(t *testing.T) {
 	if winners != 1 {
 		t.Fatalf("continue reserved %d jobs", winners)
 	}
+	awaitReport(t, events, "final")
 }

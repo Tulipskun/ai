@@ -30,35 +30,33 @@ func (p *retryResultProvider) Generate(_ context.Context, req Request) (Response
 
 func TestSubAgentBlockedResultRetryAndAcceptance(t *testing.T) {
 	provider := &retryResultProvider{}
-	agent, parent := newSubAgentTest(t, provider)
-	manager := newSubAgentManager(agent, agent.SubAgentConfig)
-	r := &subAgentRunner{manager: manager, parent: parent}
-	_ = parent.SetPlan([]string{"implement", "validate"})
-	report, err := r.Delegate(context.Background(), "implement")
+	r, events := orchestrationRunner(t, provider)
+	_ = r.parent.SetPlan([]string{"implement", "validate"})
+	id, err := r.Delegate(context.Background(), "implement")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(report, "BLOCKED") {
-		t.Fatalf("blocked report missing from delegation result: %s", report)
+	event := awaitReport(t, events, "final")
+	if event.Status != "completed" || !strings.Contains(event.Report, "BLOCKED") {
+		t.Fatalf("unexpected final report: %+v", event)
 	}
-	state := parent.Plan()
+	state := r.parent.Plan()
 	if state.Current != 0 || state.Steps[0].Status != "awaiting_review" {
 		t.Fatalf("blocked report advanced plan: %+v", state)
 	}
-	id := jobIDFromReport(report)
 	if _, err := r.Delegate(context.Background(), "skip to validation"); err == nil {
 		t.Fatal("delegated without acceptance")
 	}
-	retryReport, err := r.FollowUp(context.Background(), id, "Resolve block and run tests")
+	retry, err := r.FollowUp(context.Background(), id, "Resolve block and run tests")
 	if err != nil {
 		t.Fatal(err)
 	}
-	retry := jobIDFromReport(retryReport)
 	if retry == id {
 		t.Fatal("retry reused result identity")
 	}
-	if !strings.Contains(retryReport, "Implemented and tests passed") {
-		t.Fatalf("retry lost its report: %s", retryReport)
+	retryEvent := awaitReport(t, events, "final")
+	if !strings.Contains(retryEvent.Report, "Implemented and tests passed") {
+		t.Fatalf("retry lost its report: %s", retryEvent.Report)
 	}
 	req := provider.lastRequest()
 	var history strings.Builder
@@ -88,40 +86,38 @@ func TestSubAgentBlockedResultRetryAndAcceptance(t *testing.T) {
 	if _, err := r.FollowUp(context.Background(), retry, "again"); err == nil {
 		t.Fatal("retried accepted result")
 	}
-	state = parent.Plan()
+	state = r.parent.Plan()
 	if state.Current != 1 || state.Steps[1].Status != "ready" {
 		t.Fatalf("accept did not advance exactly once: %+v", state)
 	}
 }
 
 func TestSubAgentFailureRemainsRetryable(t *testing.T) {
-	agent, parent := newSubAgentTest(t, &retryResultProvider{fail: true})
-	manager := newSubAgentManager(agent, agent.SubAgentConfig)
-	manager.agent.MaxRetries = -1
-	r := &subAgentRunner{manager: manager, parent: parent}
-	_ = parent.SetPlan([]string{"fix"})
-	report, err := r.Delegate(context.Background(), "fix")
+	r, events := orchestrationRunner(t, &retryResultProvider{fail: true})
+	r.manager.agent.MaxRetries = -1
+	_ = r.parent.SetPlan([]string{"fix"})
+	id, err := r.Delegate(context.Background(), "fix")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(report, "status=failed") {
-		t.Fatalf("expected failed report: %s", report)
+	if event := awaitReport(t, events, "final"); event.Status != "failed" {
+		t.Fatalf("expected failure: %+v", event)
 	}
-	id := jobIDFromReport(report)
 	if err := r.Accept(id, "failed"); err == nil {
 		t.Fatal("accepted failed execution")
 	}
-	if state := parent.Plan(); state.Current != 0 || state.Steps[0].Status != "failed" {
+	if state := r.parent.Plan(); state.Current != 0 || state.Steps[0].Status != "failed" {
 		t.Fatalf("bad failure state: %+v", state)
 	}
-	retryReport, err := r.FollowUp(context.Background(), id, "retry fix")
+	retry, err := r.FollowUp(context.Background(), id, "retry fix")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(retryReport, "status=completed") {
-		t.Fatalf("retry did not complete: %s", retryReport)
+	event := awaitReport(t, events, "final")
+	if event.Status != "completed" {
+		t.Fatalf("retry did not complete: %+v", event)
 	}
-	if err := r.Accept(jobIDFromReport(retryReport), "verified retry"); err != nil {
+	if err := r.Accept(retry, "verified retry"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -130,44 +126,48 @@ func TestSubAgentReservationAndStaleCompletion(t *testing.T) {
 	for _, planned := range []bool{false, true} {
 		t.Run(map[bool]string{false: "investigation", true: "planned"}[planned], func(t *testing.T) {
 			provider := &subAgentBlockingProvider{started: make(chan struct{})}
-			agent, parent := newSubAgentTest(t, provider)
-			manager := newSubAgentManager(agent, agent.SubAgentConfig)
-			r := &subAgentRunner{manager: manager, parent: parent}
+			r, _ := orchestrationRunner(t, provider)
 			if planned {
-				_ = parent.SetPlan([]string{"old"})
+				_ = r.parent.SetPlan([]string{"old"})
 			}
-			id, err := manager.startAndRegister(parent, "work")
-			if err != nil {
-				t.Fatal(err)
-			}
-			<-provider.started
 			var wg sync.WaitGroup
-			for i := 0; i < 8; i++ {
+			ids := make(chan string, 32)
+			for i := 0; i < 32; i++ {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					if _, err := r.Delegate(context.Background(), "overlap"); err == nil {
-						t.Error("reservation allowed overlap")
-					}
-					if _, err := r.FollowUp(context.Background(), id, "overlap retry"); err == nil {
-						t.Error("running job retried")
+					id, err := r.manager.startAndRegister(r.parent, "work")
+					if err == nil {
+						ids <- id
 					}
 				}()
 			}
 			wg.Wait()
-			oldRevision := parent.Plan().Revision
-			_ = parent.SetPlan([]string{"replacement"})
-			if parent.Plan().Revision == oldRevision {
+			close(ids)
+			var successes []string
+			for id := range ids {
+				successes = append(successes, id)
+			}
+			if len(successes) != 1 {
+				t.Fatalf("reservation allowed %d jobs", len(successes))
+			}
+			id := successes[0]
+			<-provider.started
+			oldRevision := r.parent.Plan().Revision
+			_ = r.parent.SetPlan([]string{"replacement"})
+			if r.parent.Plan().Revision == oldRevision {
 				t.Fatal("replacement reused revision")
 			}
-			report, err := r.Stop(context.Background(), id)
-			if err != nil {
-				t.Fatal(err)
+			if _, err := r.Delegate(context.Background(), "overlap replacement"); err == nil {
+				t.Fatal("replacement bypassed reservation")
 			}
-			if !strings.Contains(report, "status=stopped") {
-				t.Fatalf("stop report wrong: %s", report)
+			if _, err := r.FollowUp(context.Background(), id, "overlap retry"); err == nil {
+				t.Fatal("running job retried")
 			}
-			if state := parent.Plan(); len(state.Steps) != 1 || state.Steps[0].Status != "ready" {
+			if _, err := r.Stop(context.Background(), id); err != nil {
+				t.Fatal("stop rejected")
+			}
+			if state := r.parent.Plan(); len(state.Steps) != 1 || state.Steps[0].Status != "ready" {
 				t.Fatalf("stale completion mutated replacement: %+v", state)
 			}
 			if err := r.Accept(id, "stale"); err == nil {
@@ -181,46 +181,45 @@ func TestSubAgentReservationAndStaleCompletion(t *testing.T) {
 }
 
 func TestSubAgentStaleSuccessfulResultAndCompletedPlanInvestigation(t *testing.T) {
-	agent, parent := newSubAgentTest(t, &subAgentImmediateProvider{})
-	manager := newSubAgentManager(agent, agent.SubAgentConfig)
-	r := &subAgentRunner{manager: manager, parent: parent}
-	_ = parent.SetPlan([]string{"same text"})
+	r, events := orchestrationRunner(t, &subAgentImmediateProvider{})
+	_ = r.parent.SetPlan([]string{"same text"})
 	id, err := r.Delegate(context.Background(), "same text")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = parent.SetPlan([]string{"same text"})
-	if err := r.Accept(jobIDFromReport(id), "stale identical step"); err == nil {
+	awaitReport(t, events, "final")
+	_ = r.parent.SetPlan([]string{"same text"})
+	if err := r.Accept(id, "stale identical step"); err == nil {
 		t.Fatal("accepted old revision")
 	}
 	id, err = r.Delegate(context.Background(), "same text")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Accept(jobIDFromReport(id), "verified"); err != nil {
+	awaitReport(t, events, "final")
+	if err := r.Accept(id, "verified"); err != nil {
 		t.Fatal(err)
 	}
-	revision := parent.Plan().Revision
+	revision := r.parent.Plan().Revision
 	report, err := r.Delegate(context.Background(), "investigate new task")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(report, "investigation") {
-		t.Fatalf("not investigation: %s", report)
+	event := awaitReport(t, events, "final")
+	if event.PlanStep.Index != 0 || event.JobID != report {
+		t.Fatalf("not investigation: %+v", event)
 	}
-	if state := parent.Plan(); state.Revision != revision || state.Current != 1 || state.Steps[0].Status != "completed" {
+	if state := r.parent.Plan(); state.Revision != revision || state.Current != 1 || state.Steps[0].Status != "completed" {
 		t.Fatalf("investigation reset completed plan: %+v", state)
 	}
 }
 
 func TestSubAgentCrossParentOperationsDenied(t *testing.T) {
 	provider := &subAgentBlockingProvider{started: make(chan struct{})}
-	agent, parent := newSubAgentTest(t, provider)
-	manager := newSubAgentManager(agent, agent.SubAgentConfig)
-	r := &subAgentRunner{manager: manager, parent: parent}
-	other := &subAgentRunner{manager: manager, parent: NewSession(SessionConfig{ID: "other"}, nil)}
-	_ = parent.SetPlan([]string{"secret"})
-	id, err := manager.startAndRegister(parent, "secret")
+	r, events := orchestrationRunner(t, provider)
+	other := &subAgentRunner{manager: r.manager, parent: NewSession(SessionConfig{ID: "other"}, nil)}
+	_ = r.parent.SetPlan([]string{"secret"})
+	id, err := r.manager.startAndRegister(r.parent, "secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,22 +227,27 @@ func TestSubAgentCrossParentOperationsDenied(t *testing.T) {
 	if _, err := other.Stop(context.Background(), id); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("cross-parent stop: %v", err)
 	}
+	if got := other.Status(id); !strings.Contains(got, "not found") || strings.Contains(got, "secret") {
+		t.Fatalf("cross-parent status: %s", got)
+	}
 	if _, err := other.FollowUp(context.Background(), id, "steal"); err == nil {
 		t.Fatal("cross-parent follow-up succeeded")
 	}
 	if err := other.Accept(id, "steal"); err == nil {
 		t.Fatal("cross-parent acceptance succeeded")
 	}
-	if strings.Contains(other.Status(id), "secret") {
-		t.Fatal("cross-parent status leaked the task")
-	}
 	if _, err := r.Stop(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
+	select {
+	case event := <-events:
+		t.Fatalf("cross-parent leaked report: %+v", event)
+	default:
+	}
 }
 
-func TestPlanningGuidanceDescribesBlockingOrchestration(t *testing.T) {
-	for _, want := range []string{"You hold the project overview and own the checklist", "Delegation is blocking", "complete handoff report", "NOT verified success", "follow_up_subagent", "continue_subagent", "accept_subagent_result", "`stop_subagent` blocks until the worker has actually stopped"} {
+func TestPlanningGuidanceDescribesAsyncReports(t *testing.T) {
+	for _, want := range []string{"Delegation returns control to you immediately", "progress report", "handoff report", "stop_subagent", "follow_up_subagent", "continue_subagent", "accept_subagent_result", "NOT verified success"} {
 		if !strings.Contains(planningSystemInstruction, want) {
 			t.Fatalf("missing guidance %q", want)
 		}
@@ -276,34 +280,21 @@ func (p *releasedSubAgentProvider) Generate(ctx context.Context, req Request) (R
 
 func TestSubAgentSuccessfulStaleCompletionCannotMutateReplacement(t *testing.T) {
 	p := &releasedSubAgentProvider{started: make(chan struct{}), release: make(chan struct{})}
-	agent, parent := newSubAgentTest(t, p)
-	manager := newSubAgentManager(agent, agent.SubAgentConfig)
-	r := &subAgentRunner{manager: manager, parent: parent}
-	_ = parent.SetPlan([]string{"original"})
-	done := make(chan string, 1)
-	go func() {
-		report, err := r.Delegate(context.Background(), "original")
-		if err != nil {
-			done <- "error: " + err.Error()
-			return
-		}
-		done <- report
-	}()
+	r, events := orchestrationRunner(t, p)
+	_ = r.parent.SetPlan([]string{"original"})
+	id, err := r.Delegate(context.Background(), "original")
+	if err != nil {
+		t.Fatal(err)
+	}
 	<-p.started
-	id := manager.runningJobID()
-	revision := parent.Plan().Revision
-	_ = parent.SetPlan([]string{"replacement"})
+	revision := r.parent.Plan().Revision
+	_ = r.parent.SetPlan([]string{"replacement"})
 	close(p.release)
-	var report string
-	select {
-	case report = <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("blocking delegate never returned")
+	event := awaitReport(t, events, "final")
+	if event.Status != "completed" || event.PlanRevision != revision {
+		t.Fatalf("lost captured revision: %+v", event)
 	}
-	if !strings.Contains(report, "status=completed") || !strings.Contains(report, "revision "+uintToStr(revision)) {
-		t.Fatalf("lost captured revision: %s", report)
-	}
-	if state := parent.Plan(); state.Current != 0 || state.Steps[0].Status != "ready" {
+	if state := r.parent.Plan(); state.Current != 0 || state.Steps[0].Status != "ready" {
 		t.Fatalf("stale success changed new plan: %+v", state)
 	}
 	if err := r.Accept(id, "stale success"); err == nil {
@@ -311,55 +302,41 @@ func TestSubAgentSuccessfulStaleCompletionCannotMutateReplacement(t *testing.T) 
 	}
 }
 
-func uintToStr(v uint64) string {
-	if v == 0 {
-		return "0"
-	}
-	var digits []byte
-	for v > 0 {
-		digits = append([]byte{byte('0' + v%10)}, digits...)
-		v /= 10
-	}
-	return string(digits)
-}
-
 func TestSubAgentConcurrentFollowUpReservation(t *testing.T) {
-	agent, parent := newSubAgentTest(t, &subAgentImmediateProvider{})
-	manager := newSubAgentManager(agent, agent.SubAgentConfig)
-	r := &subAgentRunner{manager: manager, parent: parent}
-	_ = parent.SetPlan([]string{"step"})
-	report, err := r.Delegate(context.Background(), "step")
+	r, events := orchestrationRunner(t, &subAgentImmediateProvider{})
+	_ = r.parent.SetPlan([]string{"step"})
+	id, err := r.Delegate(context.Background(), "step")
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := jobIDFromReport(report)
+	awaitReport(t, events, "final")
 	p := &subAgentBlockingProvider{started: make(chan struct{})}
-	manager.agent.Client.RegisterAdapter(AdapterOpenAI, p)
+	r.manager.agent.Client.RegisterAdapter(AdapterOpenAI, p)
 	var wg sync.WaitGroup
 	ids := make(chan string, 16)
-	var mu sync.Mutex
-	successes := 0
 	for i := 0; i < 16; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			retryReport, err := r.FollowUp(ctx, id, "retry")
+			retry, err := r.FollowUp(context.Background(), id, "retry")
 			if err == nil {
-				mu.Lock()
-				successes++
-				mu.Unlock()
-				ids <- jobIDFromReport(retryReport)
+				ids <- retry
 			}
 		}()
 	}
-	go func() {
-		<-p.started
-	}()
-	time.Sleep(50 * time.Millisecond)
-	if got := manager.runningJobID(); got == "" {
-		t.Fatal("no follow-up job running")
+	wg.Wait()
+	close(ids)
+	var winners []string
+	for retry := range ids {
+		winners = append(winners, retry)
+	}
+	if len(winners) != 1 {
+		t.Fatalf("follow-up reserved %d jobs", len(winners))
+	}
+	select {
+	case <-p.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("follow-up worker never started")
 	}
 	if _, err := r.Delegate(context.Background(), "overlap"); err == nil {
 		t.Fatal("delegation overlapped follow-up")
@@ -367,46 +344,38 @@ func TestSubAgentConcurrentFollowUpReservation(t *testing.T) {
 	if err := r.Accept(id, "overlap"); err == nil {
 		t.Fatal("accepted while follow-up running")
 	}
-	if _, err := r.Stop(context.Background(), manager.runningJobID()); err != nil {
+	if _, err := r.Stop(context.Background(), winners[0]); err != nil {
 		t.Fatal(err)
-	}
-	wg.Wait()
-	close(ids)
-	for range ids {
-	}
-	if successes != 1 {
-		t.Fatalf("follow-up reserved %d jobs", successes)
 	}
 }
 
 func TestSubAgentToolAcceptanceAndFollowUpValidation(t *testing.T) {
-	agent, parent := newSubAgentTest(t, &subAgentImmediateProvider{})
-	manager := newSubAgentManager(agent, agent.SubAgentConfig)
-	r := &subAgentRunner{manager: manager, parent: parent}
-	tool := newPlanningToolExecutor(nil, parent)
+	r, events := orchestrationRunner(t, &subAgentImmediateProvider{})
+	tool := newPlanningToolExecutor(nil, r.parent)
 	tool.ConfigureSubAgent(r)
 	if result := tool.Execute(context.Background(), ToolCall{Name: "follow_up_subagent", Arguments: `{"task":"missing id"}`}); !result.IsError {
 		t.Fatal("follow-up without ID started investigation")
 	}
-	if state := parent.Plan(); len(state.Steps) != 0 {
+	if state := r.parent.Plan(); len(state.Steps) != 0 {
 		t.Fatalf("invalid follow-up changed plan: %+v", state)
 	}
-	_ = parent.SetPlan([]string{"verify"})
-	report, err := r.Delegate(context.Background(), "verify")
+	_ = r.parent.SetPlan([]string{"verify"})
+	id, err := r.Delegate(context.Background(), "verify")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result := tool.Execute(context.Background(), ToolCall{Name: "accept_subagent_result", Arguments: `{"job_id":"` + jobIDFromReport(report) + `","verification":""}`}); !result.IsError {
-		t.Fatal("tool accepted without verification evidence")
+	if result := tool.Execute(context.Background(), ToolCall{Name: "accept_subagent_result", Arguments: `{"job_id":"missing","verification":"x"}`}); !result.IsError {
+		t.Fatal("tool accepted an unknown job")
 	}
-	if !strings.Contains(report, "worker done") {
-		t.Fatalf("delegation result lost the worker report: %s", report)
+	final := awaitReport(t, events, "final")
+	args := `{"job_id":"` + id + `","verification":"reviewed test evidence"}`
+	if !strings.Contains(final.Report, "worker done") {
+		t.Fatalf("final report lost the worker result: %s", final.Report)
 	}
-	args := `{"job_id":"` + jobIDFromReport(report) + `","verification":"reviewed test evidence"}`
 	if result := tool.Execute(context.Background(), ToolCall{Name: "accept_subagent_result", Arguments: args}); result.IsError {
 		t.Fatalf("tool acceptance failed: %+v", result)
 	}
-	if state := parent.Plan(); state.Current != 1 {
+	if state := r.parent.Plan(); state.Current != 1 {
 		t.Fatalf("tool did not advance: %+v", state)
 	}
 }

@@ -32,8 +32,9 @@ type bashArgs struct {
 
 // bashTool runs a full bash command line directly in the workspace so the
 // model can type shell the way a human would (CHANGE-024, REQ-035).
-func bashTool(workspace string) handler {
+func bashTool(rootAt func(context.Context) string) handler {
 	return func(ctx context.Context, raw json.RawMessage) (string, error) {
+		workspace := rootAt(ctx)
 		var args bashArgs
 		if err := json.Unmarshal(raw, &args); err != nil {
 			return "", err

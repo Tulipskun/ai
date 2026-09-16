@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
 	"github.com/Tulipskun/ai/sdk"
+	"github.com/bwmarrin/discordgo"
 )
 
 // newChannelNamePrefix prefixes every channel created by /new so automated
@@ -112,9 +112,23 @@ func (h *NewChannelHandler) applySettings(ctx context.Context, targetSessionID s
 	if err := copySideSettings(target, main, mainKeys); err != nil {
 		return sdk.SessionConfig{}, sdk.SessionConfig{}, err
 	}
+	if main.Workspace != "" {
+		if err := target.SetWorkspace(main.Workspace); err != nil {
+			return sdk.SessionConfig{}, sdk.SessionConfig{}, err
+		}
+	}
 	targetSub, err := h.ResolveSession(ctx, sdk.Input{SessionID: targetSessionID + ":sub"})
 	if err != nil {
 		return sdk.SessionConfig{}, sdk.SessionConfig{}, err
+	}
+	sourceWorkspace := sub.Workspace
+	if sourceWorkspace == "" {
+		sourceWorkspace = main.Workspace
+	}
+	if sourceWorkspace != "" {
+		if err := targetSub.SetWorkspace(sourceWorkspace); err != nil {
+			return sdk.SessionConfig{}, sdk.SessionConfig{}, err
+		}
 	}
 	if sub.Provider != "" {
 		if err := copySideSettings(targetSub, sub, subKeys); err != nil {

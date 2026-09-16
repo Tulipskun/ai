@@ -10,13 +10,17 @@ import (
 	"time"
 )
 
+func staticRoot(path string) func(context.Context) string {
+	return func(context.Context) string { return path }
+}
+
 func bashOutput(t *testing.T, workspace, command string) commandOutput {
 	t.Helper()
 	raw, err := json.Marshal(bashArgs{Command: command})
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := bashTool(workspace)(context.Background(), raw)
+	data, err := bashTool(staticRoot(workspace))(context.Background(), raw)
 	if err != nil {
 		t.Fatalf("bash %q: %v (output %s)", command, err, data)
 	}
@@ -71,7 +75,7 @@ func TestBashGlob(t *testing.T) {
 
 func TestBashNonZeroExitReports(t *testing.T) {
 	raw, _ := json.Marshal(bashArgs{Command: "false"})
-	_, err := bashTool(t.TempDir())(context.Background(), raw)
+	_, err := bashTool(staticRoot(t.TempDir()))(context.Background(), raw)
 	if err == nil {
 		t.Fatal("expected error for non-zero exit")
 	}
@@ -83,14 +87,14 @@ func TestBashTimeoutKillsProcessTree(t *testing.T) {
 	}
 	raw, _ := json.Marshal(bashArgs{Command: "sleep 5", TimeoutMS: 100})
 	start := time.Now()
-	_, err := bashTool(t.TempDir())(context.Background(), raw)
+	_, err := bashTool(staticRoot(t.TempDir()))(context.Background(), raw)
 	if elapsed := time.Since(start); err == nil || elapsed > 2*time.Second {
 		t.Fatalf("timeout did not kill promptly: err=%v elapsed=%s", err, elapsed)
 	}
 }
 
 func TestBashRejectsEmptyCommand(t *testing.T) {
-	if _, err := bashTool(t.TempDir())(context.Background(), []byte(`{"command":"  "}`)); err == nil {
+	if _, err := bashTool(staticRoot(t.TempDir()))(context.Background(), []byte(`{"command":"  "}`)); err == nil {
 		t.Fatal("empty command accepted")
 	}
 }

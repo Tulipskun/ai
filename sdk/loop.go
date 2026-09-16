@@ -3,6 +3,7 @@ package sdk
 import (
 	"context"
 	"errors"
+	"log"
 	"sync"
 	"time"
 )
@@ -28,7 +29,25 @@ func (h *HarnessLoop) Run(ctx context.Context) error {
 		return errors.New("sdk: incomplete harness loop configuration")
 	}
 	if h.Agent != nil {
-		h.Agent.SetSubAgentTraceSink(func(event SubAgentEvent) {
+		h.Agent.SetSubAgentSinks(func(event SubAgentEvent) {
+			if event.Parent == nil {
+				return
+			}
+			input := cloneInputRoute(event.Input)
+			if input.SessionID == "" {
+				input.SessionID = event.Parent.ID()
+			}
+			input.Turn = Turn{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: event.Message()}}}
+			go func() {
+				if err := h.Entry(context.WithoutCancel(ctx), input); err != nil {
+					if h.OnTurnError != nil {
+						h.OnTurnError(input, err)
+					} else {
+						log.Printf("sdk: sub-agent report continuation failed source=%s session=%s: %v", input.Source, input.SessionID, err)
+					}
+				}
+			}()
+		}, func(event SubAgentEvent) {
 			if event.Parent == nil || event.Trace == nil {
 				return
 			}

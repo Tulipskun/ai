@@ -329,3 +329,16 @@ Reason: AI พิมพ์ `ls -la /x` ผิดรูปแบบแล้ว f
 Impact: tools/registry.go + tools/command.go (bash tool, schema, description), tests ใน tools/ และผู้ใช้ชื่อ tool ใน sdk tests, transport/discord actor trace + rendering tests, sdk/plan_tool.go (instructions), sdk/subagent.go (worker prompt + report), cmd/ai/main.go (defaultSystemPrompt); ไม่แตะ db, gateway routing, canonical contract
 Validation: bash tool รัน "ls -la /x" ตรง ๆ สำเร็จใน tests; provider accepted เดียวถูก edit เป็น content (ไม่มีข้อความใหม่), กรณีมี tool line อื่น accepted ถูก delete ก่อน content; prompt มี English-only + ห้าม relay; offline tests เท่านั้น; `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-025
+
+Date: 2026-09-16
+Type: revise + add
+Request: delegate ต้องคืน shell ให้ main ทันที; ทุก X tool calls ของ sub ให้รายงานเข้า main เพื่อตรวจ scope (ขาด/เกิน); เพิ่ม /workspace ใน Discord เลือกตำแหน่งทำงาน รองรับ ~/
+Conflict: CHANGE-022/REQ-019/021/034 (delegation แบบ blocking ทั้งหมด; ห้ามมี continuation turn); tools registry ใช้ root ถาวรต่อ process
+Previous: delegate/follow/continue block จน worker จบ; ไม่มีการรายงานระหว่างทาง; workspace เป็นค่าเดียว global (AI_WORKSPACE/home), agent_mode อ้าง persist แต่ไม่เคยถูกเขียนลง DB
+New: REQ-019/021/034 แก้ — delegate/follow/continue คืน job id ทันที; progress report ทุก X tool calls (X = `sub_agent.report_every_tool_calls`, ค่าเริ่มต้น 5) และ final report ถูก inject เป็น continuation turn ของ main เท่านั้น (2 ชนิด); stop ยัง blocking (REQ-020 คงเดิม) — Main ตรวจ scope จาก progress, เกิน/ออกนอกขอบเขต = stop + follow_up; REQ-038 ใหม่ — `/workspace <path>` ต่อ channel (set ทั้ง main+sub), expand `~/`+`~`, ต้องเป็น directory มีอยู่จริง, persist คอลัมน์ `workspace`, tools resolve root ต่อ invocation ตาม session ใน ctx (fallback global), `/new` copy; bug fix: SaveSession/LoadSession เพิ่มคอลัมน์ `agent_mode` (migration ผ่าน ensureSessionColumns เดิม) ให้ตรง REQ-029/030 ที่ระบุไว้แล้ว
+Reason: main ที่ block ใน delegate รับข้อความผู้ใช้ใหม่ไม่ได้และมองงานไม่ระหว่างทาง; scope drift ต้องถูกจับ early; งานหลายโปรเจคต้องรันในหลายตำแหน่งจาก bot ตัวเดียว
+Impact: sdk (types.go Workspace, session_db.go workspace+agent_mode persist, session_settings.go SetWorkspace, subagent.go async+progress reports+worker workspace inheritance, loop.go sinks, context helper WithWorkspace, plan_tool instructions), runtime (system_config report_every_tool_calls, session_manager WorkspaceFor), tools (registry resolver, file/bash/job handlers resolve root ต่อ ctx), transport/discord (workspace.go ใหม่, gateway register+route, new_channel copy), tests ทุกชั้นที่เกี่ยวข้อง
+Validation: delegate คืนทันทีเมื่อ worker ยังรัน; progress event มาทุก 5 tool calls; final report inject ครบ; stop block จน stopped; SetWorkspace persist ผ่าน restart (ทั้ง main+sub + agent_mode); bash/read_file ใน session ที่มี workspace的不同 ทำงานคนละ root; /workspace expand ~/ และ reject path ไม่มีอยู่; offline tests เท่านั้น; `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
+Status: accepted

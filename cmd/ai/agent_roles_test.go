@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Tulipskun/ai/sdk"
 )
@@ -92,19 +93,34 @@ func TestDelegatedWorkerRetainsRealToolsAndContext(t *testing.T) {
 			if err := session.SetPlan([]string{"inspect the fixture", "report findings"}); err != nil {
 				t.Fatal(err)
 			}
+			reported := make(chan string, 1)
+			agent.SetSubAgentSinks(func(event sdk.SubAgentEvent) {
+				if event.Kind == "final" {
+					reported <- event.Message()
+				}
+			}, nil)
 			if _, err := agent.RunTurn(context.Background(), session, sdk.Turn{Role: sdk.RoleUser}, sdk.Request{SystemPrompt: defaultSystemPrompt(agent)}); err != nil {
 				t.Fatal(err)
 			}
-			// Blocking delegation: the worker report must have arrived inside the
-			// same turn as the delegate tool result (REQ-019, REQ-034).
-			reported := false
+			// Async delegation: the final handoff report must arrive on the
+			// report sink for the planner session to review (REQ-019, REQ-025).
+			var message string
+			select {
+			case message = <-reported:
+			case <-time.After(5 * time.Second):
+				t.Fatal("worker final report never arrived")
+			}
+			if !strings.Contains(message, "worker read succeeded") || !strings.Contains(message, "<sub agent report") {
+				t.Fatalf("final report message wrong: %s", message)
+			}
+			delegateACK := false
 			for _, turn := range session.History() {
-				if turn.Role == sdk.RoleToolResult && turn.ToolResult != nil && strings.Contains(turn.ToolResult.Content, "worker read succeeded") && strings.Contains(turn.ToolResult.Content, "status=completed") {
-					reported = true
+				if turn.Role == sdk.RoleToolResult && turn.ToolResult != nil && strings.Contains(turn.ToolResult.Content, "sub-agent started: sa-") {
+					delegateACK = true
 				}
 			}
-			if !reported {
-				t.Fatal("blocking delegate did not return the worker report in the main turn")
+			if !delegateACK {
+				t.Fatal("delegate did not return control immediately with a job id")
 			}
 			if len(provider.workerRequests) != 2 {
 				t.Fatalf("worker requests=%d", len(provider.workerRequests))

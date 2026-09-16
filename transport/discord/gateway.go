@@ -216,6 +216,7 @@ type Gateway struct {
 	providerSettings *ProviderSettingsHandler
 	sessionCommand   *SessionCommandHandler
 	newChannel       *NewChannelHandler
+	workspaceCommand *WorkspaceHandler
 	sessionMapping   *SessionMapping
 	resolveSession   func(context.Context, sdk.Input) (*sdk.Session, error)
 	stop             func(string) bool
@@ -313,6 +314,14 @@ func NewGateway(token string) (*Gateway, error) {
 				log.Printf("discord: provider settings failed: %v", err)
 			}
 		}
+		if gateway.workspaceCommand != nil {
+			if err := gateway.workspaceCommand.Handle(s, event); err != nil {
+				log.Printf("discord: workspace command failed: %v", err)
+			}
+			if data, ok := event.Interaction.Data.(discordgo.ApplicationCommandInteractionData); ok && data.Name == "workspace" {
+				return
+			}
+		}
 		if gateway.newChannel != nil {
 			if err := gateway.newChannel.Handle(s, event); err != nil {
 				log.Printf("discord: new channel failed: %v", err)
@@ -340,6 +349,14 @@ func (g *Gateway) ConfigureProviderSettings(handler *ProviderSettingsHandler) {
 		g.providerSettings = handler
 	}
 }
+
+// ConfigureWorkspaceHandler installs the /workspace handler (REQ-038).
+func (g *Gateway) ConfigureWorkspaceHandler(handler *WorkspaceHandler) {
+	if g != nil {
+		g.workspaceCommand = handler
+	}
+}
+
 func (g *Gateway) ConfigureNewChannel(handler *NewChannelHandler) {
 	if g != nil {
 		g.newChannel = handler
@@ -490,6 +507,13 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 	if g.stop != nil {
 		if err := g.registerCommand(&discordgo.ApplicationCommand{Name: "stop", Description: "Stop the current AI task"}); err != nil {
+			return err
+		}
+	}
+	if g.workspaceCommand != nil {
+		if err := g.registerCommand(&discordgo.ApplicationCommand{Name: "workspace", Description: "เลือกตำแหน่งทำงานของ channel นี้", Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "path", Description: "ตำแหน่งโฟลเดอร์ (รองรับ ~/) ว่างเพื่อแสดงค่าปัจจุบัน", Required: false},
+		}}); err != nil {
 			return err
 		}
 	}

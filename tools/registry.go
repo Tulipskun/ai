@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/Tulipskun/ai/sdk"
@@ -16,6 +17,7 @@ type handler func(context.Context, json.RawMessage) (string, error)
 
 type Registry struct {
 	workspace    string
+	resolver     func(context.Context) string
 	jobs         *JobManager
 	handlers     map[string]handler
 	defs         []sdk.Tool
@@ -37,13 +39,13 @@ func NewRegistryWithBrowser(workspace string, browser *BrowserClient, allowPriva
 	}
 	jobs := NewJobManager(root, jobsPath)
 	r := &Registry{workspace: root, jobs: jobs, handlers: make(map[string]handler)}
-	r.register("read_file", `Read a UTF-8 text file inside the workspace.`, readFileTool(root), map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}, "required": []string{"path"}})
-	r.register("write_file", `Write UTF-8 text to a file inside the workspace, creating parent directories when needed.`, writeFileTool(root), map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "required": []string{"path", "content"}})
-	r.register("edit_file", `Replace exactly one occurrence of old_text with new_text in a UTF-8 file inside the workspace.`, editFileTool(root), map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "old_text": map[string]any{"type": "string"}, "new_text": map[string]any{"type": "string"}}, "required": []string{"path", "old_text", "new_text"}})
-	r.register("list_directory", `List entries in a directory inside the workspace.`, listDirectoryTool(root), map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}})
-	r.register("search_files", `Search UTF-8 text files recursively inside the workspace.`, searchFilesTool(root), map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}, "path": map[string]any{"type": "string"}}, "required": []string{"query"}})
-	r.register("bash", `Run a bash command line synchronously in the workspace. Type shell exactly as you would in a terminal: chains (&&, ||, ;), pipes, redirects, globs, quoting and multi-line all work. Returns combined stdout/stderr and the exit code.`, bashTool(root), map[string]any{"type": "object", "properties": map[string]any{"command": map[string]any{"type": "string"}, "timeout_ms": map[string]any{"type": "integer"}}, "required": []string{"command"}})
-	r.register("run_job", `Start a long-running command in the background and return a job ID owned by the current session.`, runJobTool(jobs), map[string]any{"type": "object", "properties": map[string]any{"command": map[string]any{"type": "string"}, "args": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}}, "required": []string{"command"}})
+	r.register("read_file", `Read a UTF-8 text file inside the workspace.`, readFileTool(r.rootFor), map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}, "required": []string{"path"}})
+	r.register("write_file", `Write UTF-8 text to a file inside the workspace, creating parent directories when needed.`, writeFileTool(r.rootFor), map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "required": []string{"path", "content"}})
+	r.register("edit_file", `Replace exactly one occurrence of old_text with new_text in a UTF-8 file inside the workspace.`, editFileTool(r.rootFor), map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "old_text": map[string]any{"type": "string"}, "new_text": map[string]any{"type": "string"}}, "required": []string{"path", "old_text", "new_text"}})
+	r.register("list_directory", `List entries in a directory inside the workspace.`, listDirectoryTool(r.rootFor), map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}})
+	r.register("search_files", `Search UTF-8 text files recursively inside the workspace.`, searchFilesTool(r.rootFor), map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}, "path": map[string]any{"type": "string"}}, "required": []string{"query"}})
+	r.register("bash", `Run a bash command line synchronously in the workspace. Type shell exactly as you would in a terminal: chains (&&, ||, ;), pipes, redirects, globs, quoting and multi-line all work. Returns combined stdout/stderr and the exit code.`, bashTool(r.rootFor), map[string]any{"type": "object", "properties": map[string]any{"command": map[string]any{"type": "string"}, "timeout_ms": map[string]any{"type": "integer"}}, "required": []string{"command"}})
+	r.register("run_job", `Start a long-running command in the background and return a job ID owned by the current session.`, runJobTool(jobs, r.rootFor), map[string]any{"type": "object", "properties": map[string]any{"command": map[string]any{"type": "string"}, "args": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}}, "required": []string{"command"}})
 	r.register("check_job", `Inspect a background job owned by the current session without waiting for it.`, checkJobTool(jobs), map[string]any{"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}}, "required": []string{"job_id"}})
 	r.register("close_job", `Terminate a running background job owned by the current session.`, closeJobTool(jobs), map[string]any{"type": "object", "properties": map[string]any{"job_id": map[string]any{"type": "string"}}, "required": []string{"job_id"}})
 
@@ -69,6 +71,34 @@ func NewRegistryWithBrowser(workspace string, browser *BrowserClient, allowPriva
 	}
 	return r, nil
 }
+
+// SetWorkspaceResolver installs a per-invocation workspace lookup used by
+// every path-sensitive tool. A session with its own workspace (REQ-038)
+// resolves through ctx; anything else keeps the process default.
+func (r *Registry) SetWorkspaceResolver(resolver func(context.Context) string) {
+	if r != nil {
+		r.resolver = resolver
+	}
+}
+
+func (r *Registry) rootFor(ctx context.Context) string {
+	if ctx != nil {
+		if ws := sdk.WorkspaceFromContext(ctx); ws != "" {
+			if cleaned, err := filepathAbsClean(ws); err == nil {
+				return cleaned
+			}
+		}
+	}
+	if r != nil && r.resolver != nil {
+		if root := strings.TrimSpace(r.resolver(ctx)); root != "" {
+			if cleaned, err := filepathAbsClean(root); err == nil {
+				return cleaned
+			}
+		}
+	}
+	return r.workspace
+}
+
 func (r *Registry) register(name, description string, fn handler, schema any) {
 	r.handlers[name] = fn
 	r.defs = append(r.defs, sdk.Tool{Name: name, Description: description, InputSchema: schema})

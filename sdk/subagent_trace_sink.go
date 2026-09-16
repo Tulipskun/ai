@@ -1,17 +1,19 @@
 package sdk
 
-// SetSubAgentTraceSink installs the live trace renderer for worker jobs.
-// Completion is delivered inline by the blocking delegation calls, so there
-// is no completion sink anymore (REQ-021, REQ-034).
-func (a *Agent) SetSubAgentTraceSink(trace func(SubAgentEvent)) {
+// SetSubAgentSinks installs the report sink (progress + final handoff
+// reports injected into the planner session) and the live trace renderer
+// for worker jobs (REQ-019, REQ-021).
+func (a *Agent) SetSubAgentSinks(report func(SubAgentEvent), trace func(SubAgentEvent)) {
 	if a == nil {
 		return
 	}
 	a.subAgentMu.Lock()
+	a.subAgentReportSink = report
 	a.subAgentTraceSink = trace
 	manager := a.subAgents
 	a.subAgentMu.Unlock()
 	if manager != nil {
+		manager.SetEventSink(report)
 		manager.SetTraceSink(trace)
 	}
 }

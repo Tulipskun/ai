@@ -64,3 +64,12 @@ func editOriginalMessage(s interactionAPI, i *discordgo.InteractionCreate, conte
 	})
 	return err
 }
+
+// ephemeralRespond answers an interaction immediately with an invisible
+// message (fast local operations only; slow work must defer first, REQ-024).
+func ephemeralRespond(s interactionAPI, i *discordgo.InteractionCreate, content string) error {
+	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{Content: content, Flags: discordgo.MessageFlagsEphemeral},
+	})
+}

@@ -584,7 +584,9 @@ func run(ctx context.Context, cliOnly bool) error {
 		return err
 	}
 	jobsPath := filepath.Join(state, "data", "jobs.json")
-	agent, err := newAgent(rt.Client, workspace, rt.Browser, browserConfig.AllowPrivate, jobsPath, attachmentToolStore(attachmentStore))
+	agent, err := newAgentWithWorkspaces(rt.Client, workspace, rt.Browser, browserConfig.AllowPrivate, jobsPath, attachmentToolStore(attachmentStore), func(ctx context.Context) string {
+		return sessions.WorkspaceFor(sdk.SessionIDFromContext(ctx))
+	})
 	if err != nil {
 		return err
 	}
@@ -618,6 +620,7 @@ func run(ctx context.Context, cliOnly bool) error {
 		}}
 		discord.ConfigureModelSettings(modelSettings)
 		discord.ConfigureNewChannel(&discordtransport.NewChannelHandler{ResolveSession: sessions.Resolve, SessionForChannel: discord.SessionIDForChannel, ProviderKeys: providerKeys})
+		discord.ConfigureWorkspaceHandler(&discordtransport.WorkspaceHandler{ResolveSession: sessions.Resolve, SessionForChannel: discord.SessionIDForChannel})
 		discord.ConfigureProviderSettings(&discordtransport.ProviderSettingsHandler{Adapters: providerManager.Adapters(), Upsert: func(ctx context.Context, name, adapter, endpoint, apiKey string, freeOnly bool) error {
 			if err := providerManager.Upsert(ctx, name, adapter, endpoint, apiKey, freeOnly); err != nil {
 				return err
@@ -711,11 +714,18 @@ func processAlive(pid int) bool { return pid > 0 && syscall.Kill(pid, 0) == nil 
 // planning filters by name (REQ-016, REQ-017, REQ-026). A nil store leaves the
 // tools present but reporting that no store is configured.
 func newAgent(client *sdk.RouterClient, workspace string, browser *tools.BrowserClient, allowPrivate bool, jobsPath string, attachments tools.AttachmentStore) (*sdk.Agent, error) {
+	return newAgentWithWorkspaces(client, workspace, browser, allowPrivate, jobsPath, attachments, nil)
+}
+
+func newAgentWithWorkspaces(client *sdk.RouterClient, workspace string, browser *tools.BrowserClient, allowPrivate bool, jobsPath string, attachments tools.AttachmentStore, workspaceFor func(context.Context) string) (*sdk.Agent, error) {
 	registry, err := tools.NewRegistryWithBrowser(workspace, browser, allowPrivate, jobsPath)
 	if err != nil {
 		return nil, err
 	}
 	registry.SetAttachmentStore(attachments)
+	if workspaceFor != nil {
+		registry.SetWorkspaceResolver(workspaceFor)
+	}
 	agent := &sdk.Agent{Client: client, Tools: registry}
 	state := filepath.Dir(filepath.Dir(jobsPath))
 	cfg, err := runtime.LoadSystemConfig(filepath.Join(state, runtime.DefaultSystemConfigPath))
@@ -723,14 +733,15 @@ func newAgent(client *sdk.RouterClient, workspace string, browser *tools.Browser
 		return nil, err
 	}
 	agent.SubAgentConfig = sdk.SubAgentConfig{
-		Enabled:         cfg.SubAgent.Enabled,
-		Provider:        cfg.SubAgent.Provider,
-		Model:           cfg.SubAgent.Model,
-		MaxOutputTokens: cfg.SubAgent.MaxOutputTokens,
-		Temperature:     cfg.SubAgent.Temperature,
-		ThinkingLevel:   cfg.SubAgent.ThinkingLevel,
-		SystemPrompt:    cfg.SubAgent.SystemPrompt,
-		Workspace:       workspace,
+		Enabled:              cfg.SubAgent.Enabled,
+		Provider:             cfg.SubAgent.Provider,
+		Model:                cfg.SubAgent.Model,
+		MaxOutputTokens:      cfg.SubAgent.MaxOutputTokens,
+		Temperature:          cfg.SubAgent.Temperature,
+		ThinkingLevel:        cfg.SubAgent.ThinkingLevel,
+		SystemPrompt:         cfg.SubAgent.SystemPrompt,
+		Workspace:            workspace,
+		ReportEveryToolCalls: cfg.SubAgent.ReportEveryToolCalls,
 	}
 	// Leave an empty worker prompt to the SDK so CLI and SDK defaults stay aligned.
 	return agent, nil
@@ -779,7 +790,7 @@ func defaultSystemPrompt(agent *sdk.Agent) string {
 	b.WriteString("Before creating the plan, use the sub-agent to inspect relevant source code and repository requirements only when the task needs repository context, then use its summary to understand the current system. For a trivial task that needs no repository context, skip that investigation and make a minimal one-step plan. Keep every plan to the fewest steps that cover the goal. Do not read repository source directly.\n")
 	b.WriteString("Create one ordered execution plan. The plan is the authoritative sequence of steps. Delegate only the current step at a time, and write each delegated task so the worker validates with the minimal sufficient check only.\n")
 	b.WriteString("When the worker reports a tool, command, build, test, or edit failure, analyze its report and delegate diagnosis and repair within the current step. A failure is not a reason to abandon the task or move to an unrelated step.\n")
-	b.WriteString("For implementation work, delegate the current plan step to `delegate_to_subagent`. Delegation is blocking: the call returns only when the worker finishes, and its result is the complete handoff report (terminal status, final summary, every worker tool with arguments and result, validation evidence). Read that report and verify the assigned work - there is no status or history polling. Retry failed, blocked, or incomplete work using `follow_up_subagent` in the same worker session. Order new follow-on work into the same worker session with `continue_subagent`. Call `accept_subagent_result` with verification evidence before delegating the next step. `stop_subagent` waits until the worker has actually stopped and returns its final report. The worker has a separate session and never communicates with the user.\n")
+	b.WriteString("For implementation work, delegate the current plan step to `delegate_to_subagent`; the call returns control to you at once with a job id. Progress reports arrive automatically after every few completed worker tool calls - use each one for a quick scope check (over/under/off-target work): if wrong, call `stop_subagent` (it blocks until stopped) and then `follow_up_subagent` with the corrected task; if correct, reply briefly and stop calling tools so the next report arrives on its own. A complete handoff report (terminal status, final summary, every worker tool with arguments and result) arrives when the job ends; read it and verify the assigned work - there is no status or history polling. Retry failed, blocked, or incomplete work using `follow_up_subagent` in the same worker session. Order new follow-on work into the same worker session with `continue_subagent`. Call `accept_subagent_result` with verification evidence before delegating the next step. `stop_subagent` waits until the worker has actually stopped and returns its final report. The worker has a separate session and never communicates with the user.\n")
 	b.WriteString("Only mark a step complete after verifying that its intended result is actually achieved. After the final goal is complete, stop and send the final result.\n")
 	b.WriteString("After tool results, summarize briefly what you did. Match the user's language.\n")
 	return b.String()

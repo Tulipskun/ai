@@ -25,12 +25,13 @@ type Agent struct {
 	DisablePlanning bool
 	SubAgentConfig  SubAgentConfig
 
-	subAgentMu        sync.Mutex
-	subAgents         *subAgentManager
-	subAgentTraceSink func(SubAgentEvent)
-	interruptMu       sync.Mutex
-	interrupts        map[string]context.CancelFunc
-	interrupted       map[string]bool
+	subAgentMu         sync.Mutex
+	subAgents          *subAgentManager
+	subAgentTraceSink  func(SubAgentEvent)
+	subAgentReportSink func(SubAgentEvent)
+	interruptMu        sync.Mutex
+	interrupts         map[string]context.CancelFunc
+	interrupted        map[string]bool
 }
 
 const (
@@ -44,6 +45,7 @@ func (a *Agent) subAgentManager() *subAgentManager {
 	if a.subAgents == nil {
 		a.subAgents = newSubAgentManager(a, a.SubAgentConfig)
 		a.subAgents.SetTraceSink(a.subAgentTraceSink)
+		a.subAgents.SetEventSink(a.subAgentReportSink)
 	}
 	return a.subAgents
 }

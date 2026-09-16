@@ -159,6 +159,10 @@ func (m *JobManager) persist() error {
 }
 
 func (m *JobManager) Start(sessionID, command string, args []string) (string, error) {
+	return m.StartIn(sessionID, m.workspace, command, args)
+}
+
+func (m *JobManager) StartIn(sessionID, workspace, command string, args []string) (string, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return "", errors.New("session_id is required")
 	}
@@ -166,7 +170,7 @@ func (m *JobManager) Start(sessionID, command string, args []string) (string, er
 		return "", errors.New("command is required")
 	}
 	cmd := exec.Command(command, args...)
-	cmd.Dir = m.workspace
+	cmd.Dir = workspace
 	j := &job{sessionID: sessionID, command: command, args: append([]string(nil), args...), cmd: cmd, state: JobRunning, startedAt: time.Now(), exitCode: -1, done: make(chan struct{})}
 	cmd.Stdout, cmd.Stderr = &j.stdout, &j.stderr
 	if err := cmd.Start(); err != nil {
@@ -306,7 +310,7 @@ func sessionIDFromToolContext(ctx context.Context) (string, error) {
 	return id, nil
 }
 
-func runJobTool(m *JobManager) handler {
+func runJobTool(m *JobManager, rootAt func(context.Context) string) handler {
 	return func(ctx context.Context, raw json.RawMessage) (string, error) {
 		var a struct {
 			Command string   `json:"command"`
@@ -319,7 +323,7 @@ func runJobTool(m *JobManager) handler {
 		if err != nil {
 			return "", err
 		}
-		id, err := m.Start(sessionID, a.Command, a.Args)
+		id, err := m.StartIn(sessionID, rootAt(ctx), a.Command, a.Args)
 		if err != nil {
 			return "", err
 		}

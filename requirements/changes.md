@@ -394,3 +394,16 @@ Reason: ผู้ใช้เห็น retry แต่แยกไม่ออ�
 Impact: transport/discord (actor_trace_display.go + test)
 Validation: unit (reason ปรากฏ, timing ครบ); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-030
+
+Date: 2026-09-16
+Type: revise
+Request: ใช้ MS1.3 ใน opencode จริงได้ปกติ แต่ผ่านบอทได้ 500 (ยืนยันว่ารันในแอป opencode)
+Conflict: none (ขยาย REQ-039; ไม่เปลี่ยน fingerprint/headers เดิม)
+Previous: adapter opencode ยิง /chat/completions อย่างเดียว
+New: REQ-039 แก้ — adapter opencode ยิง /responses ก่อน, fallback ไป /chat เมื่อ 404/400-model_not_supported/500; 401/403/429 return ทันที; Stream ด้วยหลักเดียวกัน (fallback ก่อนมี output)
+Reason: ดัก traffic opencode ตัวจริงผ่าน logging proxy: builtin provider (OAuth) ยิง /responses + x-opencode-session/x-opencode-request/x-opencode-client/x-opencode-project แล้ว 200; ส่วน sk- key ยิง /chat กับ spark-1.3 ได้ 500 ไม่ว่า client ใด (รวม opencode เอง 4/4 ครั้ง) แต่ /responses + sk- key ได้ 200; กลับกัน mimo 500 บน /responses แต่ผ่านบน /chat — Zen แยกโมเดลตาม endpoint ทั้งสองทิศ จึงต้อง fallback ทั้ง Generate/Stream
+Impact: sdk/providers/openai (export ResponsesResponse), sdk/providers/opencode (Generate/Stream fallback), tests
+Validation: unit (responses ตรง, 404/500→chat, 429 ไม่ fallback, fingerprint ครบทั้งสองเส้น, stream fallback); live ผ่าน adapter จริงทั้ง spark + mimo; `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
+Status: accepted

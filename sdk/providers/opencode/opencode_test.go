@@ -43,13 +43,35 @@ func TestSessionIDEmptyKeyMintsFresh(t *testing.T) {
 	}
 }
 
-func TestGenerateSendsOpenCodeFingerprint(t *testing.T) {
+func checkFingerprint(t *testing.T, h http.Header, sessionKey string) {
+	t.Helper()
+	if got := h.Get("User-Agent"); got != DefaultUserAgent {
+		t.Fatalf("User-Agent=%q, want %q", got, DefaultUserAgent)
+	}
+	if got := h.Get("HTTP-Referer"); got != Referer {
+		t.Fatalf("HTTP-Referer=%q", got)
+	}
+	if got := h.Get("X-Title"); got != Title {
+		t.Fatalf("X-Title=%q", got)
+	}
+	sid := h.Get("x-opencode-session")
+	if !sessionFormat.MatchString(sid) {
+		t.Fatalf("x-opencode-session=%q, want opencode shape", sid)
+	}
+	if sessionKey != "" && sid != SessionIDFor(sessionKey) {
+		t.Fatal("session header does not match the harness session mapping")
+	}
+}
+
+func TestGeneratePrefersResponses(t *testing.T) {
 	var gotHeaders http.Header
 	var gotBody map[string]any
+	var hits []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits = append(hits, r.URL.Path)
 		gotHeaders = r.Header
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
-		_, _ = w.Write([]byte(`{"id":"gen-1","model":"m","choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+		_, _ = w.Write([]byte(`{"id":"resp-1","model":"m","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"hi"}]}]}`))
 	}))
 	defer srv.Close()
 	c := New("k")
@@ -61,27 +83,18 @@ func TestGenerateSendsOpenCodeFingerprint(t *testing.T) {
 	if len(resp.Content) != 1 || resp.Content[0].Text != "hi" {
 		t.Fatalf("content=%+v", resp.Content)
 	}
-	if got := gotHeaders.Get("User-Agent"); got != DefaultUserAgent {
-		t.Fatalf("User-Agent=%q, want %q", got, DefaultUserAgent)
+	if len(hits) != 1 || hits[0] != "/responses" {
+		t.Fatalf("must use /responses first without chat fallback: %v", hits)
 	}
-	if got := gotHeaders.Get("HTTP-Referer"); got != Referer {
-		t.Fatalf("HTTP-Referer=%q", got)
-	}
-	if got := gotHeaders.Get("X-Title"); got != Title {
-		t.Fatalf("X-Title=%q", got)
-	}
-	sid := gotHeaders.Get("x-opencode-session")
-	if !sessionFormat.MatchString(sid) {
-		t.Fatalf("x-opencode-session=%q, want opencode shape", sid)
-	}
-	if sid != SessionIDFor("harness-1") {
-		t.Fatal("session header does not match the harness session mapping")
-	}
+	checkFingerprint(t, gotHeaders, "harness-1")
 	if _, ok := gotBody["user"]; ok {
 		t.Fatal("request body must not carry a user field (opencode sends the session via header only)")
 	}
 	if gotBody["model"] != "m" {
 		t.Fatalf("model=%v", gotBody["model"])
+	}
+	if _, ok := gotBody["input"]; !ok {
+		t.Fatal("responses body must carry input items")
 	}
 }
 
@@ -89,7 +102,7 @@ func TestCustomHeadersOverrideExceptSession(t *testing.T) {
 	var gotHeaders http.Header
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHeaders = r.Header
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+		_, _ = w.Write([]byte(`{"id":"resp-1","status":"completed","output":[]}`))
 	}))
 	defer srv.Close()
 	c := New("k").WithHeaders(map[string]string{"User-Agent": "custom/1", "x-opencode-session": "ses_forged"}).(*Client)
@@ -107,7 +120,7 @@ func TestCustomHeadersOverrideExceptSession(t *testing.T) {
 
 func TestGenerateParsesToolCall(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"model":"m","choices":[{"message":{"content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"ls\"}"}}]},"finish_reason":"tool_calls"}]}`))
+		_, _ = w.Write([]byte(`{"model":"m","status":"completed","output":[{"type":"function_call","call_id":"call_1","name":"bash","arguments":"{\"command\":\"ls\"}"}]}`))
 	}))
 	defer srv.Close()
 	c := New("k")
@@ -118,6 +131,53 @@ func TestGenerateParsesToolCall(t *testing.T) {
 	}
 	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "bash" || resp.ToolCalls[0].ID != "call_1" {
 		t.Fatalf("tool calls=%+v", resp.ToolCalls)
+	}
+}
+
+func TestGenerateFallsBackToChatOnResponses500(t *testing.T) {
+	var hits []string
+	var chatHeaders http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits = append(hits, r.URL.Path)
+		if r.URL.Path == "/responses" {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"error","message":"Internal server error"}}`))
+			return
+		}
+		chatHeaders = r.Header
+		_, _ = w.Write([]byte(`{"model":"m","choices":[{"message":{"content":"via-chat"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+	c := New("k")
+	c.BaseURL = srv.URL
+	resp, err := c.Generate(context.Background(), sdk.Request{Model: "m", SessionID: "fallback-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Content) != 1 || resp.Content[0].Text != "via-chat" {
+		t.Fatalf("content=%+v", resp.Content)
+	}
+	if len(hits) != 2 || hits[0] != "/responses" || hits[1] != "/chat/completions" {
+		t.Fatalf("must fall back to chat after responses 500: %v", hits)
+	}
+	checkFingerprint(t, chatHeaders, "fallback-1")
+}
+
+func TestGenerateNoFallbackOnRateLimit(t *testing.T) {
+	var hits []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits = append(hits, r.URL.Path)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"rate limited"}`))
+	}))
+	defer srv.Close()
+	c := New("k")
+	c.BaseURL = srv.URL
+	if _, err := c.Generate(context.Background(), sdk.Request{Model: "m", SessionID: "limited-1"}); err == nil {
+		t.Fatal("rate limit must surface, not fall back")
+	}
+	if len(hits) != 1 || hits[0] != "/responses" {
+		t.Fatalf("must not touch chat on 429: %v", hits)
 	}
 }
 
@@ -143,20 +203,8 @@ func TestListModels(t *testing.T) {
 	}
 }
 
-func TestStreamChatDeltas(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"he\"}}]}\n\n")
-		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"llo\",\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"bash\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n")
-		fmt.Fprint(w, "data: [DONE]\n\n")
-	}))
-	defer srv.Close()
-	c := New("k")
-	c.BaseURL = srv.URL
-	ch, err := c.Stream(context.Background(), sdk.Request{Model: "m", SessionID: "stream-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
+func collectStream(t *testing.T, ch <-chan sdk.Event) (string, int, bool) {
+	t.Helper()
 	var text strings.Builder
 	var calls int
 	var done bool
@@ -175,7 +223,61 @@ func TestStreamChatDeltas(t *testing.T) {
 			t.Fatal(ev.Err)
 		}
 	}
-	if text.String() != "hello" || calls != 1 || !done {
-		t.Fatalf("text=%q calls=%d done=%v", text.String(), calls, done)
+	return text.String(), calls, done
+}
+
+func TestStreamResponsesDirect(t *testing.T) {
+	var hits []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits = append(hits, r.URL.Path)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"he\"}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"llo\"}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.function_call_arguments.done\",\"item\":{\"call_id\":\"c1\",\"name\":\"bash\",\"arguments\":\"{}\"}}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.completed\"}\n\n")
+	}))
+	defer srv.Close()
+	c := New("k")
+	c.BaseURL = srv.URL
+	ch, err := c.Stream(context.Background(), sdk.Request{Model: "m", SessionID: "stream-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, calls, done := collectStream(t, ch)
+	if text != "hello" || calls != 1 || !done {
+		t.Fatalf("text=%q calls=%d done=%v", text, calls, done)
+	}
+	if len(hits) != 1 || hits[0] != "/responses" {
+		t.Fatalf("must stream /responses without chat fallback: %v", hits)
+	}
+}
+
+func TestStreamFallsBackToChat(t *testing.T) {
+	var hits []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits = append(hits, r.URL.Path)
+		if r.URL.Path == "/responses" {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"type":"error"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"he\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"llo\",\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"bash\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	c := New("k")
+	c.BaseURL = srv.URL
+	ch, err := c.Stream(context.Background(), sdk.Request{Model: "m", SessionID: "stream-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, calls, done := collectStream(t, ch)
+	if text != "hello" || calls != 1 || !done {
+		t.Fatalf("text=%q calls=%d done=%v", text, calls, done)
+	}
+	if len(hits) != 2 || hits[0] != "/responses" || hits[1] != "/chat/completions" {
+		t.Fatalf("must fall back to chat stream: %v", hits)
 	}
 }

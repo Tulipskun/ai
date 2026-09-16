@@ -47,7 +47,7 @@ func TestBuildReplaysResponsesReasoning(t *testing.T) {
 }
 
 func TestParseResponsePreservesReasoning(t *testing.T) {
-	r := response{Model: "deepseek-v4-flash", Output: []struct {
+	r := ResponsesResponse{Model: "deepseek-v4-flash", Output: []struct {
 		Type string `json:"type"`
 		ID string `json:"id"`
 		CallID string `json:"call_id"`

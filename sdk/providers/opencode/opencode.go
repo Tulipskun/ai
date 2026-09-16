@@ -1,5 +1,7 @@
-// Package opencode speaks the OpenAI-compatible chat-completions wire
-// protocol with the request fingerprint of the real opencode client.
+// Package opencode speaks the OpenAI-compatible wire protocol with the
+// request fingerprint of the real opencode client. Like opencode itself it
+// tries /responses first and falls back to /chat/completions when the
+// endpoint cannot serve the model.
 //
 // Observed in opencode 1.18.31: for providers whose id starts with
 // "opencode" every model request carries x-opencode-session (the opencode
@@ -20,6 +22,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -167,11 +170,39 @@ func (c *Client) ListModels(ctx context.Context, apiKey string) ([]sdk.Model, er
 }
 
 func (c *Client) Generate(ctx context.Context, req sdk.Request) (sdk.Response, error) {
-	var chat openai.ChatResponse
-	if err := internal.DoJSON(ctx, c.http(), http.MethodPost, c.BaseURL+"/chat/completions", c.headers(c.sessionID(req)), openai.BuildChatRequest(req), &chat); err != nil {
+	sid := c.sessionID(req)
+	var r openai.ResponsesResponse
+	if err := internal.DoJSON(ctx, c.http(), http.MethodPost, c.BaseURL+"/responses", c.headers(sid), openai.BuildResponsesRequest(req), &r); err == nil {
+		return openai.ParseResponsesResponse(r), nil
+	} else if !shouldTryChat(err) {
 		return sdk.Response{}, err
 	}
+	var chat openai.ChatResponse
+	if chatErr := internal.DoJSON(ctx, c.http(), http.MethodPost, c.BaseURL+"/chat/completions", c.headers(sid), openai.BuildChatRequest(req), &chat); chatErr != nil {
+		return sdk.Response{}, chatErr
+	}
 	return openai.ParseChatResponse(chat), nil
+}
+
+// shouldTryChat reports whether a /responses failure looks like an
+// endpoint/model mismatch (try /chat/completions) rather than an
+// auth/rate-limit failure (return immediately). Zen serves some models only
+// on /responses and others only on /chat/completions, and answers 500 on the
+// wrong endpoint, so 500 falls back while 401/403/429 never do.
+func shouldTryChat(err error) bool {
+	var httpErr *internal.HTTPError
+	if !errors.As(err, &httpErr) {
+		return false
+	}
+	switch httpErr.StatusCode {
+	case http.StatusNotFound:
+		return true
+	case http.StatusBadRequest:
+		return strings.Contains(httpErr.Body, `"code":"model_not_supported_on_endpoint"`)
+	case http.StatusInternalServerError:
+		return true
+	}
+	return false
 }
 
 func (c *Client) Stream(ctx context.Context, req sdk.Request) (<-chan sdk.Event, error) {
@@ -179,65 +210,127 @@ func (c *Client) Stream(ctx context.Context, req sdk.Request) (<-chan sdk.Event,
 	ch := make(chan sdk.Event, 16)
 	go func() {
 		defer close(ch)
-		type toolState struct {
-			id, name, args string
+		sid := c.sessionID(req)
+		emitted := false
+		if err := c.streamResponses(ctx, req, sid, ch, &emitted); err == nil {
+			return
+		} else if emitted || !shouldTryChat(err) {
+			ch <- sdk.Event{Type: sdk.EventError, Err: err}
+			return
 		}
-		tools := map[int]*toolState{}
-		err := internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/chat/completions", c.headers(c.sessionID(req)), openai.BuildChatRequest(req), func(data []byte) error {
-			var e struct {
-				Choices []struct {
-					Delta struct {
-						Content   string `json:"content"`
-						ToolCalls []struct {
-							Index    int    `json:"index"`
-							ID       string `json:"id"`
-							Function struct {
-								Name      string `json:"name"`
-								Arguments string `json:"arguments"`
-							} `json:"function"`
-						} `json:"tool_calls"`
-					} `json:"delta"`
-					FinishReason string `json:"finish_reason"`
-				} `json:"choices"`
-			}
-			if json.Unmarshal(data, &e) != nil {
-				return nil
-			}
-			for _, choice := range e.Choices {
-				if choice.Delta.Content != "" {
-					ch <- sdk.Event{Type: sdk.EventText, Text: choice.Delta.Content}
-				}
-				for _, call := range choice.Delta.ToolCalls {
-					st := tools[call.Index]
-					if st == nil {
-						st = &toolState{}
-						tools[call.Index] = st
-					}
-					if call.ID != "" {
-						st.id = call.ID
-					}
-					if call.Function.Name != "" {
-						st.name = call.Function.Name
-					}
-					st.args += call.Function.Arguments
-				}
-				if choice.FinishReason != "" {
-					for _, st := range tools {
-						if st.name != "" {
-							ch <- sdk.Event{Type: sdk.EventToolCall, ToolCall: &sdk.ToolCall{ID: st.id, Name: st.name, Arguments: st.args}}
-						}
-					}
-					tools = map[int]*toolState{}
-					ch <- sdk.Event{Type: sdk.EventDone}
-				}
-			}
-			return nil
-		})
-		if err != nil {
+		if err := c.streamChat(ctx, req, sid, ch, &emitted); err != nil {
 			ch <- sdk.Event{Type: sdk.EventError, Err: err}
 		}
 	}()
 	return ch, nil
+}
+
+func (c *Client) streamResponses(ctx context.Context, req sdk.Request, sid string, ch chan<- sdk.Event, emitted *bool) error {
+	mark := func() {
+		if emitted != nil {
+			*emitted = true
+		}
+	}
+	return internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/responses", c.headers(sid), openai.BuildResponsesRequest(req), func(data []byte) error {
+		var e struct {
+			Type  string `json:"type"`
+			Delta string `json:"delta"`
+			Item  struct {
+				CallID    string `json:"call_id"`
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			} `json:"item"`
+		}
+		if json.Unmarshal(data, &e) != nil {
+			return nil
+		}
+		switch e.Type {
+		case "response.output_text.delta":
+			if e.Delta != "" {
+				mark()
+				ch <- sdk.Event{Type: sdk.EventText, Text: e.Delta}
+			}
+		case "response.reasoning_summary_text.delta":
+			if e.Delta != "" {
+				mark()
+				ch <- sdk.Event{Type: sdk.EventReasoning, Reasoning: &sdk.ReasoningState{Text: e.Delta}}
+			}
+		case "response.function_call_arguments.done":
+			if e.Item.CallID != "" {
+				mark()
+				ch <- sdk.Event{Type: sdk.EventToolCall, ToolCall: &sdk.ToolCall{ID: e.Item.CallID, Name: e.Item.Name, Arguments: e.Item.Arguments}}
+			}
+		case "response.completed":
+			mark()
+			ch <- sdk.Event{Type: sdk.EventDone}
+		}
+		return nil
+	})
+}
+
+func (c *Client) streamChat(ctx context.Context, req sdk.Request, sid string, ch chan<- sdk.Event, emitted *bool) error {
+	type toolState struct {
+		id, name, args string
+	}
+	tools := map[int]*toolState{}
+	mark := func() {
+		if emitted != nil {
+			*emitted = true
+		}
+	}
+	return internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/chat/completions", c.headers(sid), openai.BuildChatRequest(req), func(data []byte) error {
+		var e struct {
+			Choices []struct {
+				Delta struct {
+					Content   string `json:"content"`
+					ToolCalls []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal(data, &e) != nil {
+			return nil
+		}
+		for _, choice := range e.Choices {
+			if choice.Delta.Content != "" {
+				mark()
+				ch <- sdk.Event{Type: sdk.EventText, Text: choice.Delta.Content}
+			}
+			for _, call := range choice.Delta.ToolCalls {
+				st := tools[call.Index]
+				if st == nil {
+					st = &toolState{}
+					tools[call.Index] = st
+				}
+				if call.ID != "" {
+					st.id = call.ID
+				}
+				if call.Function.Name != "" {
+					st.name = call.Function.Name
+				}
+				st.args += call.Function.Arguments
+			}
+			if choice.FinishReason != "" {
+				for _, st := range tools {
+					if st.name != "" {
+						mark()
+						ch <- sdk.Event{Type: sdk.EventToolCall, ToolCall: &sdk.ToolCall{ID: st.id, Name: st.name, Arguments: st.args}}
+					}
+				}
+				tools = map[int]*toolState{}
+				mark()
+				ch <- sdk.Event{Type: sdk.EventDone}
+			}
+		}
+		return nil
+	})
 }
 
 func (c *Client) http() *http.Client {

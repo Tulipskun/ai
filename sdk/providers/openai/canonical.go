@@ -147,10 +147,10 @@ func ItemMap(item any) map[string]any {
 // ResponsesResponseFromParts builds an sdk.Response through the canonical
 // OpenAI Responses output shape: message content + function_call items +
 // optional reasoning. Native adapters (anthropic/gemini) convert their wire
-// response into these parts first, then delegate here so sdk.Response
+// ResponsesResponse into these parts first, then delegate here so sdk.Response
 // construction stays in one place.
 func ResponsesResponseFromParts(model, status string, texts []string, toolCalls []sdk.ToolCall, reasoning *sdk.ReasoningState, usage sdk.Usage) sdk.Response {
-	r := response{Model: model, Status: status}
+	r := ResponsesResponse{Model: model, Status: status}
 	r.Usage.InputTokens = usage.InputTokens
 	r.Usage.OutputTokens = usage.OutputTokens
 	r.Usage.TotalTokens = usage.TotalTokens

@@ -439,10 +439,15 @@ func formatToolTraceCall(call *sdk.ToolCall) string {
 	if call == nil {
 		return "Working"
 	}
-	if strings.TrimSpace(call.Name) == "" {
+	name := strings.TrimSpace(call.Name)
+	if name == "" {
 		return "Working"
 	}
-	return truncateOneLine(strings.ReplaceAll(call.Name, "_", " "), 80)
+	line := truncateOneLine(strings.ReplaceAll(name, "_", " "), 80)
+	if args := oneLine(call.Arguments); args != "" && args != "{}" {
+		line += " · " + truncateRunes(args, 120)
+	}
+	return line
 }
 func formatToolCall(call *sdk.ToolCall) string { return formatToolTraceCall(call) }
 func formatToolResult(call *sdk.ToolCall, result *sdk.ToolResult) string {

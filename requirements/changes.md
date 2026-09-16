@@ -303,3 +303,16 @@ Reason: main/sub สลับกันแสดงจนอ่านไม่อ
 Impact: sdk/trace.go (RequestStartedMs/ProviderAcceptedMs + elapsed คำนวณจากลบ timestamp), sdk/agent.go (บันทึก timestamp ต่อ request), sdk/subagent.go (blocking wait + report builder + ตัด status/history tools + ตัด completion sink), sdk/subagent_trace_sink.go, sdk/loop.go (ไม่ inject completion), sdk/plan_tool.go (checklist prompt + instructions + allowlist), transport/discord/actor_trace_display.go (V2 เดียว per channel เรียงเวลา), gateway.go (send/edit V2 helpers); ไม่แตะ db schema, session routing, modal, panel, canonical Turn contract
 Validation: offline tests เทียบ timestamp ที่ stub ไว้พิสูจน์การลบ timestamp; delegate ใน test คืน report หลัง worker จบจริง; stop block จน status=stopped แล้วคืนรายงาน; ไม่มี tool names subagent_status/subagent_history; planner prompt มี checklist สถานะ; trace render เป็น Container/TextDisplay + V2 flag, sub lines ใต้ main lines ตามลำดับ, ไม่มี "provider accepted" บรรทัดค้าง; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-023
+
+Date: 2026-09-16
+Type: revise
+Request: from log channel 1549609343190827231 — content ที่มาพร้อม tool call แสดงผิดลำดับ; กลับแยกสี main/sub แบบเดิมแต่เรียงลำดับให้ถูก; แสดง args ของ tool
+Conflict: CHANGE-022 (รวมทุก actor เป็นข้อความเดียวต่อ channel; trace ไม่แสดง args)
+Previous: trace V2 single-stream per channel, ทุก actor บรรทัดรวมกัน, tool line มีเฉพาะชื่อ+เวลา
+New: REQ-031 กลับเป็นข้อความต่อ actor (planner accent blurple, worker accent เขียว) พร้อม global per-channel message sequence: เมื่อมีการสร้างข้อความใหม่ใดๆ ใน channel (อีก actor หรือ response text) actor ที่มี anchor เก่ากว่าต้องเปิด segment ใหม่ด้านล่างเสมอ บรรทัดใหม่ห้ามเด้งกลับไปเหนือข้อความที่ใหม่กว่า; REQ-032 tool line แสดง arguments one-line ตัดที่ 120 runes (args = ยอมให้โชว์ได้, result raw = ห้ามเหมือนเดิม)
+Reason: content ที่ emit พร้อม response เดียวกับ tool calls ถูกส่งทันที ทำให้ trace บรรทัดหลังจากนั้นไปต่อในข้อความเก่าเหนือ content — อ่านสับสน; ผู้ใช้ยืนยันแยกสีอ่านง่ายกว่า; args จำเป็นต่อการดูงานจริง
+Impact: transport/discord/actor_trace_display.go (per-actor state + channel sequence + segment split + args), gateway.go ไม่แตะ, adapter.go legacy formatters เพิ่ม args, actor_trace_display_test.go, rendering_test.go; ไม่แตะ sdk, orchestration, canonical contract
+Validation: tests พิสูจน์: worker message ถูกสร้างหลัง main message; main result line หลัง worker completion อยู่ segment ใหม่ใต้ worker message; content กลางคันทำให้ tool line ถัดไปเปิด segment ใหม่; tool line มี args แต่ result text ไม่หลุด; สี accent two values; offline tests เท่านั้น; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
+Status: accepted

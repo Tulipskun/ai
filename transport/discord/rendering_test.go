@@ -207,23 +207,27 @@ func TestStreamPaginationEditsWithoutTerminalReplay(t *testing.T) {
 func TestProgressHidesSecretsAndInternalChatter(t *testing.T) {
 	sender := &routingFakeSender{}
 	display := Display{Sender: sender}
-	secret := "API_KEY=top-secret /private/path delegated task text"
-	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceResponseText, Text: secret, Message: secret})
-	for _, name := range []string{"plan", "delegate_to_subagent", "subagent_history", "subagent_status", "accept_subagent_result", "run_command"} {
-		call := &sdk.ToolCall{Name: name, Arguments: secret}
-		displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceToolCall, ToolCall: call, Message: secret})
-		displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceToolResult, ToolCall: call, ToolResult: &sdk.ToolResult{Content: secret}})
+	args := `{"path":"/work/a.txt"}`
+	resultSecret := "API_KEY=top-secret raw tool output delegated task text"
+	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceResponseText, Text: resultSecret, Message: resultSecret})
+	for _, name := range []string{"plan", "delegate_to_subagent", "stop_subagent", "accept_subagent_result", "run_command"} {
+		call := &sdk.ToolCall{Name: name, Arguments: args}
+		displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceToolCall, ToolCall: call, Message: args})
+		displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceToolResult, ToolCall: call, ToolResult: &sdk.ToolResult{Content: resultSecret}})
 	}
 	got := strings.Join(sender.tools, "\n")
-	if strings.Contains(got, secret) {
+	if strings.Contains(got, resultSecret) {
 		t.Fatalf("leaked progress: %s", got)
 	}
-	for _, name := range []string{"plan", "delegate to subagent", "subagent history", "subagent status", "accept subagent result", "run command"} {
+	for _, name := range []string{"plan", "delegate to subagent", "stop subagent", "accept subagent result", "run command"} {
 		if !strings.Contains(got, name) {
 			t.Fatalf("tool %q must be visible (REQ-032): %s", name, got)
 		}
 	}
-	if len(sender.tools) != 6 {
+	if !strings.Contains(got, args) {
+		t.Fatalf("tool arguments must be visible (REQ-032): %s", got)
+	}
+	if len(sender.tools) != 5 {
 		t.Fatalf("unexpected trace items: %q", sender.tools)
 	}
 }
@@ -570,10 +574,17 @@ func TestSDKStreamingTurnRendersLosslesslyThroughToolContinuation(t *testing.T) 
 			t.Fatalf("page %d differs", i)
 		}
 	}
+	var sawArgs bool
 	for _, text := range m.messages {
-		if strings.Contains(text, "private plan") {
-			t.Fatal("internal plan leaked")
+		if strings.Contains(text, `{"plan":"private plan step"}`) {
+			sawArgs = true
 		}
+		if strings.Contains(text, "Checklist recorded") {
+			t.Fatal("raw tool result content leaked")
+		}
+	}
+	if !sawArgs {
+		t.Fatal("tool arguments must be visible in the trace (REQ-032)")
 	}
 	if state.footerActive || state.footerTimer != nil || state.flushTimer != nil {
 		t.Fatal("terminal timers still active")

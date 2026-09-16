@@ -249,7 +249,7 @@ func TestDisplayTraceToolFailureMarksLineInPlace(t *testing.T) {
 	display := Display{Sender: sender}
 	call := &sdk.ToolCall{ID: "1", Name: "list_directory", Arguments: `{"path":"~/ai"}`}
 	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceToolCall, ToolCall: call, Elapsed: 2 * time.Second})
-	if len(sender.tools) != 1 || sender.tools[0] != `list directory · 2s` {
+	if len(sender.tools) != 1 || sender.tools[0] != `list directory · {"path":"~/ai"} · 2s` {
 		t.Fatalf("tools = %q", sender.tools)
 	}
 	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceToolRunning, ToolCall: call, Elapsed: 2 * time.Second})
@@ -257,11 +257,11 @@ func TestDisplayTraceToolFailureMarksLineInPlace(t *testing.T) {
 		t.Fatalf("tool running should not add a line: %q", sender.tools)
 	}
 	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceToolResult, ToolCall: call, ToolResult: &sdk.ToolResult{ID: "1", Content: "boom", IsError: true}, Elapsed: 3 * time.Second})
-	if len(sender.tools) != 1 || sender.tools[0] != `❌ list directory · 3s` {
+	if len(sender.tools) != 1 || sender.tools[0] != `❌ list directory · {"path":"~/ai"} · 3s` {
 		t.Fatalf("tools = %q", sender.tools)
 	}
 	displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceRequest})
-	if len(sender.tools) != 2 || sender.tools[0] != `❌ list directory · 3s` || sender.tools[1] != "sending request to provider" {
+	if len(sender.tools) != 2 || sender.tools[0] != `❌ list directory · {"path":"~/ai"} · 3s` || sender.tools[1] != "sending request to provider" {
 		t.Fatalf("tools = %q", sender.tools)
 	}
 }

@@ -3,6 +3,7 @@ package discord
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
@@ -59,10 +60,22 @@ func (h *ProviderSettingsHandler) submit(s *discordgo.Session, i *discordgo.Inte
 	name := strings.TrimSpace(values["name"]); adapter := strings.TrimSpace(strings.ToLower(values["adapter"])); endpoint := strings.TrimSpace(values["url"]); apiKey := strings.TrimSpace(values["api_key"])
 	if name == "" || adapter == "" || endpoint == "" || apiKey == "" { return respondProviderError(s, i, "name, adapter, URL, and API key are required") }
 	if err := deferEphemeralResponse(s, i); err != nil { return err }
-	freeOnly := strings.EqualFold(strings.TrimSpace(values["free_only"]), "true"); if err := h.Upsert(context.Background(), name, adapter, endpoint, apiKey, freeOnly); err != nil { return followupEphemeral(s, i, "Provider settings error: "+err.Error()) }
+	freeOnly := strings.EqualFold(strings.TrimSpace(values["free_only"]), "true"); if err := h.Upsert(context.Background(), name, adapter, endpoint, apiKey, freeOnly); err != nil { log.Printf("discord: provider settings failed for %q: %v", name, err); return followupEphemeral(s, i, truncateProviderError("Provider settings error: "+err.Error())) }
 	return followupEphemeral(s, i, fmt.Sprintf("Provider `%s` saved and model catalogue refreshed.", name))
 }
 
 func respondProviderError(s *discordgo.Session, i *discordgo.InteractionCreate, message string) error {
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Content: "Provider settings error: " + message, Flags: discordgo.MessageFlagsEphemeral}})
+}
+
+// providerFollowupLimit keeps provider outcome messages inside Discord's
+// 2000-character content limit; the full error stays in the daemon log.
+const providerFollowupLimit = 1800
+
+func truncateProviderError(message string) string {
+	runes := []rune(message)
+	if len(runes) <= providerFollowupLimit {
+		return message
+	}
+	return string(runes[:providerFollowupLimit]) + "…"
 }

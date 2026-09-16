@@ -59,3 +59,51 @@ func TestDoJSONPostKeepsBody(t *testing.T) {
 		t.Fatalf("POST body = %q", body)
 	}
 }
+
+func TestDoJSONSendsDefaultUserAgent(t *testing.T) {
+	var ua string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	var out struct{}
+	if err := DoJSON(context.Background(), server.Client(), http.MethodPost, server.URL, nil, nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	if ua != DefaultUserAgent {
+		t.Fatalf("User-Agent = %q, want default %q", ua, DefaultUserAgent)
+	}
+}
+
+func TestDoJSONKeepsExplicitUserAgent(t *testing.T) {
+	var ua string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	var out struct{}
+	if err := DoJSON(context.Background(), server.Client(), http.MethodPost, server.URL, map[string]string{"User-Agent": "custom/2"}, nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	if ua != "custom/2" {
+		t.Fatalf("User-Agent = %q, want explicit custom/2", ua)
+	}
+}
+
+func TestSSESendsDefaultUserAgent(t *testing.T) {
+	var ua string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua = r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+	if err := SSE(context.Background(), server.Client(), http.MethodPost, server.URL, nil, map[string]string{}, func([]byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if ua != DefaultUserAgent {
+		t.Fatalf("SSE User-Agent = %q, want default %q", ua, DefaultUserAgent)
+	}
+}

@@ -355,3 +355,16 @@ Reason: ตรวจจาก opencode 1.18.31 บนเครื่อง: prov
 Impact: sdk (types.go AdapterOpenCode + Request.SessionID, router_client.go stamp SessionID, providers/opencode แพ็กเกจใหม่), runtime (runtime.go register, provider_manager.go Adapters+ensureAdapter, provider_config.go explicit adapter), transport/discord (provider settings options 3→4), tests ทุกชั้นที่เกี่ยวข้อง
 Validation: unit (format/stability/uniqueness ของ ses_-id, headers ครบ, ไม่มี user ใน body, parse chat+tools, ListModels ผ่าน httptest, runtime registration) + live 1 call ผ่าน adapter จริงกับ mimo-v2.5-free; `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-027
+
+Date: 2026-09-16
+Type: add
+Request: ตรวจ log ของ channel 1549723143218663434 ที่ยัง error; เพิ่ม provider https://inference-api.nousresearch.com/v1/ ไม่ได้
+Conflict: none (พฤติกรรมเสริม ไม่เปลี่ยน wire format หรือ semantics เดิม)
+Previous: provider HTTP ใช้ Go default UA (`Go-http-client/1.1`); provider-settings error ส่งข้อความเต็มขึ้น Discord โดยไม่ตัด
+New: REQ-040 — `User-Agent: ai` เริ่มต้นทุก provider request (adapter/config ชนะได้); error ของ provider settings ถูก truncate ให้อยู่ใน limit Discord (เต็มเก็บใน daemon log)
+Reason: log มีแค่ 2 อาการใน channel นั้น: (1) เพิ่ม NousResearch ไม่ได้เพราะ Cloudflare ตอบ 403 HTML (4.5KB) ให้ Go UA — error ยาวจน followup เกิน 2000 ตัวอักษร ผู้ใช้จึงไม่เห็นสาเหตุ (เจอซ้ำ 4 ครั้ง หลายวัน); ยืนยันด้วย curl: Go UA=403, `ai`=200, opencode adapter UA ไม่กระทบเพราะ headers ของ adapter ถูก apply ทีหลัง; (2) `context canceled` 2 ครั้ง = turn ถูก preempt โดย turn ใหม่ของ session เดียวกัน (beginInterrupt — canceller เดียวใน process นอกจาก shutdown ซึ่งไม่เกิดเพราะ daemon รันต่อเนื่อง) เข้ากันได้กับ generation ช้า + ส่งข้อความซ้ำ, session DB ยัง 0 bytes เพราะไม่มี turn ใดจบ; ไม่พบโค้ดผิดสำหรับ cancel จึงแก้ที่สาเหตุทางอ้อม (provider ใช้ได้ + เห็น error จริง) ก่อน
+Impact: sdk/providers/internal (http.go default UA), transport/discord (provider_settings.go truncate+log), tests ที่เกี่ยวข้อง
+Validation: unit (default UA, explicit UA ชนะ, truncate ≤2000 + log เต็ม); live: Nous /models 200 ด้วย UA ใหม่ผ่าน curl; `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
+Status: accepted

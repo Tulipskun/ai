@@ -1,6 +1,7 @@
 package discord
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bwmarrin/discordgo"
@@ -27,4 +28,21 @@ func TestProviderSettingsModalContainsRequiredFields(t *testing.T) {
 func TestProviderSettingsModalID(t *testing.T) {
 	h := &ProviderSettingsHandler{Adapters: []sdk.AdapterID{sdk.AdapterOpenAI}}
 	if h.modalData().CustomID != providerSettingsModalID { t.Fatalf("custom ID = %q, want %q", h.modalData().CustomID, providerSettingsModalID) }
+}
+
+func TestTruncateProviderErrorKeepsShortMessages(t *testing.T) {
+	if got := truncateProviderError("short"); got != "short" {
+		t.Fatalf("truncate = %q", got)
+	}
+}
+
+func TestTruncateProviderErrorFitsDiscordLimit(t *testing.T) {
+	long := "Provider settings error: " + strings.Repeat("x", 5000)
+	got := truncateProviderError(long)
+	if len([]rune(got)) > 2000 {
+		t.Fatalf("truncated length = %d runes, exceeds Discord limit", len([]rune(got)))
+	}
+	if !strings.HasPrefix(got, "Provider settings error: ") || !strings.HasSuffix(got, "…") {
+		t.Fatal("truncation must keep the prefix and mark omission")
+	}
 }

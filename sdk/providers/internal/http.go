@@ -14,6 +14,12 @@ import (
 	"time"
 )
 
+// DefaultUserAgent is sent on every provider request that does not set its
+// own User-Agent (adapter or per-provider headers always win). Go's default
+// ("Go-http-client/1.1") is challenged by some gateways' bot rules
+// (Cloudflare 403 HTML), which used to surface as multi-KB errors.
+const DefaultUserAgent = "ai"
+
 type HTTPError struct {
 	StatusCode int
 	Status     string
@@ -55,6 +61,9 @@ func DoJSON(ctx context.Context, client *http.Client, method, url string, header
 	if reader != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", DefaultUserAgent)
+	}
 	for k, v := range headers { req.Header.Set(k, v) }
 	resp, err := client.Do(req)
 	if err != nil { return err }
@@ -72,6 +81,9 @@ func SSE(ctx context.Context, client *http.Client, method, url string, headers m
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(data))
 	if err != nil { return err }
 	req.Header.Set("Content-Type", "application/json")
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", DefaultUserAgent)
+	}
 	for k, v := range headers { req.Header.Set(k, v) }
 	resp, err := client.Do(req)
 	if err != nil { return err }

@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-func TestBrowserClientDefaultsToInstalledBrowser(t *testing.T) {
+func TestBrowserClientDefaultsToFirefox(t *testing.T) {
 	client := NewBrowserClient(BrowserClientConfig{})
-	if client.cfg.Browser != "auto" { t.Fatalf("browser = %q", client.cfg.Browser) }
+	if client.cfg.Browser != "firefox" { t.Fatalf("browser = %q", client.cfg.Browser) }
 	if client.cfg.IdleTimeout != 30*time.Minute || client.cfg.NavigationTimeout != 30*time.Second || client.cfg.ActionTimeout != 10*time.Second || client.cfg.SnapshotTimeout != 10*time.Second {
 		t.Fatalf("unexpected defaults: %#v", client.cfg)
 	}
@@ -32,6 +32,20 @@ func TestBrowserClientCallWithoutStart(t *testing.T) {
 	client := NewBrowserClient(BrowserClientConfig{})
 	if err := client.Call(context.Background(), "browser.open", map[string]string{"session_id":"test"}, nil); err == nil || !strings.Contains(err.Error(), "browser is unavailable") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestBrowserAutoPrefersFirefox(t *testing.T) {
+	got := browserCandidates("auto")
+	if len(got) < 2 || got[0] != "firefox" || got[1] != "firefox-esr" {
+		t.Fatalf("auto candidates = %#v, want firefox first", got)
+	}
+}
+
+func TestBrowserPrepareLazyClient(t *testing.T) {
+	client := NewBrowserClient(BrowserClientConfig{Browser: "firefox", Profile: t.TempDir(), Lazy: true})
+	if !client.cfg.Lazy || client.Ready() {
+		t.Fatalf("lazy client should start unready: %#v", client.cfg)
 	}
 }
 

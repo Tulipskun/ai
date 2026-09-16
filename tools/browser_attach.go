@@ -47,6 +47,7 @@ func (c *BrowserClient) Attach(ctx context.Context, endpoint string) error {
 }
 
 func (c *BrowserClient) ListPages(ctx context.Context) ([]BrowserPage, error) {
+	if err := c.ensureStarted(ctx); err != nil { return nil, err }
 	endpoint, err := c.cdpHTTPBase()
 	if err != nil { return nil, err }
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/json/list", nil)
@@ -65,7 +66,7 @@ func (c *BrowserClient) ListPages(ctx context.Context) ([]BrowserPage, error) {
 func (c *BrowserClient) AttachPage(ctx context.Context, sessionID, targetID string, out any) error {
 	if strings.TrimSpace(sessionID) == "" { return errors.New("session_id is required") }
 	if strings.TrimSpace(targetID) == "" { return errors.New("target_id is required") }
-	if !c.Ready() { return errors.New("browser is unavailable") }
+	if err := c.ensureStarted(ctx); err != nil { return err }
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
 	if existing := c.sessions[sessionID]; existing != nil { return jsonInto(out, map[string]any{"session_id":sessionID,"context_id":sessionID,"page_id":existing.TargetID}) }

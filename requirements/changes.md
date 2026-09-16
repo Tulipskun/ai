@@ -498,3 +498,16 @@ Reason: Run browser automation on Firefox ESR without extra drivers
 Impact: tools/browser_client.go, runtime/browser_config.go, README.md, config example, requirements/functional.md
 Validation: `go test ./tools -count=1` and `go test ./runtime -count=1` and `go vet ./tools ./runtime`
 Status: accepted
+
+CHANGE-038
+
+Date: 2026-09-16
+Type: revise
+Request: Fix browser autostart on update and set Firefox as default
+Conflict: none (extends REQ-010; no Playwright/Node/geckodriver/Marionette)
+Previous: REQ-010 default `browser` was `auto` (Chrome first); daemon boot called `StartBrowser` eagerly, so `ai update` restart opened a headed window even with no browser use
+New: REQ-010 default `browser` is `firefox` (`auto` prefers `firefox`/`firefox-esr` first, incl. absolute paths); daemon boot only prepares a lazy browser client (`PrepareBrowser`, `Lazy:true`, `browser.pid` tracking) — the browser launches on the first browser tool call (`Call`/`ListPages`/`AttachPage` via `ensureStarted`; managed `Start`, attach `Attach`), never on boot or `ai update` alone; headless default stays `false`; `Close` kills the tracked child PID (interrupt, then kill fallback via `killBrowserPID`) and removes `browser.pid`; `stopDaemon` kills the tracked browser child before daemon exit so update/stop never orphans headed windows; manual `StartBrowser` path (eager launch) unchanged for `ai browser start` use
+Reason: `ai update` restart must not pop a headed window; Firefox ESR is the preferred automation browser
+Impact: tools/browser_client.go (lazy gate, PID tracking, firefox-first candidates), tools/browser_attach.go (lazy gates), runtime/runtime.go (PrepareBrowser, eager StartBrowser kept), runtime/browser_config.go (firefox default), cmd/ai/main.go (lazy boot, browser.pid kill on stop, interactive firefox choice), README.md, .config/browser.example.json, requirements/functional.md (REQ-010)
+Validation: `go test ./tools ./runtime ./cmd/ai -count=1` and `go vet ./tools ./runtime ./cmd/ai`
+Status: accepted

@@ -105,7 +105,7 @@ The default mode is `managed` and headed:
   "enabled": true,
   "mode": "managed",
   "headless": false,
-  "browser": "auto",
+  "browser": "firefox",
   "profile": "data/browser/profile",
   "allow_private": false,
   "idle_timeout": "30m",
@@ -115,7 +115,7 @@ The default mode is `managed` and headed:
 }
 ```
 
-`browser` may be `auto`, `chrome`, `chromium`, `edge`, or `firefox` (Firefox ESR 140 via Remote Agent `--remote-debugging-port` polled at `/json/version`). Run `ai browser` to configure browser automation interactively (`ai browser disable` turns it off). In `managed` mode the runtime starts a dedicated profile. In `attach` mode, `cdp_endpoint` points at an existing browser remote debugging endpoint:
+`browser` may be `auto`, `chrome`, `chromium`, `edge`, or `firefox` (Firefox ESR 140 via Remote Agent `--remote-debugging-port` polled at `/json/version`); the default is `firefox`, and `auto` prefers Firefox first. Run `ai browser` to configure browser automation interactively (`ai browser disable` turns it off). The browser launches lazily on the first browser tool call, never on daemon boot or `ai update` alone. In `managed` mode the runtime starts a dedicated profile. In `attach` mode, `cdp_endpoint` points at an existing browser remote debugging endpoint:
 
 ```json
 {

@@ -10,7 +10,7 @@ import (
 func TestLoadBrowserConfigDefaults(t *testing.T) {
 	cfg, err := LoadBrowserConfig(filepath.Join(t.TempDir(), "browser.json"))
 	if err != nil { t.Fatal(err) }
-	if cfg.Enabled || cfg.Mode != "managed" || cfg.Browser != "auto" || cfg.Profile != "data/browser/profile" || cfg.Headless || cfg.AllowPrivate {
+	if cfg.Enabled || cfg.Mode != "managed" || cfg.Browser != "firefox" || cfg.Profile != "data/browser/profile" || cfg.Headless || cfg.AllowPrivate {
 		t.Fatalf("unexpected defaults: %#v", cfg)
 	}
 	if cfg.IdleTimeout != 30*time.Minute || cfg.NavigationTimeout != 30*time.Second || cfg.ActionTimeout != 10*time.Second || cfg.SnapshotTimeout != 10*time.Second { t.Fatalf("unexpected durations: %#v", cfg) }
@@ -30,7 +30,7 @@ func TestPartialBrowserConfigKeepsDefaults(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"enabled":true}`), 0o600); err != nil { t.Fatal(err) }
 	cfg, err := LoadBrowserConfig(path)
 	if err != nil { t.Fatal(err) }
-	if !cfg.Enabled || cfg.Mode != "managed" || cfg.Browser != "auto" || cfg.Profile != "data/browser/profile" || cfg.IdleTimeout != 30*time.Minute || cfg.NavigationTimeout != 30*time.Second || cfg.ActionTimeout != 10*time.Second || cfg.SnapshotTimeout != 10*time.Second { t.Fatalf("partial config lost defaults: %#v", cfg) }
+	if !cfg.Enabled || cfg.Mode != "managed" || cfg.Browser != "firefox" || cfg.Profile != "data/browser/profile" || cfg.IdleTimeout != 30*time.Minute || cfg.NavigationTimeout != 30*time.Second || cfg.ActionTimeout != 10*time.Second || cfg.SnapshotTimeout != 10*time.Second { t.Fatalf("partial config lost defaults: %#v", cfg) }
 }
 
 func TestLoadBrowserConfigRejectsUnknownBrowser(t *testing.T) {

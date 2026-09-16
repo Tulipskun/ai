@@ -46,13 +46,22 @@ func Load(path string) (*Runtime, error) {
 	return &Runtime{Router: router, Client: client, Providers: providers, ProviderConfigs: configs}, nil
 }
 
+func (r *Runtime) PrepareBrowser(cfg BrowserConfig, stateRoot string) {
+	if r == nil { return }
+	if !cfg.Enabled { return }
+	if r.Browser != nil { return }
+	profile := cfg.Profile
+	if !filepath.IsAbs(profile) { profile = filepath.Join(stateRoot, profile) }
+	r.Browser = tools.NewBrowserClient(tools.BrowserClientConfig{Browser:cfg.Browser,Profile:profile,Headless:cfg.Headless,AllowPrivate:cfg.AllowPrivate,Display:cfg.Display,Mode:cfg.Mode,CDPEndpoint:cfg.CDPEndpoint,PIDFile:filepath.Join(stateRoot, "browser.pid"),Lazy:true,IdleTimeout:cfg.IdleTimeout,NavigationTimeout:cfg.NavigationTimeout,ActionTimeout:cfg.ActionTimeout,SnapshotTimeout:cfg.SnapshotTimeout})
+}
+
 func (r *Runtime) StartBrowser(ctx context.Context, cfg BrowserConfig, stateRoot string) error {
 	if r == nil { return fmt.Errorf("runtime: runtime is not initialized") }
 	if !cfg.Enabled { return nil }
 	if r.Browser != nil && r.Browser.Ready() { return nil }
 	profile := cfg.Profile
 	if !filepath.IsAbs(profile) { profile = filepath.Join(stateRoot, profile) }
-	client := tools.NewBrowserClient(tools.BrowserClientConfig{Browser:cfg.Browser,Profile:profile,Headless:cfg.Headless,AllowPrivate:cfg.AllowPrivate,Display:cfg.Display,IdleTimeout:cfg.IdleTimeout,NavigationTimeout:cfg.NavigationTimeout,ActionTimeout:cfg.ActionTimeout,SnapshotTimeout:cfg.SnapshotTimeout})
+	client := tools.NewBrowserClient(tools.BrowserClientConfig{Browser:cfg.Browser,Profile:profile,Headless:cfg.Headless,AllowPrivate:cfg.AllowPrivate,Display:cfg.Display,Mode:cfg.Mode,CDPEndpoint:cfg.CDPEndpoint,PIDFile:filepath.Join(stateRoot, "browser.pid"),IdleTimeout:cfg.IdleTimeout,NavigationTimeout:cfg.NavigationTimeout,ActionTimeout:cfg.ActionTimeout,SnapshotTimeout:cfg.SnapshotTimeout})
 	if cfg.Mode == "attach" {
 		if err := client.Attach(ctx, cfg.CDPEndpoint); err != nil { return err }
 	} else if err := client.Start(ctx); err != nil { return err }

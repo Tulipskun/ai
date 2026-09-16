@@ -18,7 +18,7 @@ REQ-008 — การ retry ต้องใช้ API key ของ session ท�
 
 REQ-009 — output แบบ streaming จะต้องไม่ถูก replay โดยอัตโนมัติหลังจากเริ่มส่ง output แล้ว
 
-REQ-010 — Browser automation ต้องใช้งานได้ผ่าน Go CDP implementation ที่อยู่ในตัว โดยไม่ใช้ Playwright หรือ Node.js worker รองรับ Firefox ESR 140 ผ่าน Remote Agent CDP (`--remote-debugging-port` + `/json/version` polling หา webSocketDebuggerUrl) นอกเหนือจาก Chrome/Chromium/Edge โดยไม่ใช้ geckodriver/Marionette
+REQ-010 — Browser automation ต้องใช้งานได้ผ่าน Go CDP implementation ที่อยู่ในตัว โดยไม่ใช้ Playwright หรือ Node.js worker รองรับ Firefox ESR 140 ผ่าน Remote Agent CDP (`--remote-debugging-port` + `/json/version` polling หา webSocketDebuggerUrl) นอกเหนือจาก Chrome/Chromium/Edge โดยไม่ใช้ geckodriver/Marionette Firefox เป็น default browser (`browser` default `firefox`, `auto` เลือก Firefox ก่อนเสมอ) และ headless default ยังคง `false`; daemon boot เตรียม browser client ไว้เท่านั้นโดยไม่ launch browser — browser จะ start แบบ lazy เมื่อมี browser tool call ครั้งแรก (`Call`/`ListPages`/`AttachPage` ผ่าน ensureStarted, managed mode `Start`, attach mode `Attach`) จึงไม่มี headed window โผล่จาก `ai update` เพียงอย่างเดียว; `stopDaemon`/daemon exit ต้องฆ่า tracked browser child PID (`browser.pid`, interrupt ก่อนแล้ว kill fallback ผ่าน `Close`/`killBrowserPID`/`killBrowserChild`) เพื่อไม่ให้ headed window ถูก orphan
 
 REQ-011 — Runtime configuration ต้องเป็นแบบไฟล์ภายใต้ layout `~/.local/share/ai` ที่กำหนดไว้ และไม่ต้องใช้ environment variable ในการตั้งค่า
 

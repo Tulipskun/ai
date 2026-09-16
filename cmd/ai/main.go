@@ -238,15 +238,15 @@ func runBrowserConfig(args []string) error {
 		}
 		current.CDPEndpoint = strings.TrimSpace(endpoint)
 	} else {
-		browser, err := promptDefault(reader, "Browser (auto/chrome/chromium/edge)", current.Browser)
+		browser, err := promptDefault(reader, "Browser (auto/chrome/chromium/edge/firefox)", current.Browser)
 		if err != nil {
 			return err
 		}
 		browser = strings.ToLower(strings.TrimSpace(browser))
 		switch browser {
-		case "auto", "chrome", "chromium", "edge":
+		case "auto", "chrome", "chromium", "edge", "firefox":
 		default:
-			return fmt.Errorf("browser must be one of auto, chrome, chromium, edge")
+			return fmt.Errorf("browser must be one of auto, chrome, chromium, edge, firefox")
 		}
 		current.Browser = browser
 		profile, err := promptDefault(reader, "Profile directory", current.Profile)
@@ -373,6 +373,7 @@ func stopDaemon(_ string) error {
 		_ = os.Remove(pidPath)
 		return nil
 	}
+	killBrowserChild(state)
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return err
 	}
@@ -389,6 +390,31 @@ func stopDaemon(_ string) error {
 	}
 	_ = os.Remove(pidPath)
 	return nil
+}
+
+func killBrowserChild(state string) {
+	if strings.TrimSpace(state) == "" {
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(state, "browser.pid"))
+	if err != nil {
+		return
+	}
+	bpid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || bpid <= 0 {
+		return
+	}
+	_ = syscall.Kill(bpid, syscall.SIGTERM)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processAlive(bpid) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if processAlive(bpid) {
+		_ = syscall.Kill(bpid, syscall.SIGKILL)
+	}
 }
 func runStop() error {
 	state, err := stateRoot()
@@ -548,9 +574,7 @@ func run(ctx context.Context, cliOnly bool) error {
 		return err
 	}
 	if browserConfig.Enabled {
-		if err := rt.StartBrowser(ctx, browserConfig, state); err != nil {
-			log.Printf("browser unavailable, continuing without browser automation: %v", err)
-		}
+		rt.PrepareBrowser(browserConfig, state)
 		defer rt.CloseBrowser()
 	}
 	inputConfigPath := filepath.Join(state, transport.DefaultConfigPath)

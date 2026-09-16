@@ -435,6 +435,18 @@ func (s *Session) RecordResponse(requestID int64, resp Response, err error) erro
 	}
 	return store.RecordResponse(requestID, resp, err)
 }
+
+// LoadUsage reports the session's cumulative token/cache totals persisted in
+// its database. A session without a store has no totals to report.
+func (s *Session) LoadUsage() (Usage, error) {
+	s.mu.RLock()
+	store, id := s.store, s.config.ID
+	s.mu.RUnlock()
+	if store == nil {
+		return Usage{}, nil
+	}
+	return store.LoadUsage(id)
+}
 func cloneTurns(in []Turn) []Turn {
 	out := make([]Turn, len(in))
 	copy(out, in)

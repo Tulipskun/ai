@@ -219,6 +219,7 @@ type Gateway struct {
 	workspaceCommand *WorkspaceHandler
 	sessionMapping   *SessionMapping
 	resolveSession   func(context.Context, sdk.Input) (*sdk.Session, error)
+	sessionUsage     func(string) (sdk.Usage, bool)
 	stop             func(string) bool
 	v2Send           func(context.Context, string, []discordgo.MessageComponent) (string, error)
 	v2Edit           func(context.Context, string, string, []discordgo.MessageComponent) error

@@ -33,6 +33,21 @@ type actorTraceState struct {
 	dirty     bool
 	completed bool
 	timer     *time.Timer
+	// turnUsage sums every Usage seen in this turn (across
+	// TraceResponseContent/TraceResponse events), never last-write-wins.
+	// sessionUsage is the session's cumulative totals from LoadUsage.
+	// turnStartMs anchors the footer elapsed clock (REQ-033 subtraction).
+	// lastAdded/awaitingDedupe skip the terminal duplicate: the closing
+	// TraceResponse repeats the Usage of the preceding TraceResponseContent
+	// for the same provider call, so it is counted once. Tool activity
+	// disarms the dedupe so genuinely repeated calls still sum.
+	turnUsage      sdk.Usage
+	sessionUsage   sdk.Usage
+	hasSession     bool
+	turnStartMs    int64
+	sessionID      string
+	lastAdded      sdk.Usage
+	awaitingDedupe bool
 }
 
 var actorTraceMu sync.Mutex
@@ -53,12 +68,17 @@ func (g *Gateway) displayActorOutput(ctx context.Context, output sdk.Output) err
 			text = responseContent(&sdk.Response{Content: output.Content})
 		}
 		chKey := fmt.Sprintf("%p\x00%s", g, channelID)
-		return g.sendActorResponse(ctx, channelID, chKey, actorFromMetadata(output.Metadata), output.Metadata["trace_job_id"], text)
+		actor := actorFromMetadata(output.Metadata)
+		jobID := strings.TrimSpace(output.Metadata["trace_job_id"])
+		key := chKey + "\x00" + actor + "\x00" + jobID
+		g.noteActorSession(key, output.SessionID)
+		return g.sendActorResponse(ctx, channelID, chKey, actor, jobID, text)
 	}
 	actor := actorFromMetadata(output.Metadata)
 	jobID := strings.TrimSpace(output.Metadata["trace_job_id"])
 	chKey := fmt.Sprintf("%p\x00%s", g, channelID)
 	key := chKey + "\x00" + actor + "\x00" + jobID
+	g.noteActorSession(key, output.SessionID)
 	return g.displayActorTrace(ctx, channelID, chKey, key, actor, jobID, *output.Trace)
 }
 
@@ -119,6 +139,9 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 	case sdk.TraceResponseText:
 		return nil
 	case sdk.TraceResponseContent:
+		if trace.Response != nil {
+			g.countActorContentUsage(key, trace.Response.Usage)
+		}
 		text := strings.TrimSpace(trace.Text)
 		if text == "" {
 			text = responseContent(trace.Response)
@@ -140,8 +163,9 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 			messageID := state.messageID
 			label := actorLabelFromKey(key)
 			accent := accentFromKey(key)
+			footer := actorFooterLocked(state)
 			actorTraceMu.Unlock()
-			return g.EditComponentsV2(ctx, channelID, messageID, actorTraceComponents(label, accent, pages))
+			return g.EditComponentsV2(ctx, channelID, messageID, actorTraceComponents(label, accent, pages, footer))
 		}
 		if state != nil {
 			kept := make([]string, 0, len(state.items))
@@ -175,6 +199,7 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 		if trace.ToolCall == nil {
 			return nil
 		}
+		g.disarmActorDedupe(key)
 		// The first tool of a response replaces that request's pending row:
 		// "provider accepted" is merged into the tool line (REQ-033).
 		if err := g.actorTraceUpdate(ctx, channelID, chKey, key, formatTraceToolLine(trace.ToolCall, "🔧", trace), func(item string) bool {
@@ -206,6 +231,9 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 		}
 		return g.actorTraceAppend(ctx, channelID, chKey, key, text)
 	case sdk.TraceResponse:
+		if trace.Response != nil {
+			g.countActorTerminalUsage(key, trace.Response.Usage)
+		}
 		g.actorTraceComplete(key)
 		return g.actorTraceFlush(ctx, channelID, chKey, key)
 	case sdk.TraceError:
@@ -269,6 +297,162 @@ func (g *Gateway) actorTraceComplete(key string) {
 	defer actorTraceMu.Unlock()
 	if state := actorTraceStates[key]; state != nil {
 		state.completed = true
+		if state.timer != nil {
+			state.timer.Stop()
+			state.timer = nil
+		}
+	}
+}
+
+// noteActorSession binds the harness session ID to an actor trace key so the
+// footer can show session cumulative totals. A completed turn is sealed first
+// so the next turn starts with zeroed per-turn usage and a fresh clock.
+func (g *Gateway) noteActorSession(key, sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	actorTraceMu.Lock()
+	defer actorTraceMu.Unlock()
+	if state := actorTraceStates[key]; state != nil && state.completed {
+		if state.timer != nil {
+			state.timer.Stop()
+		}
+		delete(actorTraceStates, key)
+	}
+	state := actorTraceStates[key]
+	if state == nil {
+		state = &actorTraceState{sessionID: sessionID, turnStartMs: nowMillis()}
+		actorTraceStates[key] = state
+		return
+	}
+	if state.sessionID == "" {
+		state.sessionID = sessionID
+	}
+	if state.turnStartMs == 0 {
+		state.turnStartMs = nowMillis()
+	}
+}
+
+// countActorContentUsage sums one provider call's Usage into the turn total
+// and arms the terminal dedupe: the closing TraceResponse repeats the Usage
+// of the preceding TraceResponseContent for the same provider call, so it
+// must be counted once. Provider Usage mapping itself is untouched; only
+// aggregation happens here.
+func (g *Gateway) countActorContentUsage(key string, usage sdk.Usage) {
+	actorTraceMu.Lock()
+	defer actorTraceMu.Unlock()
+	state := actorTraceStateForKeyLocked(key)
+	if state.turnStartMs == 0 {
+		state.turnStartMs = nowMillis()
+	}
+	state.turnUsage = addUsage(state.turnUsage, usage)
+	state.lastAdded = usage
+	state.awaitingDedupe = true
+	g.refreshSessionUsageLocked(state)
+}
+
+// countActorTerminalUsage folds the terminal TraceResponse Usage in, skipping
+// it when it merely repeats the already-counted content Usage of the same
+// provider call. A genuinely new call (different numbers, or tool activity
+// since) still sums, so multi-call turns accumulate instead of
+// last-write-wins.
+func (g *Gateway) countActorTerminalUsage(key string, usage sdk.Usage) {
+	actorTraceMu.Lock()
+	defer actorTraceMu.Unlock()
+	state := actorTraceStateForKeyLocked(key)
+	if state.turnStartMs == 0 {
+		state.turnStartMs = nowMillis()
+	}
+	if state.awaitingDedupe && usage == state.lastAdded {
+		state.awaitingDedupe = false
+		g.refreshSessionUsageLocked(state)
+		return
+	}
+	state.turnUsage = addUsage(state.turnUsage, usage)
+	state.lastAdded = usage
+	state.awaitingDedupe = false
+	g.refreshSessionUsageLocked(state)
+}
+
+// disarmActorDedupe marks that tool activity separated two provider calls, so
+// even identical Usage numbers on the next response count as a new call.
+func (g *Gateway) disarmActorDedupe(key string) {
+	actorTraceMu.Lock()
+	defer actorTraceMu.Unlock()
+	if state := actorTraceStates[key]; state != nil {
+		state.awaitingDedupe = false
+	}
+}
+
+func addUsage(total, delta sdk.Usage) sdk.Usage {
+	total.InputTokens += delta.InputTokens
+	total.OutputTokens += delta.OutputTokens
+	total.TotalTokens += delta.TotalTokens
+	total.CacheReadTokens += delta.CacheReadTokens
+	total.CacheWriteTokens += delta.CacheWriteTokens
+	return total
+}
+
+// sessionUsageFor snapshots the session's cumulative token/cache totals. Tests
+// inject the hook; production resolves the live session and reads LoadUsage,
+// so rendering stays inside the Discord module and the canonical contract and
+// provider mapping are untouched.
+func (g *Gateway) sessionUsageFor(sessionID string) (sdk.Usage, bool) {
+	if g != nil && g.sessionUsage != nil {
+		return g.sessionUsage(sessionID)
+	}
+	if g == nil || g.resolveSession == nil || strings.TrimSpace(sessionID) == "" {
+		return sdk.Usage{}, false
+	}
+	session, err := g.resolveSession(context.Background(), sdk.Input{SessionID: sessionID})
+	if err != nil || session == nil {
+		return sdk.Usage{}, false
+	}
+	usage, err := session.LoadUsage()
+	if err != nil {
+		return sdk.Usage{}, false
+	}
+	return usage, true
+}
+
+// actorTraceFooter renders the turn footer: per-turn summed tokens plus cache
+// read/write and elapsed, followed by the session cumulative totals. Elapsed
+// comes from subtracting Unix millisecond timestamps (REQ-033), never
+// time.Since at render time.
+func actorTraceFooter(turn, session sdk.Usage, hasSession bool, turnStartMs int64) string {
+	if turnStartMs == 0 {
+		return ""
+	}
+	elapsedMs := nowMillis() - turnStartMs
+	if elapsedMs < 0 {
+		elapsedMs = 0
+	}
+	footer := "turn in: " + formatCount(turn.InputTokens) + "/" + formatCount(turn.CacheReadTokens) +
+		" · out: " + formatCount(turn.OutputTokens) + "/" + formatCount(turn.CacheWriteTokens) +
+		" · ⏱ " + formatElapsed(time.Duration(elapsedMs)*time.Millisecond)
+	if hasSession {
+		footer += " · session in: " + formatCount(session.InputTokens) + "/" + formatCount(session.CacheReadTokens) +
+			" · out: " + formatCount(session.OutputTokens) + "/" + formatCount(session.CacheWriteTokens)
+	}
+	return footer
+}
+
+// actorFooterLocked renders the footer for state. The caller must hold actorTraceMu.
+func actorFooterLocked(state *actorTraceState) string {
+	if state == nil {
+		return ""
+	}
+	return actorTraceFooter(state.turnUsage, state.sessionUsage, state.hasSession, state.turnStartMs)
+}
+
+func (g *Gateway) refreshSessionUsageLocked(state *actorTraceState) {
+	if state == nil || strings.TrimSpace(state.sessionID) == "" {
+		return
+	}
+	if usage, ok := g.sessionUsageFor(state.sessionID); ok {
+		state.sessionUsage = usage
+		state.hasSession = true
 	}
 }
 
@@ -342,10 +526,11 @@ func (g *Gateway) actorTraceFlush(ctx context.Context, channelID, chKey, key str
 	}
 	items := append([]string(nil), state.items...)
 	messageID := state.messageID
+	footer := actorFooterLocked(state)
 	label := actorLabelFromKey(key)
 	accent := accentFromKey(key)
 	actorTraceMu.Unlock()
-	components := actorTraceComponents(label, accent, items)
+	components := actorTraceComponents(label, accent, items, footer)
 	if messageID != "" {
 		if err := g.EditComponentsV2(ctx, channelID, messageID, components); err == nil {
 			actorTraceMu.Lock()
@@ -429,10 +614,15 @@ func actorTraceSize(items []string) int {
 
 // actorTraceComponents renders one actor's stream as a Components V2
 // Container: header line plus TextDisplay pages, with the actor's accent
-// color (REQ-022, REQ-031).
-func actorTraceComponents(label string, accent int, items []string) []discordgo.MessageComponent {
+// color (REQ-022, REQ-031). The turn footer (per-turn summed usage plus
+// session cumulative totals and elapsed) is the final TextDisplay when
+// non-empty, so V2 responses carry in/out/cache/elapsed without embeds.
+func actorTraceComponents(label string, accent int, items []string, footer string) []discordgo.MessageComponent {
 	texts := []string{"**" + label + "**"}
 	texts = append(texts, chunkTraceItems(items)...)
+	if strings.TrimSpace(footer) != "" {
+		texts = append(texts, "-# "+footer)
+	}
 	children := make([]discordgo.MessageComponent, 0, len(texts))
 	for _, text := range texts {
 		children = append(children, discordgo.TextDisplay{Content: text})
@@ -469,12 +659,29 @@ func chunkTraceItems(items []string) []string {
 func (g *Gateway) sendActorResponse(ctx context.Context, channelID, chKey, actor, jobID, text string) error {
 	label := actorLabel(actor, jobID)
 	accent := actorAccent(actor)
-	for _, page := range paginateActorText(text, actorTraceMaxTextRunes) {
+	pages := paginateActorText(text, actorTraceMaxTextRunes)
+	key := chKey + "\x00" + actor + "\x00" + jobID
+	actorTraceMu.Lock()
+	state := actorTraceStates[key]
+	if state == nil {
+		state = actorTraceStateForKeyLocked(key)
+		if state.turnStartMs == 0 {
+			state.turnStartMs = nowMillis()
+		}
+	}
+	g.refreshSessionUsageLocked(state)
+	footer := actorFooterLocked(state)
+	actorTraceMu.Unlock()
+	for i, page := range pages {
 		actorTraceMu.Lock()
 		actorTraceChannelSeq[chKey]++
 		actorTraceMu.Unlock()
 		color := accent
-		container := discordgo.Container{AccentColor: &color, Components: []discordgo.MessageComponent{discordgo.TextDisplay{Content: label + "\n\n" + page}}}
+		children := []discordgo.MessageComponent{discordgo.TextDisplay{Content: label + "\n\n" + page}}
+		if strings.TrimSpace(footer) != "" && i == len(pages)-1 {
+			children = append(children, discordgo.TextDisplay{Content: "-# " + footer})
+		}
+		container := discordgo.Container{AccentColor: &color, Components: children}
 		if _, err := g.SendComponentsV2(ctx, channelID, []discordgo.MessageComponent{container}); err != nil {
 			return err
 		}

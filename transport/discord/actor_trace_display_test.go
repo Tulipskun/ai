@@ -291,3 +291,87 @@ func TestActorTraceTimingHelpers(t *testing.T) {
 		t.Fatalf("fallback elapsed=%s", d)
 	}
 }
+
+func TestActorTraceProviderAcceptedBecomesContentWhenAlone(t *testing.T) {
+	g := &Gateway{}
+	capture := newV2Capture(g)
+	resetActorTrace()
+	ctx := context.Background()
+	chKey, key := actorKeys(g, "c1", "main", "")
+	events := []sdk.TraceEvent{
+		{Stage: sdk.TraceRequest, RequestStartedMs: 1000, AtMs: 1000},
+		{Stage: sdk.TraceProviderReady, RequestStartedMs: 1000, ProviderAcceptedMs: 1200, AtMs: 1200},
+		{Stage: sdk.TraceResponseContent, Text: "final answer here"},
+	}
+	// The accepted line is still pending (no flush yet) - the response must
+	// edit the single container into the content instead of stacking.
+	if err := g.displayActorTrace(ctx, "c1", chKey, key, "main", "", events[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.actorTraceFlush(ctx, "c1", chKey, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.displayActorTrace(ctx, "c1", chKey, key, "main", "", events[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.displayActorTrace(ctx, "c1", chKey, key, "main", "", events[2]); err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.sent) != 1 {
+		t.Fatalf("content must reuse the accepted-only message: sends=%d", len(capture.sent))
+	}
+	if len(capture.edited["a"]) != 1 {
+		t.Fatalf("expected one in-place edit: %v", capture.edited)
+	}
+	final := v2Texts(capture.edited["a"][0])
+	if !strings.Contains(final, "final answer here") || strings.Contains(final, "provider accepted") {
+		t.Fatalf("transformed message wrong: %s", final)
+	}
+}
+
+func TestActorTraceAcceptedDroppedWhenOtherLinesExist(t *testing.T) {
+	g := &Gateway{}
+	capture := newV2Capture(g)
+	resetActorTrace()
+	ctx := context.Background()
+	chKey, key := actorKeys(g, "c1", "main", "")
+	call := sdk.TraceEvent{Stage: sdk.TraceToolCall, ToolCall: &sdk.ToolCall{ID: "t", Name: "bash", Arguments: `{"command":"ls"}`}, RequestStartedMs: 1000, ProviderAcceptedMs: 1500, AtMs: 1500}
+	if err := g.displayActorTrace(ctx, "c1", chKey, key, "main", "", sdk.TraceEvent{Stage: sdk.TraceRequest}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.displayActorTrace(ctx, "c1", chKey, key, "main", "", call); err != nil {
+		t.Fatal(err)
+	}
+	// A second request adds its own accepted marker; the response that follows
+	// must strip that marker and land as a fresh message below.
+	if err := g.displayActorTrace(ctx, "c1", chKey, key, "main", "", sdk.TraceEvent{Stage: sdk.TraceRequest, RequestStartedMs: 2000, AtMs: 2000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.displayActorTrace(ctx, "c1", chKey, key, "main", "", sdk.TraceEvent{Stage: sdk.TraceProviderReady, RequestStartedMs: 2000, ProviderAcceptedMs: 2200, AtMs: 2200}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.displayActorTrace(ctx, "c1", chKey, key, "main", "", sdk.TraceEvent{Stage: sdk.TraceResponseContent, Text: "answer"}); err != nil {
+		t.Fatal(err)
+	}
+	items := actorTraceStates[key].items
+	for _, item := range items {
+		if strings.HasPrefix(item, "⏳ ") {
+			t.Fatalf("accepted marker must be removed when other lines exist: %#v", items)
+		}
+	}
+	if len(capture.sent) != 2 {
+		t.Fatalf("expected tool msg + response msg: %d", len(capture.sent))
+	}
+	response := v2Texts(capture.sent[1])
+	if !strings.Contains(response, "answer") {
+		t.Fatalf("response not sent: %s", response)
+	}
+	edits := capture.edited["a"]
+	if len(edits) == 0 {
+		t.Fatal("tool message must be edited to drop the accepted marker")
+	}
+	last := v2Texts(edits[len(edits)-1])
+	if strings.Contains(last, "⏳") {
+		t.Fatalf("old container still holds the accepted marker: %s", last)
+	}
+}

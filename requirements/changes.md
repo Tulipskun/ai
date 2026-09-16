@@ -316,3 +316,16 @@ Reason: content ที่ emit พร้อม response เดียวกับ
 Impact: transport/discord/actor_trace_display.go (per-actor state + channel sequence + segment split + args), gateway.go ไม่แตะ, adapter.go legacy formatters เพิ่ม args, actor_trace_display_test.go, rendering_test.go; ไม่แตะ sdk, orchestration, canonical contract
 Validation: tests พิสูจน์: worker message ถูกสร้างหลัง main message; main result line หลัง worker completion อยู่ segment ใหม่ใต้ worker message; content กลางคันทำให้ tool line ถัดไปเปิด segment ใหม่; tool line มี args แต่ result text ไม่หลุด; สี accent two values; offline tests เท่านั้น; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-024
+
+Date: 2026-09-16
+Type: revise
+Request: เปลี่ยน run_command เป็น bash ใช้คำสั่งตรง; provider accepted เมื่อ content มาถึงให้ลบออกจาก container หรือถ้ามีมันอย่างเดียวให้แปลงเป็น content; main agent เป็น planner ไม่ใช่ผู้ส่งต่อคำสั่ง; main↔sub สื่อสารภาษาอังกฤษ
+Conflict: REQ-017 เดิม, `run_command` ใน registry (command+args schema), REQ-031/033 เดิม (provider accepted ค้างใน trace)
+Previous: run_command ต้องแยก command/args หรือมี shell syntax ถึงจะรันแบบ shell; accepted line ค้างเมื่อ response ไม่มี tool; planner prompt ไม่ห้ามการส่งต่อข้อความดิบ;ภาษาของ orchestration ตามผู้ใช้
+New: REQ-035 tool ชื่อ `bash` schema {"command": string, "timeout_ms"?} รันผ่าน bash เสมอ; REQ-036 planner role: วางแผน-เขียน task ภาษาอังกฤษมีบริบท ห้าม relay ดิบ; REQ-037: content ถึง → accepted เดี่ยว = แปลงข้อความเดิมเป็น content (edit), accepted + บรรทัดอื่น = ลบ accepted แล้วส่ง content ข้อความใหม่; worker prompt + delegation guidance ระบุ English-only ระหว่าง agent (REQ-017 แก้)
+Reason: AI พิมพ์ `ls -la /x` ผิดรูปแบบแล้ว fail เสียรอบ; accepted ค้างทำให้ trace เลอะ; relay ดิบทำให้ worker ทำงานไม่ตรงเป้า; TH↔EN สลับกันเปลือง token
+Impact: tools/registry.go + tools/command.go (bash tool, schema, description), tests ใน tools/ และผู้ใช้ชื่อ tool ใน sdk tests, transport/discord actor trace + rendering tests, sdk/plan_tool.go (instructions), sdk/subagent.go (worker prompt + report), cmd/ai/main.go (defaultSystemPrompt); ไม่แตะ db, gateway routing, canonical contract
+Validation: bash tool รัน "ls -la /x" ตรง ๆ สำเร็จใน tests; provider accepted เดียวถูก edit เป็น content (ไม่มีข้อความใหม่), กรณีมี tool line อื่น accepted ถูก delete ก่อน content; prompt มี English-only + ห้าม relay; offline tests เท่านั้น; `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
+Status: accepted

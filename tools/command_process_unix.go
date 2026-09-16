@@ -11,7 +11,7 @@ func configureCommandProcess(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
-func shellCommand(line string) *exec.Cmd { return exec.Command("sh", "-c", line) }
+func shellCommand(line string) *exec.Cmd { return exec.Command("bash", "-c", line) }
 
 func killCommandProcessTree(cmd *exec.Cmd) {
 	if cmd.Process == nil {

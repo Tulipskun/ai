@@ -25,13 +25,20 @@ type runCommandArgs struct {
 	TimeoutMS int      `json:"timeout_ms"`
 }
 
-func runCommandTool(workspace string) handler {
+type bashArgs struct {
+	Command   string `json:"command"`
+	TimeoutMS int    `json:"timeout_ms"`
+}
+
+// bashTool runs a full bash command line directly in the workspace so the
+// model can type shell the way a human would (CHANGE-024, REQ-035).
+func bashTool(workspace string) handler {
 	return func(ctx context.Context, raw json.RawMessage) (string, error) {
-		var args runCommandArgs
+		var args bashArgs
 		if err := json.Unmarshal(raw, &args); err != nil {
 			return "", err
 		}
-		if args.Command == "" {
+		if strings.TrimSpace(args.Command) == "" {
 			return "", errors.New("command is required")
 		}
 
@@ -44,10 +51,7 @@ func runCommandTool(workspace string) handler {
 		}
 		defer cancel()
 
-		cmd := exec.Command(args.Command, args.Args...)
-		if len(args.Args) == 0 && hasShellSyntax(args.Command) {
-			cmd = shellCommand(args.Command)
-		}
+		cmd := shellCommand(args.Command)
 		cmd.Dir = workspace
 		configureCommandProcess(cmd)
 

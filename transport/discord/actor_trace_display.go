@@ -126,6 +126,47 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 		if text == "" {
 			return nil
 		}
+		// A container holding only the "provider accepted" line becomes the
+		// response itself (edited in place); otherwise the pending marker is
+		// dropped from the old container and the content follows as a new
+		// message in creation order (REQ-037).
+		pages := paginateActorText(text, actorTraceMaxTextRunes)
+		actorTraceMu.Lock()
+		state := actorTraceStates[key]
+		if state != nil && state.messageID != "" && len(state.items) == 1 &&
+			strings.HasPrefix(state.items[0], "⏳ provider accepted") {
+			state.items = pages
+			state.dirty = false
+			messageID := state.messageID
+			label := actorLabelFromKey(key)
+			accent := accentFromKey(key)
+			actorTraceMu.Unlock()
+			return g.EditComponentsV2(ctx, channelID, messageID, actorTraceComponents(label, accent, pages))
+		}
+		if state != nil {
+			kept := make([]string, 0, len(state.items))
+			removed := false
+			for _, item := range state.items {
+				if strings.HasPrefix(item, "⏳ ") {
+					removed = true
+					continue
+				}
+				kept = append(kept, item)
+			}
+			if removed {
+				state.items = kept
+				if len(kept) == 0 && state.messageID != "" {
+					// Nothing visible left: the flushed message stays with its
+					// history; dropping the marker line needs an edit.
+					state.messageID = ""
+					state.items = nil
+					state.dirty = false
+				} else {
+					state.dirty = true
+				}
+			}
+		}
+		actorTraceMu.Unlock()
 		if err := g.actorTraceFlush(ctx, channelID, chKey, key); err != nil {
 			return err
 		}

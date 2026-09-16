@@ -511,3 +511,16 @@ Reason: `ai update` restart must not pop a headed window; Firefox ESR is the pre
 Impact: tools/browser_client.go (lazy gate, PID tracking, firefox-first candidates), tools/browser_attach.go (lazy gates), runtime/runtime.go (PrepareBrowser, eager StartBrowser kept), runtime/browser_config.go (firefox default), cmd/ai/main.go (lazy boot, browser.pid kill on stop, interactive firefox choice), README.md, .config/browser.example.json, requirements/functional.md (REQ-010)
 Validation: `go test ./tools ./runtime ./cmd/ai -count=1` and `go vet ./tools ./runtime ./cmd/ai`
 Status: accepted
+
+CHANGE-039
+
+Date: 2026-09-16
+Type: revise
+Request: Firefox BiDi fix now, zero further discovery
+Conflict: none (extends REQ-010; Chromium untouched)
+Previous: startFirefox polled /json/version for webSocketDebuggerUrl (always 404 on Firefox 140 ESR Remote Agent which serves httpd.js on / plus WS 101 on /session)
+New: REQ-010 Firefox uses BiDi /session (TCP dial loop up to 15s, single WS upgrade probe to ws://127.0.0.1:port/session expecting 101, session.new id 1 with acceptInsecureCerts true, store endpoint and mark ready); minimal BiDi dispatch covers open/navigate/snapshot/close, others return firefox-bidi-unsupported naming method; Chromium DevToolsActivePort path untouched
+Reason: Past repro proved /json/version is always 404 on Firefox 140 ESR; live BiDi handshake is the only viable path
+Impact: tools/browser_client.go
+Validation: go test ./tools ./runtime ./cmd/ai -count=1 and go vet ./tools ./runtime ./cmd/ai plus live scratch-profile firefox headless WS 101 plus session.new session id
+Status: accepted

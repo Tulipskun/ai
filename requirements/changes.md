@@ -485,3 +485,16 @@ Reason: Channel output must stay a quiet permanent tool list instead of status c
 Impact: transport/discord/actor_trace_display.go (heartbeat state/rows/throttle/receipt, tool event wiring, sub-agent content suppression), requirements/functional.md (REQ-041), requirements/changes.md
 Validation: `go test ./transport/discord -count=1` and `go vet ./transport/discord`
 Status: accepted
+
+CHANGE-037
+
+Date: 2026-09-16
+Type: revise
+Request: Firefox ESR support now, zero further discovery loops
+Conflict: none (extends REQ-010; no Playwright/Node/geckodriver/Marionette)
+Previous: REQ-010 Go CDP only for Chrome/Chromium/Edge; `browser` allowlist auto/chrome/chromium/edge
+New: REQ-010 covers Firefox ESR 140 via built-in Go CDP compat (launch `-profile --remote-debugging-address/port --no-first-run --no-remote` + `--headless`/`--disable-gpu`, free port via 127.0.0.1:0, poll `/json/version` up to 15s for webSocketDebuggerUrl; Chromium DevToolsActivePort path unchanged); `browser` allowlist adds `firefox`; candidates add `firefox`/`firefox-esr` + `/usr/bin/firefox{,-esr}`
+Reason: Run browser automation on Firefox ESR without extra drivers
+Impact: tools/browser_client.go, runtime/browser_config.go, README.md, config example, requirements/functional.md
+Validation: `go test ./tools -count=1` and `go test ./runtime -count=1` and `go vet ./tools ./runtime`
+Status: accepted

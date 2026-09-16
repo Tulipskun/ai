@@ -2,7 +2,7 @@
   "enabled": true,
   "mode": "managed",
   "headless": false,
-  "browser": "auto",
+  "browser": "auto", // auto|chrome|chromium|edge|firefox (firefox = ESR 140 Remote Agent CDP),
   "profile": "data/browser/profile",
   "cdp_endpoint": "http://127.0.0.1:9222",
   "allow_private": false,

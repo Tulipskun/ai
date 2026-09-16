@@ -35,7 +35,7 @@ func TestPartialBrowserConfigKeepsDefaults(t *testing.T) {
 
 func TestLoadBrowserConfigRejectsUnknownBrowser(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "browser.json")
-	if err := os.WriteFile(path, []byte(`{"browser":"firefox"}`), 0o600); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(path, []byte(`{"browser":"safari"}`), 0o600); err != nil { t.Fatal(err) }
 	if _, err := LoadBrowserConfig(path); err == nil { t.Fatal("expected invalid browser error") }
 }
 

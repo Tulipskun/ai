@@ -96,7 +96,7 @@ Empty values fall back to built-in defaults (home directory for workspace, singl
 
 ### Browser configuration
 
-Browser automation is implemented directly in Go through Chrome DevTools Protocol. It does not start a Node.js worker and does not require Playwright or another browser automation library. The runtime can start a dedicated installed Chrome/Chromium/Edge profile or attach to an already running browser through a local CDP endpoint.
+Browser automation is implemented directly in Go through Chrome DevTools Protocol (CDP), including Firefox ESR Remote Agent CDP compat. It does not start a Node.js worker and does not require Playwright or another browser automation library. The runtime can start a dedicated installed Chrome/Chromium/Edge/Firefox profile or attach to an already running browser through a local CDP endpoint.
 
 The default mode is `managed` and headed:
 
@@ -115,7 +115,7 @@ The default mode is `managed` and headed:
 }
 ```
 
-`browser` may be `auto`, `chrome`, `chromium`, or `edge`. Run `ai browser` to configure browser automation interactively (`ai browser disable` turns it off). In `managed` mode the runtime starts a dedicated profile. In `attach` mode, `cdp_endpoint` points at an existing browser remote debugging endpoint:
+`browser` may be `auto`, `chrome`, `chromium`, `edge`, or `firefox` (Firefox ESR 140 via Remote Agent `--remote-debugging-port` polled at `/json/version`). Run `ai browser` to configure browser automation interactively (`ai browser disable` turns it off). In `managed` mode the runtime starts a dedicated profile. In `attach` mode, `cdp_endpoint` points at an existing browser remote debugging endpoint:
 
 ```json
 {

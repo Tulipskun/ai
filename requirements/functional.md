@@ -18,7 +18,7 @@ REQ-008 — การ retry ต้องใช้ API key ของ session ท�
 
 REQ-009 — output แบบ streaming จะต้องไม่ถูก replay โดยอัตโนมัติหลังจากเริ่มส่ง output แล้ว
 
-REQ-010 — Browser automation ต้องใช้งานได้ผ่าน Go CDP implementation ที่อยู่ในตัว โดยไม่ใช้ Playwright หรือ Node.js worker
+REQ-010 — Browser automation ต้องใช้งานได้ผ่าน Go CDP implementation ที่อยู่ในตัว โดยไม่ใช้ Playwright หรือ Node.js worker รองรับ Firefox ESR 140 ผ่าน Remote Agent CDP (`--remote-debugging-port` + `/json/version` polling หา webSocketDebuggerUrl) นอกเหนือจาก Chrome/Chromium/Edge โดยไม่ใช้ geckodriver/Marionette
 
 REQ-011 — Runtime configuration ต้องเป็นแบบไฟล์ภายใต้ layout `~/.local/share/ai` ที่กำหนดไว้ และไม่ต้องใช้ environment variable ในการตั้งค่า
 

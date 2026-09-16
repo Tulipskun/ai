@@ -51,7 +51,7 @@ func LoadBrowserConfig(path string) (BrowserConfig, error) {
 	cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode)); if cfg.Mode == "" { cfg.Mode = "managed" }
 	cfg.Browser = strings.ToLower(strings.TrimSpace(cfg.Browser)); if cfg.Browser == "" { cfg.Browser = "auto" }
 	if cfg.Mode != "managed" && cfg.Mode != "attach" { return BrowserConfig{}, fmt.Errorf("browser mode must be one of managed, attach") }
-	switch cfg.Browser { case "auto", "chrome", "chromium", "edge": default: return BrowserConfig{}, fmt.Errorf("browser must be one of auto, chrome, chromium, edge") }
+	switch cfg.Browser { case "auto", "chrome", "chromium", "edge", "firefox": default: return BrowserConfig{}, fmt.Errorf("browser must be one of auto, chrome, chromium, edge, firefox") }
 	if cfg.Mode == "managed" && strings.TrimSpace(cfg.Profile) == "" { return BrowserConfig{}, fmt.Errorf("browser profile is required") }
 	if cfg.Mode == "attach" && strings.TrimSpace(cfg.CDPEndpoint) == "" { return BrowserConfig{}, fmt.Errorf("cdp_endpoint is required in attach mode") }
 	return cfg, nil

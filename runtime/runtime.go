@@ -8,6 +8,7 @@ import (
 	"github.com/Tulipskun/ai/sdk"
 	"github.com/Tulipskun/ai/sdk/providers/anthropic"
 	"github.com/Tulipskun/ai/sdk/providers/gemini"
+	"github.com/Tulipskun/ai/sdk/providers/opencode"
 	"github.com/Tulipskun/ai/sdk/providers/openai"
 	"github.com/Tulipskun/ai/tools"
 )
@@ -37,6 +38,7 @@ func Load(path string) (*Runtime, error) {
 		case sdk.AdapterOpenAI: client.RegisterAdapter(config.Adapter, openai.New(""))
 		case sdk.AdapterAnthropic: client.RegisterAdapter(config.Adapter, anthropic.New(""))
 		case sdk.AdapterGemini: client.RegisterAdapter(config.Adapter, gemini.New(""))
+		case sdk.AdapterOpenCode: client.RegisterAdapter(config.Adapter, opencode.New(""))
 		default: return nil, fmt.Errorf("runtime: unsupported adapter %q", config.Adapter)
 		}
 		registeredAdapters[config.Adapter] = true

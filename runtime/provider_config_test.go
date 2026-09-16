@@ -56,6 +56,19 @@ func TestProviderConfigsUseExplicitAdapter(t *testing.T) {
 	}
 }
 
+func TestProviderConfigsUseExplicitOpenCodeAdapter(t *testing.T) {
+	config := ProviderFileConfig{Providers: []ProviderFile{
+		{Name: "zen", Adapter: "opencode", HTTPEndpoint: "https://opencode.ai/zen/v1", APIKeys: []string{"key"}},
+	}}
+	providers, err := config.ProviderConfigs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if providers[0].Adapter != "opencode" {
+		t.Fatalf("adapter=%v", providers[0].Adapter)
+	}
+}
+
 func TestProviderConfigsRejectUnknownExplicitAdapter(t *testing.T) {
 	config := ProviderFileConfig{Providers: []ProviderFile{
 		{Name: "custom", Adapter: "unknown", HTTPEndpoint: "https://example.invalid/v1", APIKeys: []string{"key"}},

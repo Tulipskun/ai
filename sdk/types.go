@@ -60,6 +60,7 @@ const (
 
 type Request struct {
 	Provider        ProviderID    `json:"provider,omitempty"`
+	SessionID       string        `json:"session_id,omitempty"`
 	SystemPrompt    string        `json:"system_prompt,omitempty"`
 	Messages        []Turn        `json:"messages,omitempty"`
 	Tools           []Tool        `json:"tools,omitempty"`
@@ -125,6 +126,7 @@ const (
 	AdapterOpenAI      AdapterID  = "openai"
 	AdapterAnthropic   AdapterID  = "anthropic"
 	AdapterGemini      AdapterID  = "gemini"
+	AdapterOpenCode    AdapterID  = "opencode"
 )
 
 type Model struct {

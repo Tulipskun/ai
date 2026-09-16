@@ -342,3 +342,16 @@ Reason: main ที่ block ใน delegate รับข้อความผ�
 Impact: sdk (types.go Workspace, session_db.go workspace+agent_mode persist, session_settings.go SetWorkspace, subagent.go async+progress reports+worker workspace inheritance, loop.go sinks, context helper WithWorkspace, plan_tool instructions), runtime (system_config report_every_tool_calls, session_manager WorkspaceFor), tools (registry resolver, file/bash/job handlers resolve root ต่อ ctx), transport/discord (workspace.go ใหม่, gateway register+route, new_channel copy), tests ทุกชั้นที่เกี่ยวข้อง
 Validation: delegate คืนทันทีเมื่อ worker ยังรัน; progress event มาทุก 5 tool calls; final report inject ครบ; stop block จน stopped; SetWorkspace persist ผ่าน restart (ทั้ง main+sub + agent_mode); bash/read_file ใน session ที่มี workspace的不同 ทำงานคนละ root; /workspace expand ~/ และ reject path ไม่มีอยู่; offline tests เท่านั้น; `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-026
+
+Date: 2026-09-16
+Type: add
+Request: เพิ่ม adapter สำหรับ opencode ให้มี header และ session id เสมือนว่าใช้ผ่าน opencode โดยตรง (แยก adapter ไม่รวมกับ AgentRouter); อนุญาตให้ยิง API ทดสอบด้วย key ที่ให้มา โมเดล free ใดก็ได้ ที่ endpoint opencode.ai/zen/v1/
+Conflict: none (adapter ใหม่ ไม่เปลี่ยนพฤติกรรม adapter เดิม; name inference เดิมคงไว้)
+Previous: มี adapter แค่ openai/anthropic/gemini; ไม่มี fingerprint ของ opencode; Request ไม่มี session identity; provider นอก opencode เรียก free tier ของ Zen ไม่ได้ (MissingSessionID) และไม่ได้โควต้าถูก bucket (FreeUsageLimitError เมื่อขาด User-Agent)
+New: REQ-039 — adapter `opencode` (OpenAI-compatible `/chat/completions`): ส่ง `User-Agent: opencode/<version>`, `HTTP-Referer: https://opencode.ai/`, `X-Title: opencode`, `x-opencode-session: ses_f<hex8>ffe<rand14>` ทุก request; ses_-id mint ครั้งเดียวต่อ harness session (cache ใน memory); custom headers ชนะ UA/Referer/Title ได้แต่ชนะ session header ไม่ได้; body ไม่มี `user`; BaseURL เริ่มต้น `https://opencode.ai/zen/v1`; เลือกผ่าน `"adapter": "opencode"` explicit เท่านั้น; RouterClient stamp `Request.SessionID` จาก session ใน Generate/Stream
+Reason: ตรวจจาก opencode 1.18.31 บนเครื่อง: provider ที่ id ขึ้นต้นด้วย opencode ส่ง headers ชุดนี้ (x-opencode-session/sessionID, x-opencode-request/user.id, x-opencode-client/flags.client, User-Agent) และ free tier ของ Zen ตรวจ session (`MissingSessionID` ถ้าไม่มี) กับ quota bucket จาก User-Agent (`FreeUsageLimitError` ถ้า UA ไม่ใช่ opencode) — ทดสอบ live แล้ว: session+UA ผ่าน, ขาดอย่างใดอย่างหนึ่งติด error
+Impact: sdk (types.go AdapterOpenCode + Request.SessionID, router_client.go stamp SessionID, providers/opencode แพ็กเกจใหม่), runtime (runtime.go register, provider_manager.go Adapters+ensureAdapter, provider_config.go explicit adapter), transport/discord (provider settings options 3→4), tests ทุกชั้นที่เกี่ยวข้อง
+Validation: unit (format/stability/uniqueness ของ ses_-id, headers ครบ, ไม่มี user ใน body, parse chat+tools, ListModels ผ่าน httptest, runtime registration) + live 1 call ผ่าน adapter จริงกับ mimo-v2.5-free; `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
+Status: accepted

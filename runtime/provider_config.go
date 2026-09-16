@@ -104,6 +104,8 @@ func adapterForProvider(name, explicit string) (sdk.AdapterID, error) {
 			return sdk.AdapterAnthropic, nil
 		case string(sdk.AdapterGemini):
 			return sdk.AdapterGemini, nil
+		case string(sdk.AdapterOpenCode):
+			return sdk.AdapterOpenCode, nil
 		default:
 			return "", fmt.Errorf("runtime: provider %q has unsupported adapter %q", name, explicit)
 		}

@@ -33,6 +33,7 @@ func (c *RouterClient) Generate(ctx context.Context, session *Session, req Reque
 	cfg := session.Config(); model := req.Model; if model == "" { model = cfg.Model }
 	p, route, err := c.providerFor(session, model); if err != nil { return Response{}, err }
 	req.Provider, req.Model = route.Provider, route.Model
+	if req.SessionID == "" { req.SessionID = session.ID() }
 	if len(req.Messages) == 0 { req.Messages = session.History() }
 	if req.ThinkingLevel == "" { req.ThinkingLevel = cfg.ThinkingLevel }
 	if req.Temperature == nil && cfg.Temperature != nil { v := *cfg.Temperature; req.Temperature = &v }
@@ -50,6 +51,7 @@ func (c *RouterClient) Stream(ctx context.Context, session *Session, req Request
 	cfg := session.Config(); model := req.Model; if model == "" { model = cfg.Model }
 	p, route, err := c.providerFor(session, model); if err != nil { return nil, err }
 	req.Provider, req.Model = route.Provider, route.Model
+	if req.SessionID == "" { req.SessionID = session.ID() }
 	if len(req.Messages) == 0 { req.Messages = session.History() }
 	if req.ThinkingLevel == "" { req.ThinkingLevel = cfg.ThinkingLevel }
 	if req.Temperature == nil && cfg.Temperature != nil { v := *cfg.Temperature; req.Temperature = &v }

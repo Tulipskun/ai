@@ -13,6 +13,7 @@ import (
 	"github.com/Tulipskun/ai/sdk"
 	"github.com/Tulipskun/ai/sdk/providers/anthropic"
 	"github.com/Tulipskun/ai/sdk/providers/gemini"
+	"github.com/Tulipskun/ai/sdk/providers/opencode"
 	"github.com/Tulipskun/ai/sdk/providers/openai"
 )
 
@@ -27,7 +28,7 @@ func NewProviderManager(path string, rt *Runtime, config ProviderFileConfig) *Pr
 	if path == "" { path = DefaultProviderConfigPath }
 	return &ProviderManager{path: path, rt: rt, config: config}
 }
-func (m *ProviderManager) Adapters() []sdk.AdapterID { return []sdk.AdapterID{sdk.AdapterOpenAI, sdk.AdapterAnthropic, sdk.AdapterGemini} }
+func (m *ProviderManager) Adapters() []sdk.AdapterID { return []sdk.AdapterID{sdk.AdapterOpenAI, sdk.AdapterAnthropic, sdk.AdapterGemini, sdk.AdapterOpenCode} }
 func (m *ProviderManager) Providers() []sdk.ProviderID { if m == nil || m.rt == nil { return nil }; return append([]sdk.ProviderID(nil), m.rt.Providers...) }
 func (m *ProviderManager) KeyPools() map[sdk.ProviderID]*sdk.KeyPool { if m == nil || m.rt == nil { return nil }; out := make(map[sdk.ProviderID]*sdk.KeyPool, len(m.rt.ProviderConfigs)); for _, config := range m.rt.ProviderConfigs { out[config.ID] = config.Keys }; return out }
 
@@ -58,7 +59,7 @@ func (m *ProviderManager) Upsert(ctx context.Context, name, adapter, endpoint, a
 
 func (m *ProviderManager) ensureAdapter(id sdk.AdapterID) error {
 	if _, ok := m.rt.Client.Adapters[id]; ok { return nil }
-	switch id { case sdk.AdapterOpenAI: m.rt.Client.RegisterAdapter(id, openai.New("")); case sdk.AdapterAnthropic: m.rt.Client.RegisterAdapter(id, anthropic.New("")); case sdk.AdapterGemini: m.rt.Client.RegisterAdapter(id, gemini.New("")); default: return fmt.Errorf("runtime: unsupported adapter %q", id) }
+	switch id { case sdk.AdapterOpenAI: m.rt.Client.RegisterAdapter(id, openai.New("")); case sdk.AdapterAnthropic: m.rt.Client.RegisterAdapter(id, anthropic.New("")); case sdk.AdapterGemini: m.rt.Client.RegisterAdapter(id, gemini.New("")); case sdk.AdapterOpenCode: m.rt.Client.RegisterAdapter(id, opencode.New("")); default: return fmt.Errorf("runtime: unsupported adapter %q", id) }
 	return nil
 }
 func (m *ProviderManager) persist(config ProviderFileConfig) error {

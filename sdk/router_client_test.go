@@ -45,3 +45,13 @@ func (a *abortTestAdapter) Stream(context.Context, Request) (<-chan Event,error)
 func TestGenerateStopsOnDistantRetryAfter(t *testing.T) {
 	r := NewRouter(); r.RegisterProvider(ProviderConfig{ID: "p", Adapter: AdapterOpenAI, Keys: NewKeyPool("k")}); r.Register(ModelRoute{Provider: "p", Model: "m", Adapter: AdapterOpenAI}); c := NewRouterClient(r); adapter := &abortTestAdapter{}; c.RegisterAdapter(AdapterOpenAI, adapter); s := NewSession(SessionConfig{ID: "s", Provider: "p", Model: "m", KeyIndex: 0}, NewKeyPool("k")); done := make(chan error, 1); go func() { _, err := c.Generate(context.Background(), s, Request{}); done <- err }(); select { case err := <-done: if err == nil { t.Fatal("expected rate limit error") }; if adapter.calls != 1 { t.Fatalf("distant Retry-After must stop after 1 call, got %d", adapter.calls) }; case <-time.After(10 * time.Second): t.Fatal("abort was not fast") }
 }
+
+type sessionIDCapturingAdapter struct { seen []string }
+func (a *sessionIDCapturingAdapter) Name() string { return "capture" }
+func (a *sessionIDCapturingAdapter) WithAPIKey(string) Provider { return a }
+func (a *sessionIDCapturingAdapter) Generate(_ context.Context, req Request) (Response,error) { a.seen = append(a.seen, req.SessionID); return Response{Provider:string(req.Provider),Model:req.Model},nil }
+func (a *sessionIDCapturingAdapter) Stream(_ context.Context, req Request) (<-chan Event,error) { a.seen = append(a.seen, req.SessionID); ch:=make(chan Event,1); ch<-Event{Type:EventDone,Response:&Response{Provider:string(req.Provider),Model:req.Model}};close(ch);return ch,nil }
+
+func TestRouterClientStampsSessionID(t *testing.T) {
+	r:=NewRouter(); r.RegisterProvider(ProviderConfig{ID:"p",Adapter:AdapterOpenAI,Keys:NewKeyPool("k")}); r.Register(ModelRoute{Provider:"p",Model:"m",Adapter:AdapterOpenAI}); c:=NewRouterClient(r); adapter:=&sessionIDCapturingAdapter{}; c.RegisterAdapter(AdapterOpenAI,adapter); s:=NewSession(SessionConfig{ID:"sess-9",Provider:"p",Model:"m",KeyIndex:0},NewKeyPool("k")); if _,err:=c.Generate(context.Background(),s,Request{});err!=nil{t.Fatal(err)}; if _,err:=c.Generate(context.Background(),s,Request{SessionID:"explicit"});err!=nil{t.Fatal(err)}; if len(adapter.seen)!=2||adapter.seen[0]!="sess-9"||adapter.seen[1]!="explicit" { t.Fatalf("session ids=%v",adapter.seen) }
+}

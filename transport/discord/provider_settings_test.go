@@ -8,7 +8,7 @@ import (
 )
 
 func TestProviderSettingsModalContainsRequiredFields(t *testing.T) {
-	h := &ProviderSettingsHandler{Adapters: []sdk.AdapterID{sdk.AdapterOpenAI, sdk.AdapterAnthropic, sdk.AdapterGemini}}
+	h := &ProviderSettingsHandler{Adapters: []sdk.AdapterID{sdk.AdapterOpenAI, sdk.AdapterAnthropic, sdk.AdapterGemini, sdk.AdapterOpenCode}}
 	data := h.modalData()
 	if len(data.Components) != 5 {
 		t.Fatalf("components = %d, want 5", len(data.Components))
@@ -21,7 +21,7 @@ func TestProviderSettingsModalContainsRequiredFields(t *testing.T) {
 	}
 	adapter, ok := data.Components[1].(discordgo.Label).Component.(discordgo.SelectMenu)
 	if !ok { t.Fatalf("adapter component = %T, want discordgo.SelectMenu", data.Components[1].(discordgo.Label).Component) }
-	if len(adapter.Options) != 3 { t.Fatalf("adapter options = %d, want 3", len(adapter.Options)) }
+	if len(adapter.Options) != 4 { t.Fatalf("adapter options = %d, want 4", len(adapter.Options)) }
 }
 
 func TestProviderSettingsModalID(t *testing.T) {

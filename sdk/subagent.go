@@ -22,15 +22,25 @@ type SubAgentConfig struct {
 	SystemPrompt         string
 	Workspace            string
 	ReportEveryToolCalls int
+	MaxMidJobReports     int
 }
 
-const defaultSubAgentReportInterval = 5
+const defaultSubAgentReportInterval = 20
+
+const defaultSubAgentMaxMidJobReports = 3
 
 func (c SubAgentConfig) reportInterval() int {
 	if c.ReportEveryToolCalls > 0 {
 		return c.ReportEveryToolCalls
 	}
 	return defaultSubAgentReportInterval
+}
+
+func (c SubAgentConfig) maxMidJobReports() int {
+	if c.MaxMidJobReports > 0 {
+		return c.MaxMidJobReports
+	}
+	return defaultSubAgentMaxMidJobReports
 }
 
 // SubAgentRunner is the planner-facing orchestration surface. Delegation is
@@ -48,6 +58,7 @@ type SubAgentRunner interface {
 
 const subAgentReportToolResultRunes = 1000
 const subAgentProgressArgsRunes = 80
+const subAgentProgressResultRunes = 300
 
 type toolHistoryEntry struct {
 	ID        string
@@ -59,32 +70,34 @@ type toolHistoryEntry struct {
 }
 
 type subAgentJob struct {
-	id                 string
-	workerID           string
-	revision           uint64
-	reviewed           bool
-	superseded         bool
-	accepted           bool
-	continued          bool
-	stopRequested      bool
-	reportDelivered    bool
-	input              Input
-	parent             *Session
-	task               string
-	status             string
-	started            time.Time
-	finished           time.Time
-	result             string
-	progress           string
-	events             []string
-	tools              []toolHistoryEntry
-	completedToolCalls int
-	plan               string
-	step               PlanStep
-	planned            bool
-	cancel             context.CancelFunc
-	done               chan struct{}
-	ctx                context.Context
+	id                    string
+	workerID              string
+	revision              uint64
+	reviewed              bool
+	superseded            bool
+	accepted              bool
+	continued             bool
+	stopRequested         bool
+	reportDelivered       bool
+	input                 Input
+	parent                *Session
+	task                  string
+	status                string
+	started               time.Time
+	finished              time.Time
+	result                string
+	progress              string
+	events                []string
+	tools                 []toolHistoryEntry
+	completedToolCalls    int
+	lastReportedToolCount int
+	midJobReports         int
+	plan                  string
+	step                  PlanStep
+	planned               bool
+	cancel                context.CancelFunc
+	done                  chan struct{}
+	ctx                   context.Context
 }
 
 // SubAgentEvent is one automatic report injected into the planner session:
@@ -354,15 +367,78 @@ func (m *subAgentManager) emitTrace(job *subAgentJob, event TraceEvent) {
 	sink(SubAgentEvent{Parent: job.parent, JobID: job.id, Status: job.status, PlanStep: job.step, PlanRevision: job.revision, Input: cloneInputRoute(job.input), Trace: &trace})
 }
 
-// emitProgress sends a scope-check report every configured number of
-// completed worker tool calls (REQ-019).
+// shouldReportProgress is the hybrid milestone plus anomaly gate: a mid-job
+// progress report is emitted only for milestone tools (write_file, edit_file,
+// bash), for anomalies (two errors in a row, or the backstop interval of
+// completed tools since the last report), and only while midJobReports stays
+// below the configured cap. The caller must hold m.mu.
+func (m *subAgentManager) shouldReportProgress(job *subAgentJob) bool {
+	max := m.cfg.maxMidJobReports()
+	if job.midJobReports >= max {
+		return false
+	}
+	if job.completedToolCalls <= job.lastReportedToolCount {
+		return false
+	}
+	if isMilestoneTool(lastCompletedToolName(job)) {
+		return true
+	}
+	if lastTwoCompletedAreErrors(job) {
+		return true
+	}
+	return job.completedToolCalls-job.lastReportedToolCount >= m.cfg.reportInterval()
+}
+
+func isMilestoneTool(name string) bool {
+	switch name {
+	case "write_file", "edit_file", "bash":
+		return true
+	default:
+		return false
+	}
+}
+
+func lastCompletedToolName(job *subAgentJob) string {
+	for i := len(job.tools) - 1; i >= 0; i-- {
+		if job.tools[i].completed {
+			return job.tools[i].Name
+		}
+	}
+	return ""
+}
+
+func lastTwoCompletedAreErrors(job *subAgentJob) bool {
+	seen := 0
+	for i := len(job.tools) - 1; i >= 0; i-- {
+		if !job.tools[i].completed {
+			continue
+		}
+		if !job.tools[i].IsError {
+			return false
+		}
+		seen++
+		if seen >= 2 {
+			return true
+		}
+	}
+	return false
+}
+
+// emitProgress sends a scope-check report gated by shouldReportProgress
+// (REQ-019): milestone tools, anomaly signals, or the backstop interval.
 func (m *subAgentManager) emitProgress(job *subAgentJob) {
 	m.mu.Lock()
 	if job.status != "running" || job.reportDelivered {
 		m.mu.Unlock()
 		return
 	}
+	if !m.shouldReportProgress(job) {
+		m.mu.Unlock()
+		return
+	}
 	report := m.progressLocked(job)
+	job.lastReportedToolCount = job.completedToolCalls
+	job.midJobReports++
 	input := cloneInputRoute(job.input)
 	m.mu.Unlock()
 	m.eventMu.RLock()
@@ -379,20 +455,44 @@ func (m *subAgentManager) progressLocked(job *subAgentJob) string {
 	if job.planned {
 		stepLabel = fmt.Sprintf("plan revision %d step %d", job.revision, job.step.Index)
 	}
+	delta := job.completedToolCalls - job.lastReportedToolCount
+	if delta < 0 {
+		delta = 0
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "job=%s running for %s (%s)\ntask: %s\n", job.id, time.Since(job.started).Round(time.Second), stepLabel, job.task)
-	if len(job.tools) == 0 {
-		b.WriteString("tools so far: none\n")
+	fmt.Fprintf(&b, "job=%s status=running completed=%d new=%d (%s)\ntask: %s\n", job.id, job.completedToolCalls, delta, stepLabel, job.task)
+	var completed []toolHistoryEntry
+	var running []toolHistoryEntry
+	for _, tool := range job.tools {
+		if tool.completed {
+			completed = append(completed, tool)
+		} else {
+			running = append(running, tool)
+		}
+	}
+	start := len(completed) - delta
+	if start < 0 {
+		start = 0
+	}
+	if delta == 0 && len(running) == 0 {
+		b.WriteString("tools since last report: none\n")
 	} else {
-		for i, tool := range job.tools {
-			status := "running"
-			if tool.completed {
-				status = "ok"
-				if tool.IsError {
-					status = "error"
-				}
+		for i, tool := range completed[start:] {
+			status := "ok"
+			if tool.IsError {
+				status = "error"
 			}
-			line := fmt.Sprintf("%d. %s [%s]", i+1, tool.Name, status)
+			line := fmt.Sprintf("%d. %s [%s]", job.lastReportedToolCount+i+1, tool.Name, status)
+			if args := oneLineText(tool.Arguments); args != "" && args != "{}" {
+				line += " " + truncateRunes(args, subAgentProgressArgsRunes)
+			}
+			if res := oneLineText(tool.Result); res != "" {
+				line += " result=" + truncateRunes(res, subAgentProgressResultRunes)
+			}
+			b.WriteString(line + "\n")
+		}
+		for _, tool := range running {
+			line := fmt.Sprintf("running: %s", tool.Name)
 			if args := oneLineText(tool.Arguments); args != "" && args != "{}" {
 				line += " " + truncateRunes(args, subAgentProgressArgsRunes)
 			}
@@ -461,7 +561,6 @@ func (m *subAgentManager) runWorker(ctx context.Context, job *subAgentJob) (Resp
 	}
 	workerAgent := &Agent{Client: m.agent.Client, Tools: m.agent.Tools, MaxRetries: m.agent.MaxRetries, DisablePlanning: true, SubAgentConfig: SubAgentConfig{Enabled: false}}
 	req := Request{Provider: ProviderID(provider), Model: model, SystemPrompt: prompt, MaxOutputTokens: m.cfg.MaxOutputTokens, ThinkingLevel: worker.Config().ThinkingLevel, Temperature: worker.Config().Temperature}
-	interval := m.cfg.reportInterval()
 	trace := func(_ context.Context, event TraceEvent) {
 		m.mu.Lock()
 		before := job.completedToolCalls
@@ -470,7 +569,7 @@ func (m *subAgentManager) runWorker(ctx context.Context, job *subAgentJob) (Resp
 		if message != "" {
 			job.events = append(job.events, message)
 		}
-		progress := event.Stage == TraceToolResult && job.completedToolCalls > 0 && job.completedToolCalls == before+1 && job.completedToolCalls%interval == 0
+		progress := event.Stage == TraceToolResult && job.completedToolCalls == before+1 && m.shouldReportProgress(job)
 		m.mu.Unlock()
 		m.emitTrace(job, TraceEvent{Stage: event.Stage, Message: event.Message, Response: cloneResponsePtr(event.Response), ToolCall: cloneToolCallPtr(event.ToolCall), ToolResult: cloneToolResultPtr(event.ToolResult), Text: event.Text, Err: event.Err, RetryAfter: event.RetryAfter, Elapsed: event.Elapsed, RequestStartedMs: event.RequestStartedMs, ProviderAcceptedMs: event.ProviderAcceptedMs, AtMs: event.AtMs})
 		if progress {

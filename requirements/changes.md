@@ -446,3 +446,16 @@ Reason: Live Discord turns must upload worker-requested files via the existing S
 Impact: tools/attachments.go (send handler), tools/registry.go (registration), sdk/loop.go (drain+stamp), tools/attachments_test.go (store interface conformance); no canonical Turn/ContentPart change
 Validation: `go test ./sdk ./tools ./transport/discord -count=1`; `go vet ./sdk ./tools ./transport/discord`
 Status: accepted
+
+CHANGE-034
+
+Date: 2026-09-16
+Type: revise
+Request: Implement hybrid milestone plus anomaly-gated reporting in sdk/subagent.go, no more fixed-interval progress spam
+Conflict: REQ-019/021 (fixed progress every X tool calls, X default 5)
+Previous: progress report ทุก X completed worker tool calls (X จาก config `sub_agent.report_every_tool_calls` ค่าเริ่มต้น 5) แบบ fixed modulo; progress report แสดง tools ทั้งหมดตั้งแต่ต้นพร้อม args ย่อ ไม่มี result excerpt
+New: REQ-019 hybrid reporting — progress report ถูก gate ด้วย shouldReportProgress: ปล่อยเฉพาะ milestone tools (write_file/edit_file/bash) หรือ anomaly (error สองครั้งติด หรือครบ backstop interval นับจาก report ล่าสุด) และจำกัดไม่เกิน MaxMidJobReports (default 3) ครั้งต่อ job; defaultSubAgentReportInterval เปลี่ยน 5 → 20 เป็น safety backstop โดย ReportEveryToolCalls ยัง override ได้; progressLocked เป็น delta-only (เฉพาะ tools ใหม่นับจาก lastReportedToolCount) พร้อม 1-line status header (completed/new counts) และ result excerpt ตัดที่ 300 runes; heartbeat ผ่าน trace sink, one-job-per-parent, stop/follow_up และ final handoff ไม่เปลี่ยน
+Reason: fixed-interval ทุก 5 calls ส่ง progress บ่อยเกิน เปลือง context ของ planner; milestone + anomaly จับจุดที่ planner ต้องตรวจ scope จริง (ไฟล์เปลี่ยน/คำสั่งรัน/ความล้มเหลวติดกัน) ส่วน backstop 20 กันงานเงียบยาวโดยไม่รายงาน
+Impact: sdk/subagent.go (SubAgentConfig.MaxMidJobReports, job lastReportedToolCount/midJobReports, shouldReportProgress, delta progressLocked), sdk/session_workspace_test.go (default 20), requirements/functional.md REQ-019, requirements/changes.md
+Validation: `go test ./sdk -count=1`; `go vet ./sdk`
+Status: accepted

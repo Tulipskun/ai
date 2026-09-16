@@ -55,11 +55,14 @@ func TestSetWorkspaceRequiresAbsolutePath(t *testing.T) {
 }
 
 func TestSubAgentReportIntervalDefaults(t *testing.T) {
-	if got := (SubAgentConfig{}).reportInterval(); got != 5 {
+	if got := (SubAgentConfig{}).reportInterval(); got != 20 {
 		t.Fatalf("default interval=%d", got)
 	}
 	if got := (SubAgentConfig{ReportEveryToolCalls: 3}).reportInterval(); got != 3 {
 		t.Fatalf("configured interval=%d", got)
+	}
+	if got := (SubAgentConfig{}).maxMidJobReports(); got != 3 {
+		t.Fatalf("default max mid-job reports=%d", got)
 	}
 }
 

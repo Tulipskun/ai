@@ -169,10 +169,26 @@ func (c *Client) ListModels(ctx context.Context, apiKey string) ([]sdk.Model, er
 	return models, nil
 }
 
+// buildResponsesRequest mirrors openai.BuildResponsesRequest but carries the
+// system prompt as the leading developer input item instead of the
+// "instructions" field: Zen rejects large instructions payloads, while the
+// real opencode client sends its system prompt as input items.
+func buildResponsesRequest(req sdk.Request) map[string]any {
+	b := openai.BuildResponsesRequest(req)
+	sys, _ := b["instructions"].(string)
+	delete(b, "instructions")
+	if sys == "" {
+		return b
+	}
+	input, _ := b["input"].([]any)
+	b["input"] = append([]any{map[string]any{"type": "message", "role": "developer", "content": sys}}, input...)
+	return b
+}
+
 func (c *Client) Generate(ctx context.Context, req sdk.Request) (sdk.Response, error) {
 	sid := c.sessionID(req)
 	var r openai.ResponsesResponse
-	if err := internal.DoJSON(ctx, c.http(), http.MethodPost, c.BaseURL+"/responses", c.headers(sid), openai.BuildResponsesRequest(req), &r); err == nil {
+	if err := internal.DoJSON(ctx, c.http(), http.MethodPost, c.BaseURL+"/responses", c.headers(sid), buildResponsesRequest(req), &r); err == nil {
 		return openai.ParseResponsesResponse(r), nil
 	} else if !shouldTryChat(err) {
 		return sdk.Response{}, err
@@ -231,7 +247,7 @@ func (c *Client) streamResponses(ctx context.Context, req sdk.Request, sid strin
 			*emitted = true
 		}
 	}
-	return internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/responses", c.headers(sid), openai.BuildResponsesRequest(req), func(data []byte) error {
+	return internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/responses", c.headers(sid), buildResponsesRequest(req), func(data []byte) error {
 		var e struct {
 			Type  string `json:"type"`
 			Delta string `json:"delta"`

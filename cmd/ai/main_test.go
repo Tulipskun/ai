@@ -105,3 +105,12 @@ func TestDefaultPromptRequiresProportionalEffort(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultSystemPromptShortCircuitsNonTasks(t *testing.T) {
+	prompt := defaultSystemPrompt(nil)
+	for _, want := range []string{"needs no tools, no repository context, and no task to complete", "do not create a plan, do not delegate, do not investigate"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("main default missing non-task short-circuit %q", want)
+		}
+	}
+}

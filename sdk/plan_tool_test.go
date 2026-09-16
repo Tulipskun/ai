@@ -150,3 +150,9 @@ func TestPlanningGuidanceRequiresProportionalEffort(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanningGuidanceShortCircuitsNonTasks(t *testing.T) {
+	if !strings.Contains(planningSystemInstruction, "no tool calls and no plan") {
+		t.Fatal("planner must answer non-task messages directly without planning")
+	}
+}

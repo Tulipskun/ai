@@ -281,3 +281,23 @@ func TestStreamFallsBackToChat(t *testing.T) {
 		t.Fatalf("must fall back to chat stream: %v", hits)
 	}
 }
+
+func TestResponsesBodyUsesDeveloperInput(t *testing.T) {
+	req := newResponsesBodyRequest()
+	body := buildResponsesRequest(req)
+	if _, ok := body["instructions"]; ok {
+		t.Fatal("responses body must not use the instructions field")
+	}
+	items, ok := body["input"].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("input items = %v", body["input"])
+	}
+	first, ok := items[0].(map[string]any)
+	if !ok || first["role"] != "developer" || first["content"] != "sys" {
+		t.Fatalf("first input must be the developer system prompt: %v", items[0])
+	}
+}
+
+func newResponsesBodyRequest() sdk.Request {
+	return sdk.Request{Model: "m", SystemPrompt: "sys", Messages: []sdk.Turn{{Role: sdk.RoleUser, Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "hi"}}}}}
+}

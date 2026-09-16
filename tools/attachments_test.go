@@ -1116,3 +1116,25 @@ func pdfContentStream(t *testing.T, content string) []byte {
 	}
 	return buffer.Bytes()
 }
+
+func TestAllToolSchemasMarshalWithoutNulls(t *testing.T) {
+	registry, err := NewRegistry(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, def := range registry.Definitions() {
+		data, err := json.Marshal(def.InputSchema)
+		if err != nil {
+			t.Fatalf("%s schema does not marshal: %v", def.Name, err)
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(data, &schema); err != nil {
+			t.Fatalf("%s schema is not an object: %s", def.Name, data)
+		}
+		props, ok := schema["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s schema properties must marshal to an object, got: %s", def.Name, data)
+		}
+		_ = props
+	}
+}

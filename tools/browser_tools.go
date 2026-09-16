@@ -75,6 +75,9 @@ func decodeJSON[T any](raw json.RawMessage) (any, error) {
 }
 
 func browserSchema(properties map[string]any, required []string) map[string]any {
+	if properties == nil {
+		properties = map[string]any{}
+	}
 	schema := map[string]any{"type": "object", "properties": properties}
 	if len(required) > 0 { schema["required"] = required }
 	return schema

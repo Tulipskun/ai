@@ -407,3 +407,29 @@ Reason: ดัก traffic opencode ตัวจริงผ่าน logging pro
 Impact: sdk/providers/openai (export ResponsesResponse), sdk/providers/opencode (Generate/Stream fallback), tests
 Validation: unit (responses ตรง, 404/500→chat, 429 ไม่ fallback, fingerprint ครบทั้งสองเส้น, stream fallback); live ผ่าน adapter จริงทั้ง spark + mimo; `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-031
+
+Date: 2026-09-16
+Type: revise
+Request: sub agent โดน 400 (Invalid JSON schema: null is not of type "object" ที่ parameters) ทั้งที่ schema ถูกต้อง
+Conflict: none (แก้ให้ส่งค่าถูกต้องตามที่ provider ต้องการ; ไม่เปลี่ยน tool semantics)
+Previous: browserSchema(nil, nil) ของ list_attachments serialize เป็น "properties":null และ system prompt 78KB ถูกส่งในฟิลด์ instructions — Zen /responses ตอบ 400 ทั้งสองกรณี (ย้ำด้วย live: dev-input ผ่าน, dummy-size ผ่าน)
+New: browserSchema แปลง properties=nil เป็น {} เสมอ (ครอบคลุม list_attachments และ browser_list_pages); adapter opencode ส่ง system prompt เป็น developer input item แรกแทนฟิลด์ instructions (ตรงกับ opencode ตัวจริงที่ดักได้)
+Reason: null properties ทำให้ทุก turn ที่มี tools ของ worker/main พังทั้งหมดบน Zen; instructions ก้อนใหญ่ถูกปฏิเสธแยกอีกชั้น
+Impact: tools/browser_tools.go, sdk/providers/opencode (buildResponsesRequest), tests ทั้งสองชั้น
+Validation: unit (marshal ไม่มี null; body ไม่มี instructions + มี developer item แรก); live: list_attachments เดี่ยว 200, worker เต็ม (prompt 78KB + 13 tools) 200; `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
+Status: accepted
+
+CHANGE-032
+
+Date: 2026-09-16
+Type: revise
+Request: แค่ Hi ไปอย่างเดียวแต่มัน plan อะไรก็ไม่รู้ — ปรับ system prompt ให้เป็นระบบมากกว่านี้
+Conflict: REQ-016 (main ต้อง delegate/plan ทุกงาน — เพิ่มข้อยกเว้นข้อความที่ไม่ใช่งาน)
+Previous: Main Agent สร้างแผน/delegate แม้แต่คำทักทายที่ไม่มีงาน
+New: REQ-016 เพิ่ม — ข้อความที่ไม่ใช้ tools/context/งาน (greeting/thanks/ack/คำถามตอบตรงได้) ให้ตอบตรงทันที ไม่สร้างแผน ไม่ delegate ไม่ investigate; planning/delegation เริ่มเมื่อมีงานจริงเท่านั้น (prompt ทั้ง defaultSystemPrompt และ planningSystemInstruction)
+Reason: ทักทายแล้วโดน plan+delegate เปลือง, ช้า, และพังตามเมื่อ worker error — ไม่เป็นระบบ
+Impact: cmd/ai/main.go, sdk/plan_tool.go, requirements/functional.md (REQ-016)
+Validation: unit (prompt มี short-circuit rule ทั้งสองเส้น); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
+Status: accepted

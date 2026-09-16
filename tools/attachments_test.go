@@ -911,6 +911,11 @@ func (s *fakeAttachmentStore) Manifest(ctx context.Context, sessionKey string) (
 	return s.manifest, nil
 }
 
+func (s *fakeAttachmentStore) PutWithContentType(ctx context.Context, sessionKey, name, contentType string, r io.Reader) (filestore.Ref, error) {
+	s.calls = append(s.calls, "PutWithContentType:"+sessionKey+":"+name)
+	return filestore.Ref{}, filestore.ErrNotFound
+}
+
 func TestAttachmentToolsWorkAgainstAnInjectedFake(t *testing.T) {
 	registry, err := NewRegistry(t.TempDir())
 	if err != nil {
@@ -1003,6 +1008,11 @@ func (s *sessionRecordingStore) Get(ctx context.Context, sessionKey, refID strin
 func (s *sessionRecordingStore) Manifest(ctx context.Context, sessionKey string) (filestore.Manifest, error) {
 	s.record(sessionKey)
 	return s.inner.Manifest(ctx, sessionKey)
+}
+
+func (s *sessionRecordingStore) PutWithContentType(ctx context.Context, sessionKey, name, contentType string, r io.Reader) (filestore.Ref, error) {
+	s.record(sessionKey)
+	return s.inner.PutWithContentType(ctx, sessionKey, name, contentType, r)
 }
 
 // mustFirstRefID returns one stored attachment id for a session.

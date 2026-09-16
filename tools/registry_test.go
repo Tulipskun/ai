@@ -17,14 +17,14 @@ func TestRegistryDefinitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	defs := r.Definitions()
-	if len(defs) != 14 {
+	if len(defs) != 15 {
 		t.Fatalf("definitions=%d", len(defs))
 	}
 	seen := map[string]bool{}
 	for _, d := range defs {
 		seen[d.Name] = true
 	}
-	for _, name := range []string{"read_file", "read_files", "write_file", "edit_file", "list_directory", "search_files", "bash", "run_job", "check_job", "close_job", "web_fetch", "list_attachments", "read_attachment", "describe_attachment"} {
+	for _, name := range []string{"read_file", "read_files", "write_file", "edit_file", "list_directory", "search_files", "bash", "run_job", "check_job", "close_job", "web_fetch", "list_attachments", "read_attachment", "describe_attachment", "send_attachment"} {
 		if !seen[name] {
 			t.Fatalf("missing %s", name)
 		}
@@ -38,7 +38,7 @@ func TestRegistryBrowserDefinitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	defs := r.Definitions()
-	if len(defs) != 27 {
+	if len(defs) != 28 {
 		t.Fatalf("definitions=%d", len(defs))
 	}
 	seen := map[string]bool{}

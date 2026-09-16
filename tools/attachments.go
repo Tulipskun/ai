@@ -53,6 +53,7 @@ type AttachmentStore interface {
 	List(ctx context.Context, sessionKey string) ([]filestore.Meta, error)
 	Get(ctx context.Context, sessionKey, refID string) (io.ReadCloser, filestore.Meta, error)
 	Manifest(ctx context.Context, sessionKey string) (filestore.Manifest, error)
+	PutWithContentType(ctx context.Context, sessionKey, name, contentType string, r io.Reader) (filestore.Ref, error)
 }
 
 // attachmentFile is the only file shape an attachment tool puts in front of the
@@ -290,6 +291,50 @@ func (r *Registry) describeAttachmentHandler() handler {
 			result.Notes = append(result.Notes, "attachment tools read metadata only for this kind; no standard-library decoder summarises it")
 		}
 		return encodeAttachmentResult(result)
+	}
+}
+
+// sendAttachmentArgs names the opaque reference the worker wants uploaded.
+// The session key is never an argument; it always comes from the tool context.
+type sendAttachmentArgs struct {
+	RefID string `json:"ref_id"`
+}
+
+// sendAttachmentHandler validates one opaque reference against the current
+// session's store and records an outbound upload intent (REQ-026). It returns
+// a short confirmation only; file bytes never enter the result.
+func (r *Registry) sendAttachmentHandler() handler {
+	return func(ctx context.Context, raw json.RawMessage) (string, error) {
+		var args sendAttachmentArgs
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		store, err := r.attachmentStore()
+		if err != nil {
+			return "", err
+		}
+		sessionID, err := attachmentSession(ctx)
+		if err != nil {
+			return "", err
+		}
+		refID := strings.TrimSpace(args.RefID)
+		if refID == "" {
+			return "", errors.New("ref_id is required")
+		}
+		if !attachmentRefIDValid(refID) {
+			return "", fmt.Errorf("invalid attachment reference %q", refID)
+		}
+		reader, meta, err := store.Get(ctx, sessionID, refID)
+		if err != nil {
+			return "", err
+		}
+		reader.Close()
+		sdk.RecordOutboundAttachment(sessionID, meta.ID)
+		label := strings.TrimSpace(meta.ContentType)
+		if label == "" {
+			label = "unknown content type"
+		}
+		return fmt.Sprintf("attachment %q (%s, %d bytes) queued for upload", meta.Name, label, meta.Size), nil
 	}
 }
 

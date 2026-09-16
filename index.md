@@ -44,6 +44,7 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 | File tools incl. batch read | `tools/files.go` |
 | Shell / jobs / fetch / browser | `tools/command.go`, `tools/jobs.go`, `tools/web_fetch.go`, `tools/browser_tools.go` |
 | Attachment file store tools | `tools/attachments.go` |
+| Outbound file-send intents (worker → transport) | `sdk/outbound_attachments.go` |
 | Runtime config + session manager | `runtime/session_manager.go`, `runtime/*.go` |
 | Discord transport + trace display | `transport/discord/gateway.go`, `transport/discord/actor_trace_display.go` |
 

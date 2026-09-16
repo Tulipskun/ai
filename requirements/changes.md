@@ -433,3 +433,16 @@ Reason: ทักทายแล้วโดน plan+delegate เปลือง
 Impact: cmd/ai/main.go, sdk/plan_tool.go, requirements/functional.md (REQ-016)
 Validation: unit (prompt มี short-circuit rule ทั้งสองเส้น); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-033
+
+Date: 2026-09-16
+Type: add
+Request: Complete worker-produced Discord file send producer in SDK output path
+Conflict: none (implements outbound leg of REQ-026; transport SendFiles path already exists)
+Previous: `sdk/outbound_attachments.go` tracker existed with no producer or consumer wiring; no `send_attachment` worker tool; `HarnessLoop.Entry` never stamped outbound ids into `Output.Metadata`
+New: Worker tool `send_attachment` (ref_id only) validates the opaque reference via session-scoped store Get, then records intent with `sdk.RecordOutboundAttachment` capped at `MaxOutboundAttachmentIDs` (10); `HarnessLoop.Entry` drains via `TakeOutboundAttachmentIDs` after the agent turn and stamps `Output.Metadata[out_attachment_ids]` (comma-joined, merged, per-turn dedup); confirmation text is short only, no bytes on the canonical text path
+Reason: Live Discord turns must upload worker-requested files via the existing SendFiles path without leaking bytes/base64 through SDK text or planner context
+Impact: tools/attachments.go (send handler), tools/registry.go (registration), sdk/loop.go (drain+stamp), tools/attachments_test.go (store interface conformance); no canonical Turn/ContentPart change
+Validation: `go test ./sdk ./tools ./transport/discord -count=1`; `go vet ./sdk ./tools ./transport/discord`
+Status: accepted

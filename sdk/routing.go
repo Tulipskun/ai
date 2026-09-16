@@ -112,11 +112,21 @@ func filterFreeModels(models []Model, freeOnly bool) []Model {
 	}
 	out := make([]Model, 0, len(models))
 	for _, model := range models {
-		if strings.HasSuffix(strings.ToLower(strings.TrimSpace(model.ID)), "-free") {
+		if isFreeModelID(model.ID) {
 			out = append(out, model)
 		}
 	}
 	return out
+}
+// isFreeModelID matches the free-tier naming of the gateways in use:
+// "-free" suffix (opencode Zen), ":free" suffix (OpenRouter-style,
+// e.g. NousResearch) and "free/" prefix used by some providers.
+func isFreeModelID(id string) bool {
+	id = strings.ToLower(strings.TrimSpace(id))
+	if id == "" {
+		return false
+	}
+	return strings.HasSuffix(id, "-free") || strings.HasSuffix(id, ":free") || strings.HasPrefix(id, "free/")
 }
 func (r *Router) Models(provider ProviderID) []Model {
 	r.mu.RLock()

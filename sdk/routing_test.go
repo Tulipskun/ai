@@ -42,14 +42,20 @@ func TestSessionPinsKeyIndex(t *testing.T) {
 }
 
 func TestFilterFreeModels(t *testing.T) {
-	models := []Model{{ID: "gpt-5"}, {ID: "hy3-free"}, {ID: "QWEN-FREE"}, {ID: ""}}
+	models := []Model{{ID: "gpt-5"}, {ID: "hy3-free"}, {ID: "QWEN-FREE"}, {ID: "stepfun/step-3.7-flash:free"}, {ID: "Free/qwen-3"}, {ID: "freebie"}, {ID: "gpt-5-free-tier"}, {ID: ""}}
 	got := filterFreeModels(models, false)
 	if len(got) != len(models) {
 		t.Fatalf("disabled filter should pass through: %d", len(got))
 	}
 	got = filterFreeModels(models, true)
-	if len(got) != 2 || got[0].ID != "hy3-free" || got[1].ID != "QWEN-FREE" {
-		t.Fatalf("free filter = %+v", got)
+	want := []string{"hy3-free", "QWEN-FREE", "stepfun/step-3.7-flash:free", "Free/qwen-3"}
+	if len(got) != len(want) {
+		t.Fatalf("free filter = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i].ID != want[i] {
+			t.Fatalf("free filter = %+v, want %+v", got, want)
+		}
 	}
 	if got := filterFreeModels([]Model{{ID: "gpt-5"}}, true); len(got) != 0 {
 		t.Fatalf("expected empty catalog, got %+v", got)

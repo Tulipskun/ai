@@ -42,7 +42,7 @@ func (h *ProviderSettingsHandler) modalData() *discordgo.InteractionResponseData
 			discordgo.Label{Label: "Adapter", Description: "Protocol adapter", Component: discordgo.SelectMenu{CustomID: "adapter", MenuType: discordgo.StringSelectMenu, Placeholder: "Select adapter", Options: options, Required: boolPtr(true)}},
 			discordgo.Label{Label: "URL", Description: "Provider API base URL", Component: discordgo.TextInput{CustomID: "url", Style: discordgo.TextInputShort, Placeholder: "https://api.example.com/v1", Required: boolPtr(true), MaxLength: 500}},
 			discordgo.Label{Label: "API Key", Description: "Provider API key", Component: discordgo.TextInput{CustomID: "api_key", Style: discordgo.TextInputShort, Placeholder: "API key", Required: boolPtr(true), MaxLength: 500}},
-			discordgo.Label{Label: "Free only", Description: "true keeps only -free models", Component: discordgo.TextInput{CustomID: "free_only", Style: discordgo.TextInputShort, Placeholder: "false", Required: boolPtr(false), MaxLength: 5}},
+			discordgo.Label{Label: "Free only", Description: "true keeps only free models (-free, :free, free/)", Component: discordgo.TextInput{CustomID: "free_only", Style: discordgo.TextInputShort, Placeholder: "false", Required: boolPtr(false), MaxLength: 5}},
 		},
 	}
 }

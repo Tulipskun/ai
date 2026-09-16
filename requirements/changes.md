@@ -368,3 +368,16 @@ Reason: log มีแค่ 2 อาการใน channel นั้น: (1) �
 Impact: sdk/providers/internal (http.go default UA), transport/discord (provider_settings.go truncate+log), tests ที่เกี่ยวข้อง
 Validation: unit (default UA, explicit UA ชนะ, truncate ≤2000 + log เต็ม); live: Nous /models 200 ด้วย UA ใหม่ผ่าน curl; `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-028
+
+Date: 2026-09-16
+Type: revise
+Request: ของ nousresearch ใช้คำว่า :free มันจะกรองได้มั้ย แถมบางเจ้าใช้ free/model_name อีก
+Conflict: none (ขยาย matching เดิมที่ระบุแค่ -free ใน modal; ไม่มี REQ ล็อก suffix ไว้)
+Previous: free_only เก็บเฉพาะ id ลงท้าย -free (opencode Zen)
+New: free_only เก็บ id ที่ลงท้าย -free (Zen) หรือ :free (OpenRouter-style เช่น NousResearch: stepfun/step-3.7-flash:free) หรือขึ้นต้น free/ (เช่น Free/qwen-3); เทียบแบบ case-insensitive หลัง trim space
+Reason: Nous มี free 7 รุ่นแต่ใช้ :free ต่อท้ายจึงถูกกรองทิ้งหมด; provider อื่นใช้ prefix free/
+Impact: sdk/routing.go (isFreeModelID), discord provider modal description, sdk/routing_test.go
+Validation: unit (4 รูปแบบผ่าน, freebie/gpt-5-free-tier/empty ถูกทิ้ง); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
+Status: accepted

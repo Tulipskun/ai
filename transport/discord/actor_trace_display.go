@@ -198,6 +198,9 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 		})
 	case sdk.TraceRetryWait:
 		text := "↻ retrying request"
+		if trace.Err != nil {
+			text += " (" + safeErrorSummary(trace.Err) + ")"
+		}
 		if trace.RetryAfter > 0 {
 			text += " in " + formatDuration(trace.RetryAfter)
 		}

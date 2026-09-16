@@ -375,3 +375,18 @@ func TestActorTraceAcceptedDroppedWhenOtherLinesExist(t *testing.T) {
 		t.Fatalf("old container still holds the accepted marker: %s", last)
 	}
 }
+
+func TestActorTraceRetryShowsReason(t *testing.T) {
+	g := &Gateway{}
+	_ = newV2Capture(g)
+	resetActorTrace()
+	ctx := context.Background()
+	chKey, key := actorKeys(g, "c1", "main", "")
+	if err := g.displayActorTrace(ctx, "c1", chKey, key, "main", "", sdk.TraceEvent{Stage: sdk.TraceRetryWait, Err: displayHTTPError{429}, RetryAfter: 17 * time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	line := actorTraceStates[key].items[len(actorTraceStates[key].items)-1]
+	if !strings.Contains(line, "retrying request") || !strings.Contains(line, "rate limited") || !strings.Contains(line, "429") {
+		t.Fatalf("retry line must name the reason: %q", line)
+	}
+}

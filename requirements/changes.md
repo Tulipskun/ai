@@ -381,3 +381,16 @@ Reason: Nous มี free 7 รุ่นแต่ใช้ :free ต่อท้�
 Impact: sdk/routing.go (isFreeModelID), discord provider modal description, sdk/routing_test.go
 Validation: unit (4 รูปแบบผ่าน, freebie/gpt-5-free-tier/empty ถูกทิ้ง); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-029
+
+Date: 2026-09-16
+Type: revise
+Request: มันขึ้น retry แต่ไม่รู้ว่า retry ด้วยเหตุผลอะไร
+Conflict: none (เติมเหตุผลในบรรทัดเดิม ไม่เปลี่ยน layout; คง REQ-022 ที่ห้าม raw result — เหตุผลผ่าน safeErrorSummary ที่ strip อยู่แล้ว)
+Previous: actor trace (Components V2) แสดงแค่ "↻ retrying request [in Xs]" ไม่มีสาเหตุ (legacy path มีอยู่แล้ว)
+New: บรรทัด retry ของ actor trace แสดงเหตุผลด้วย: "↻ retrying request (<safe summary>) [in Xs]" เช่น rate limited (HTTP 429), authorization failed (HTTP 401/403), service error (HTTP xxx)
+Reason: ผู้ใช้เห็น retry แต่แยกไม่ออกว่า key ผิด / โดน rate limit / server ล่ม
+Impact: transport/discord (actor_trace_display.go + test)
+Validation: unit (reason ปรากฏ, timing ครบ); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
+Status: accepted

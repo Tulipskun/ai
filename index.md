@@ -5,6 +5,9 @@ skip 5-10 discovery calls (`list_directory` / `search_files` loops).
 For file content, prefer the batch tool `read_files` over repeated
 `read_file`: one call returns every file in a single history group,
 which the context window (`sdk/context_window.go`) never splits.
+Before any code change read this file plus relevant requirements; after any
+code change update this file when structure or key files changed and update
+requirements plus `requirements/changes.md` when behavior or spec changed.
 
 ## Top-level tree
 

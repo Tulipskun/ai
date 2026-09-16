@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -66,6 +67,21 @@ func TestParseResponsePreservesReasoning(t *testing.T) {
 	got := parseResponse(r)
 	if got.Reasoning == nil || got.Reasoning.ID != "rs_123" || got.Reasoning.Text != "think" {
 		t.Fatalf("reasoning=%#v", got.Reasoning)
+	}
+}
+
+func TestParseChatResponsePreservesCachedTokens(t *testing.T) {
+	var r ChatResponse
+	body := `{"model":"m","choices":[{"message":{"content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"prompt_tokens_details":{"cached_tokens":80}}}`
+	if err := json.Unmarshal([]byte(body), &r); err != nil {
+		t.Fatal(err)
+	}
+	got := parseChatResponse(r)
+	if got.Usage.CacheReadTokens != 80 {
+		t.Fatalf("CacheReadTokens=%d, want 80", got.Usage.CacheReadTokens)
+	}
+	if !got.Cache.Hit || got.Cache.Layer != "provider" {
+		t.Fatalf("Cache=%+v, want hit on provider layer", got.Cache)
 	}
 }
 

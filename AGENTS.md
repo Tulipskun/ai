@@ -2,7 +2,9 @@
 
 ## Specification
 
-For all coding work in this repository, read `requirements/README.md` and the relevant files under `requirements/` before changing code.
+For all coding work in this repository, read `index.md` first, then `requirements/README.md` and the relevant files under `requirements/` before changing code.
+
+After any code change, update `index.md` when structure or key files changed and update `requirements/` plus `requirements/changes.md` when behavior or spec changed.
 
 Treat repository requirements as the source of truth for project behavior. Do not substitute model memory or chat history for the repository specification.
 

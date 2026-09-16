@@ -472,3 +472,16 @@ Reason: Long provider/tool turns need a quiet liveness signal without edit spam,
 Impact: transport/discord/actor_trace_display.go (heartbeat state, spinner helpers, throttle, typing, receipt, silent flags), requirements/functional.md (REQ-041), requirements/changes.md
 Validation: `go test ./transport/discord -count=1` and `go vet ./transport/discord`
 Status: accepted
+
+CHANGE-036
+
+Date: 2026-09-16
+Type: revise
+Request: Implement tool-call-only permanent Discord display immediately, no more discovery
+Conflict: REQ-041 (heartbeat working/retrying/count status plus token footer receipt)
+Previous: Per-actor V2 heartbeat status container with 4 states (working / using tools with count only / retrying / done with total seconds) plus collapsed receipt with token footer alongside the detailed trace
+New: REQ-041 — one permanent V2 status message per user turn listing only tool calls (latest 10 max, each line tool name + ok/error + elapsed seconds); no working/retrying text, no sub-agent content text, no args dump, no result excerpts, no per-second token footer; same message edited in place on each tool event throttled max 1 edit per 3s via existing heartbeatThrottleMs with ChannelTyping between edits; never send new progress messages; collapse to one-line receipt on completion; status edits use MessageFlagsSuppressNotifications, final answer ping unchanged; V2 path, pagination, accent colors, routing untouched
+Reason: Channel output must stay a quiet permanent tool list instead of status chatter; planner/worker detail stays in the detailed trace path
+Impact: transport/discord/actor_trace_display.go (heartbeat state/rows/throttle/receipt, tool event wiring, sub-agent content suppression), requirements/functional.md (REQ-041), requirements/changes.md
+Validation: `go test ./transport/discord -count=1` and `go vet ./transport/discord`
+Status: accepted

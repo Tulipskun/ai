@@ -27,20 +27,29 @@ const (
 // final answer path keeps its ping behavior unchanged.
 const heartbeatThrottleMs = 3000
 
-// heartbeatState tracks one actor's lightweight V2 status line.
+// heartbeatState tracks one permanent tool-call-only V2 status message per
+// user turn (REQ-041, CHANGE-036). The message lists only tool calls (latest
+// 10 max, name + ok/error + elapsed seconds); working/retrying text lines,
+// args dumps, result excerpts and per-second token footers are never rendered.
 type heartbeatState struct {
 	lastEdit  time.Time
 	toolCount int
 	retrying  bool
 	start     time.Time
 	messageID string
+	entries   []heartbeatToolEntry
 }
 
-func heartbeatWorkingText() string { return "⏳ working…" }
+// heartbeatToolEntry is one tool row in the permanent status message.
+type heartbeatToolEntry struct {
+	name       string
+	done       bool
+	isError    bool
+	elapsedSec int64
+}
 
-func heartbeatToolsText(count int) string { return fmt.Sprintf("🔧 using tools · %d", count) }
-
-func heartbeatRetryingText() string { return "↻ retrying…" }
+// heartbeatMaxTools caps the permanent message to the latest 10 tool calls.
+const heartbeatMaxTools = 10
 
 func heartbeatDoneText(totalSec int64) string {
 	if totalSec < 0 {
@@ -49,14 +58,22 @@ func heartbeatDoneText(totalSec int64) string {
 	return fmt.Sprintf("✅ done in %ds", totalSec)
 }
 
-func heartbeatStatusText(hb heartbeatState) string {
-	if hb.retrying {
-		return heartbeatRetryingText()
+// heartbeatToolLine renders one permanent tool row: name + ok/error +
+// elapsed seconds only. No args, no excerpts, no footers (CHANGE-036).
+func heartbeatToolLine(entry heartbeatToolEntry) string {
+	marker := "🔧"
+	status := "…"
+	if entry.done {
+		if entry.isError {
+			marker = "❌"
+			status = "error"
+		} else {
+			marker = "✅"
+			status = "ok"
+		}
+		return fmt.Sprintf("%s %s · %s · %ds", marker, entry.name, status, entry.elapsedSec)
 	}
-	if hb.toolCount > 0 {
-		return heartbeatToolsText(hb.toolCount)
-	}
-	return heartbeatWorkingText()
+	return fmt.Sprintf("%s %s · %s", marker, entry.name, status)
 }
 
 // heartbeatFlags marks status messages silent: V2 layout plus suppress,
@@ -105,43 +122,82 @@ func heartbeatEnsure(key string) *heartbeatState {
 	return hb
 }
 
-func heartbeatNoteTool(key string) {
+func heartbeatNoteTool(key, toolName string) {
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" {
+		toolName = "tool"
+	}
 	hb := heartbeatEnsure(key)
 	heartbeatMu.Lock()
 	hb.toolCount++
+	hb.retrying = false
+	hb.entries = append(hb.entries, heartbeatToolEntry{name: toolName})
+	if len(hb.entries) > heartbeatMaxTools {
+		hb.entries = append([]heartbeatToolEntry(nil), hb.entries[len(hb.entries)-heartbeatMaxTools:]...)
+	}
+	heartbeatMu.Unlock()
+}
+
+func heartbeatNoteResult(key, toolName string, isError bool, elapsedSec int64) {
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" {
+		toolName = "tool"
+	}
+	if elapsedSec < 0 {
+		elapsedSec = 0
+	}
+	hb := heartbeatEnsure(key)
+	heartbeatMu.Lock()
+	updated := false
+	for i := len(hb.entries) - 1; i >= 0; i-- {
+		if hb.entries[i].name == toolName && !hb.entries[i].done {
+			hb.entries[i].done = true
+			hb.entries[i].isError = isError
+			hb.entries[i].elapsedSec = elapsedSec
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		hb.entries = append(hb.entries, heartbeatToolEntry{name: toolName, done: true, isError: isError, elapsedSec: elapsedSec})
+		if len(hb.entries) > heartbeatMaxTools {
+			hb.entries = append([]heartbeatToolEntry(nil), hb.entries[len(hb.entries)-heartbeatMaxTools:]...)
+		}
+	}
 	hb.retrying = false
 	heartbeatMu.Unlock()
 }
 
 func heartbeatNoteRetry(key string) {
-	hb := heartbeatEnsure(key)
-	heartbeatMu.Lock()
-	hb.retrying = true
-	heartbeatMu.Unlock()
+	// Tool-call-only permanent message never renders retry text (CHANGE-036);
+	// keep counters only so throttling stays stable.
+	_ = heartbeatEnsure(key)
 }
 
-// heartbeatComponents renders the lightweight status container.
-func heartbeatComponents(label string, accent int, status string) []discordgo.MessageComponent {
+// heartbeatComponents renders the permanent tool-call-only container: label
+// plus latest tool rows only. No working/retrying lines, no args, no excerpts,
+// no footer (CHANGE-036).
+func heartbeatComponents(label string, accent int, entries []heartbeatToolEntry) []discordgo.MessageComponent {
 	color := accent
+	children := []discordgo.MessageComponent{
+		discordgo.TextDisplay{Content: "**" + label + "**"},
+	}
+	for _, entry := range entries {
+		children = append(children, discordgo.TextDisplay{Content: heartbeatToolLine(entry)})
+	}
 	return []discordgo.MessageComponent{discordgo.Container{
 		AccentColor: &color,
-		Components: []discordgo.MessageComponent{
-			discordgo.TextDisplay{Content: "**" + label + "**"},
-			discordgo.TextDisplay{Content: status},
-		},
+		Components:  children,
 	}}
 }
 
-// heartbeatReceiptComponents renders the collapsed one-line receipt plus the
-// token footer. No ticker is used anywhere in the heartbeat path.
-func heartbeatReceiptComponents(label string, accent int, doneLine, footer string) []discordgo.MessageComponent {
+// heartbeatReceiptComponents renders the collapsed one-line receipt. The token
+// footer is intentionally dropped (CHANGE-036).
+func heartbeatReceiptComponents(label string, accent int, doneLine string) []discordgo.MessageComponent {
 	color := accent
 	children := []discordgo.MessageComponent{
 		discordgo.TextDisplay{Content: "**" + label + "**"},
 		discordgo.TextDisplay{Content: doneLine},
-	}
-	if strings.TrimSpace(footer) != "" {
-		children = append(children, discordgo.TextDisplay{Content: "-# " + footer})
 	}
 	return []discordgo.MessageComponent{discordgo.Container{AccentColor: &color, Components: children}}
 }
@@ -200,11 +256,16 @@ func (g *Gateway) editHeartbeatV2(ctx context.Context, channelID, messageID stri
 // untouched. Without a live Discord session (offline tests) it only tracks
 // counters so existing trace message counts never change.
 func (g *Gateway) heartbeatRefresh(ctx context.Context, channelID, key, label string, accent int) error {
-	hb := heartbeatEnsure(key)
+	heartbeatEnsure(key)
 	heartbeatMu.Lock()
-	status := heartbeatStatusText(*hb)
-	messageID := hb.messageID
-	lastEdit := hb.lastEdit
+	var entries []heartbeatToolEntry
+	var messageID string
+	var lastEdit time.Time
+	if cur := heartbeatStates[key]; cur != nil {
+		entries = append([]heartbeatToolEntry(nil), cur.entries...)
+		messageID = cur.messageID
+		lastEdit = cur.lastEdit
+	}
 	heartbeatMu.Unlock()
 	now := time.Now()
 	if !heartbeatDue(now, lastEdit) {
@@ -219,7 +280,7 @@ func (g *Gateway) heartbeatRefresh(ctx context.Context, channelID, key, label st
 		heartbeatMu.Unlock()
 		return nil
 	}
-	components := heartbeatComponents(label, accent, status)
+	components := heartbeatComponents(label, accent, entries)
 	if messageID == "" {
 		id, err := g.sendHeartbeatV2(ctx, channelID, components)
 		if err != nil {
@@ -264,7 +325,7 @@ func (g *Gateway) heartbeatFinish(ctx context.Context, channelID, key, label str
 		heartbeatMu.Unlock()
 		return nil
 	}
-	components := heartbeatReceiptComponents(label, accent, doneLine, footer)
+	components := heartbeatReceiptComponents(label, accent, doneLine)
 	if messageID == "" {
 		id, err := g.sendHeartbeatV2(ctx, channelID, components)
 		if err != nil {
@@ -398,7 +459,6 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 			g.actorTraceBeginTurn(key)
 		}
 		heartbeatEnsure(key)
-		_ = g.heartbeatRefresh(ctx, channelID, key, label, accent)
 		return g.actorTraceAppend(ctx, channelID, chKey, key, "⏳ sending request to provider")
 	case sdk.TraceProviderReady:
 		return g.actorTraceUpdate(ctx, channelID, chKey, key, "⏳ provider accepted · "+formatDuration(eventProviderLatency(trace)), func(item string) bool {
@@ -409,6 +469,9 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 	case sdk.TraceResponseContent:
 		if trace.Response != nil {
 			g.countActorContentUsage(key, trace.Response.Usage)
+		}
+		if actor == "subagent" {
+			return nil
 		}
 		text := strings.TrimSpace(trace.Text)
 		if text == "" {
@@ -468,7 +531,7 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 			return nil
 		}
 		g.disarmActorDedupe(key)
-		heartbeatNoteTool(key)
+		heartbeatNoteTool(key, trace.ToolCall.Name)
 		_ = g.heartbeatRefresh(ctx, channelID, key, label, accent)
 		// The first tool of a response replaces that request's pending row:
 		// "provider accepted" is merged into the tool line (REQ-033).
@@ -488,6 +551,8 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 		if trace.ToolResult.IsError {
 			marker = "❌"
 		}
+		heartbeatNoteResult(key, trace.ToolCall.Name, trace.ToolResult.IsError, int64(eventElapsed(trace)/time.Second))
+		_ = g.heartbeatRefresh(ctx, channelID, key, label, accent)
 		return g.actorTraceUpdate(ctx, channelID, chKey, key, formatTraceToolLine(trace.ToolCall, marker, trace), func(item string) bool {
 			return strings.HasPrefix(item, "🔧 "+trace.ToolCall.Name)
 		})
@@ -500,7 +565,6 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 			text += " in " + formatDuration(trace.RetryAfter)
 		}
 		heartbeatNoteRetry(key)
-		_ = g.heartbeatRefresh(ctx, channelID, key, label, accent)
 		return g.actorTraceAppend(ctx, channelID, chKey, key, text)
 	case sdk.TraceResponse:
 		if trace.Response != nil {

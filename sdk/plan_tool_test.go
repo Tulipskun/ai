@@ -58,9 +58,10 @@ func (s *subAgentStub) Delegate(context.Context, string) (string, error) {
 	s.called = true
 	return "sa-test", nil
 }
-func (s *subAgentStub) Status(string) string  { return "status=running" }
-func (s *subAgentStub) History(string) string { return "history" }
-func (s *subAgentStub) Stop(string) bool      { return true }
+func (s *subAgentStub) Status(string) string { return "status=running" }
+func (s *subAgentStub) Stop(context.Context, string) (string, error) {
+	return "stopped", nil
+}
 
 func TestPlanningToolDefinition(t *testing.T) {
 	e := newPlanningToolExecutor(&planningTestExecutor{}, nil)
@@ -88,7 +89,7 @@ func TestMainAgentDefinitionsContainNoExecutionTools(t *testing.T) {
 	defs := e.Definitions()
 	for _, d := range defs {
 		switch d.Name {
-		case planningToolName, "delegate_to_subagent", "subagent_status", "subagent_history", "stop_subagent", "follow_up_subagent", "continue_subagent", "accept_subagent_result":
+		case planningToolName, "delegate_to_subagent", "stop_subagent", "follow_up_subagent", "continue_subagent", "accept_subagent_result":
 		default:
 			t.Fatalf("Main Agent exposed non-orchestration tool %q", d.Name)
 		}
@@ -102,7 +103,7 @@ Available tools:
 Project Requirements (repository source of truth):
 - search_files must respect workspace boundaries.
 Unrelated custom instructions after the requirements must survive.`
-	got := planningSystemPrompt(base)
+	got := planningSystemPrompt(base, PlanState{})
 	if !strings.HasPrefix(got, base+"\n\n") {
 		t.Fatalf("context was modified: %s", got)
 	}
@@ -110,6 +111,23 @@ Unrelated custom instructions after the requirements must survive.`
 		if !strings.Contains(got, want) {
 			t.Fatalf("role boundary missing %q: %s", want, got)
 		}
+	}
+}
+
+func TestPlanningPromptInjectsChecklist(t *testing.T) {
+	plan := PlanState{Revision: 2, Steps: []PlanStep{
+		{Index: 1, Text: "inspect A", Status: "completed"},
+		{Index: 2, Text: "implement B", Status: "ready"},
+		{Index: 3, Text: "verify C", Status: "pending"},
+	}}
+	got := planningSystemPrompt("base", plan)
+	for _, want := range []string{"[x] 1. inspect A (completed)", "[>] 2. implement B (ready)", "[ ] 3. verify C (pending)", "you own these statuses"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("checklist injection missing %q: %s", want, got)
+		}
+	}
+	if strings.Contains(planningSystemPrompt("base", PlanState{}), "Current checklist") {
+		t.Fatal("empty plan must not inject a checklist")
 	}
 }
 

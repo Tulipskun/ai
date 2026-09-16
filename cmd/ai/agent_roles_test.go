@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Tulipskun/ai/sdk"
 )
@@ -93,18 +92,19 @@ func TestDelegatedWorkerRetainsRealToolsAndContext(t *testing.T) {
 			if err := session.SetPlan([]string{"inspect the fixture", "report findings"}); err != nil {
 				t.Fatal(err)
 			}
-			done := make(chan sdk.SubAgentEvent, 1)
-			agent.SetSubAgentEventSink(func(event sdk.SubAgentEvent) { done <- event })
 			if _, err := agent.RunTurn(context.Background(), session, sdk.Turn{Role: sdk.RoleUser}, sdk.Request{SystemPrompt: defaultSystemPrompt(agent)}); err != nil {
 				t.Fatal(err)
 			}
-			select {
-			case event := <-done:
-				if event.Status != "completed" || event.Result != "worker read succeeded" {
-					t.Fatalf("worker result: %+v", event)
+			// Blocking delegation: the worker report must have arrived inside the
+			// same turn as the delegate tool result (REQ-019, REQ-034).
+			reported := false
+			for _, turn := range session.History() {
+				if turn.Role == sdk.RoleToolResult && turn.ToolResult != nil && strings.Contains(turn.ToolResult.Content, "worker read succeeded") && strings.Contains(turn.ToolResult.Content, "status=completed") {
+					reported = true
 				}
-			case <-time.After(5 * time.Second):
-				t.Fatal("worker did not complete")
+			}
+			if !reported {
+				t.Fatal("blocking delegate did not return the worker report in the main turn")
 			}
 			if len(provider.workerRequests) != 2 {
 				t.Fatalf("worker requests=%d", len(provider.workerRequests))
@@ -119,7 +119,7 @@ func TestDelegatedWorkerRetainsRealToolsAndContext(t *testing.T) {
 				}
 				for _, tool := range req.Tools {
 					switch tool.Name {
-					case "plan", "delegate_to_subagent", "subagent_status", "subagent_history", "stop_subagent", "follow_up_subagent", "continue_subagent", "accept_subagent_result":
+					case "plan", "delegate_to_subagent", "stop_subagent", "follow_up_subagent", "continue_subagent", "accept_subagent_result":
 						t.Fatalf("worker exposed %s", tool.Name)
 					}
 				}

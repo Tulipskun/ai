@@ -439,20 +439,10 @@ func formatToolTraceCall(call *sdk.ToolCall) string {
 	if call == nil {
 		return "Working"
 	}
-	switch call.Name {
-	case "plan", "update_plan", "subagent_status", "subagent_history", "accept_subagent_result":
-		return ""
-	case "delegate_to_subagent":
-		return "Working on your task"
-	case "follow_up_subagent":
-		return "Retrying task"
-	case "continue_subagent":
-		return "Continuing task in the same session"
-	case "stop_subagent":
-		return "Stopping task"
-	default:
-		return truncateOneLine(strings.ReplaceAll(call.Name, "_", " "), 80)
+	if strings.TrimSpace(call.Name) == "" {
+		return "Working"
 	}
+	return truncateOneLine(strings.ReplaceAll(call.Name, "_", " "), 80)
 }
 func formatToolCall(call *sdk.ToolCall) string { return formatToolTraceCall(call) }
 func formatToolResult(call *sdk.ToolCall, result *sdk.ToolResult) string {

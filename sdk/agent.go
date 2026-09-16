@@ -27,7 +27,7 @@ type Agent struct {
 
 	subAgentMu        sync.Mutex
 	subAgents         *subAgentManager
-	subAgentEventSink func(SubAgentEvent)
+	subAgentTraceSink func(SubAgentEvent)
 	interruptMu       sync.Mutex
 	interrupts        map[string]context.CancelFunc
 	interrupted       map[string]bool
@@ -38,25 +38,12 @@ const (
 	maxRetryCooldown       = 96 * time.Second
 )
 
-func (a *Agent) SetSubAgentEventSink(sink func(SubAgentEvent)) {
-	if a == nil {
-		return
-	}
-	a.subAgentMu.Lock()
-	a.subAgentEventSink = sink
-	manager := a.subAgents
-	a.subAgentMu.Unlock()
-	if manager != nil {
-		manager.SetEventSink(sink)
-	}
-}
-
 func (a *Agent) subAgentManager() *subAgentManager {
 	a.subAgentMu.Lock()
 	defer a.subAgentMu.Unlock()
 	if a.subAgents == nil {
 		a.subAgents = newSubAgentManager(a, a.SubAgentConfig)
-		a.subAgents.SetEventSink(a.subAgentEventSink)
+		a.subAgents.SetTraceSink(a.subAgentTraceSink)
 	}
 	return a.subAgents
 }
@@ -128,10 +115,10 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 	}
 	ctx, cleanup := a.beginInterrupt(ctx, session.ID())
 	defer cleanup()
-	turnStart := time.Now()
+	clock := &turnClock{}
 	if trace != nil {
 		inner := trace
-		trace = func(ctx context.Context, event TraceEvent) { event.Elapsed = time.Since(turnStart); inner(ctx, event) }
+		trace = func(ctx context.Context, event TraceEvent) { inner(ctx, clock.stamp(event)) }
 	}
 
 	before := session.History()
@@ -147,7 +134,7 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 	var lastErr error
 	for attempt := 0; attempt <= retries; attempt++ {
 		session.ReplaceHistory(before)
-		resp, err := a.runAttempt(ctx, session, user, req, trace, &backoff, entry)
+		resp, err := a.runAttempt(ctx, session, user, req, trace, &backoff, entry, clock)
 		if err == nil {
 			return resp, nil
 		}
@@ -165,17 +152,17 @@ func (a *Agent) runTurn(ctx context.Context, session *Session, user Turn, req Re
 		}
 
 		delay := backoff.Delay(err)
-		traceEvent(ctx, trace, TraceEvent{Stage: TraceRetryWait, Err: err, RetryAfter: delay})
+		traceEvent(ctx, trace, newTraceEvent(TraceRetryWait, withErr(err), withRetryAfter(delay)))
 		if err := waitRetry(ctx, delay); err != nil {
 			if a.wasInterrupted(session.ID()) {
 				settleInterruptedTurn(session, before)
 			}
-			traceEvent(ctx, trace, TraceEvent{Stage: TraceError, Err: err})
+			traceEvent(ctx, trace, newTraceEvent(TraceError, withErr(err)))
 			return Response{}, err
 		}
 	}
 
-	traceEvent(ctx, trace, TraceEvent{Stage: TraceError, Err: lastErr})
+	traceEvent(ctx, trace, newTraceEvent(TraceError, withErr(lastErr)))
 	if errors.Is(lastErr, context.Canceled) || errors.Is(lastErr, context.DeadlineExceeded) {
 		return Response{}, lastErr
 	}
@@ -196,7 +183,7 @@ func (a *Agent) planningFor(session *Session) bool {
 	return session.Config().AgentMode != AgentModeSub
 }
 
-func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
+func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error, clock *turnClock) (Response, error) {
 	var executor ToolExecutor
 	if a.planningFor(session) {
 		executor = newPlanningToolExecutor(a.Tools, session)
@@ -219,20 +206,22 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
 		req.SystemPrompt = baseSystemPrompt
 		if a.planningFor(session) {
-			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt)
+			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt, session.Plan())
 		}
 		if executor != nil {
 			req.Tools = executor.Definitions()
 		} else {
 			req.Tools = nil
 		}
-		traceEvent(ctx, trace, TraceEvent{Stage: TraceRequest})
+		clock.begin()
+		traceEvent(ctx, trace, newTraceEvent(TraceRequest))
 
 		resp, err := a.Client.Generate(ctx, session, req)
 		if err != nil {
 			return Response{}, err
 		}
-		traceEvent(ctx, trace, TraceEvent{Stage: TraceProviderReady})
+		clock.accept()
+		traceEvent(ctx, trace, newTraceEvent(TraceProviderReady))
 		if err := ctx.Err(); err != nil {
 			return Response{}, err
 		}
@@ -242,11 +231,11 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 		commitResponse(session, resp)
 
 		if len(resp.Content) > 0 {
-			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponseContent, Response: cloneResponseContent(resp)})
+			traceEvent(ctx, trace, newTraceEvent(TraceResponseContent, withResponse(resp)))
 		}
 
 		if len(resp.ToolCalls) == 0 {
-			traceEvent(ctx, trace, TraceEvent{Stage: TraceResponse, Response: cloneResponseContent(resp)})
+			traceEvent(ctx, trace, newTraceEvent(TraceResponse, withResponse(resp)))
 			return resp, nil
 		}
 		if executor == nil {
@@ -255,10 +244,10 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 					return Response{}, err
 				}
 				callCopy := cloneToolCall(call)
-				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolCall, ToolCall: callCopy})
-				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolRunning, ToolCall: callCopy})
+				traceEvent(ctx, trace, newTraceEvent(TraceToolCall, withToolCall(callCopy)))
+				traceEvent(ctx, trace, newTraceEvent(TraceToolRunning, withToolCall(callCopy)))
 				result := ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
-				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolResult, ToolCall: callCopy, ToolResult: cloneToolResult(result)})
+				traceEvent(ctx, trace, newTraceEvent(TraceToolResult, withToolCall(callCopy), withToolResult(cloneToolResult(result))))
 				if entry != nil {
 					if err := entry(ctx, Input{Source: "tool", SessionID: session.ID(), Turn: Turn{Role: RoleToolResult, ToolResult: cloneToolResult(result)}}); err != nil {
 						return Response{}, err
@@ -275,8 +264,8 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 				return Response{}, err
 			}
 			callCopy := cloneToolCall(call)
-			traceEvent(ctx, trace, TraceEvent{Stage: TraceToolCall, ToolCall: callCopy})
-			traceEvent(ctx, trace, TraceEvent{Stage: TraceToolRunning, ToolCall: callCopy})
+			traceEvent(ctx, trace, newTraceEvent(TraceToolCall, withToolCall(callCopy)))
+			traceEvent(ctx, trace, newTraceEvent(TraceToolRunning, withToolCall(callCopy)))
 			result := executor.Execute(ctx, call)
 			if err := ctx.Err(); err != nil {
 				return Response{}, err
@@ -284,7 +273,7 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 			if result.ID == "" {
 				result.ID = call.ID
 			}
-			traceEvent(ctx, trace, TraceEvent{Stage: TraceToolResult, ToolCall: callCopy, ToolResult: cloneToolResult(result)})
+			traceEvent(ctx, trace, newTraceEvent(TraceToolResult, withToolCall(callCopy), withToolResult(cloneToolResult(result))))
 			resultCopy := result
 			if entry != nil {
 				if err := entry(ctx, Input{Source: "tool", SessionID: session.ID(), Turn: Turn{Role: RoleToolResult, ToolResult: &resultCopy}}); err != nil {
@@ -298,6 +287,11 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 }
 
 func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Request, trace TraceFunc, backoff *retryBackoff, entry func(context.Context, Input) error) (Response, error) {
+	clock := &turnClock{}
+	if trace != nil {
+		inner := trace
+		trace = func(ctx context.Context, event TraceEvent) { inner(ctx, clock.stamp(event)) }
+	}
 	var executor ToolExecutor
 	if a.planningFor(session) {
 		executor = newPlanningToolExecutor(a.Tools, session)
@@ -315,20 +309,22 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 		req.Messages = buildContextWindow(session.History(), defaultContextWindowTokens)
 		req.SystemPrompt = baseSystemPrompt
 		if a.planningFor(session) {
-			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt)
+			req.SystemPrompt = planningSystemPrompt(baseSystemPrompt, session.Plan())
 		}
 		if executor != nil {
 			req.Tools = executor.Definitions()
 		} else {
 			req.Tools = nil
 		}
-		traceEvent(ctx, trace, TraceEvent{Stage: TraceRequest})
+		clock.begin()
+		traceEvent(ctx, trace, newTraceEvent(TraceRequest))
 
 		events, err := a.Client.Stream(ctx, session, req)
 		if err != nil {
 			return Response{}, err
 		}
-		traceEvent(ctx, trace, TraceEvent{Stage: TraceProviderReady})
+		clock.accept()
+		traceEvent(ctx, trace, newTraceEvent(TraceProviderReady))
 
 		var resp Response
 		var text []ContentPart
@@ -486,6 +482,82 @@ func traceEvent(ctx context.Context, trace TraceFunc, event TraceEvent) {
 	if trace != nil {
 		trace(ctx, event)
 	}
+}
+
+// turnClock records the Unix millisecond timestamps of one provider request
+// so every trace event can carry its own timing instead of a display-side
+// time.Since guess (REQ-033).
+type turnClock struct {
+	mu         sync.Mutex
+	sentMs     int64
+	acceptedMs int64
+}
+
+func (c *turnClock) begin() {
+	if c == nil {
+		return
+	}
+	now := time.Now().UnixMilli()
+	c.mu.Lock()
+	c.sentMs, c.acceptedMs = now, 0
+	c.mu.Unlock()
+}
+
+func (c *turnClock) accept() {
+	if c == nil {
+		return
+	}
+	now := time.Now().UnixMilli()
+	c.mu.Lock()
+	c.acceptedMs = now
+	c.mu.Unlock()
+}
+
+func (c *turnClock) stamp(event TraceEvent) TraceEvent {
+	if c == nil {
+		return event
+	}
+	c.mu.Lock()
+	sent, accepted := c.sentMs, c.acceptedMs
+	c.mu.Unlock()
+	if sent == 0 {
+		return event
+	}
+	event.RequestStartedMs = sent
+	event.ProviderAcceptedMs = accepted
+	if event.AtMs == 0 {
+		event.AtMs = time.Now().UnixMilli()
+	}
+	event.Elapsed = event.TotalElapsed()
+	return event
+}
+
+// newTraceEvent builds one stamped trace event for the current request turn.
+func newTraceEvent(stage TraceStage, opts ...func(*TraceEvent)) TraceEvent {
+	event := TraceEvent{Stage: stage, AtMs: time.Now().UnixMilli()}
+	for _, opt := range opts {
+		opt(&event)
+	}
+	return event
+}
+
+func withResponse(resp Response) func(*TraceEvent) {
+	return func(event *TraceEvent) { clone := cloneResponseContent(resp); event.Response = clone }
+}
+func withToolCall(call *ToolCall) func(*TraceEvent) {
+	return func(event *TraceEvent) { event.ToolCall = call }
+}
+func withToolResult(result *ToolResult) func(*TraceEvent) {
+	return func(event *TraceEvent) { event.ToolResult = result }
+}
+func withText(text string) func(*TraceEvent) {
+	return func(event *TraceEvent) { event.Text = text }
+}
+func withErr(err error) func(*TraceEvent) {
+	return func(event *TraceEvent) { event.Err = err }
+}
+func withRetryAfter(d time.Duration) func(*TraceEvent) {
+	return func(event *TraceEvent) { event.RetryAfter = d }
 }
 
 func cloneResponseContent(in Response) *Response {

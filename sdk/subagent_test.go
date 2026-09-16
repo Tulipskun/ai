@@ -63,16 +63,12 @@ func TestSubAgentInvestigationWorksBeforePlan(t *testing.T) {
 	agent, parent := newSubAgentTest(t, &subAgentImmediateProvider{})
 	manager := newSubAgentManager(agent, agent.SubAgentConfig)
 	runner := &subAgentRunner{manager: manager, parent: parent}
-	job, err := runner.Delegate(context.Background(), "read the repository requirements and summarize the current architecture")
+	report, err := runner.Delegate(context.Background(), "read the repository requirements and summarize the current architecture")
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && strings.Contains(runner.Status(job), "status=running") {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !strings.Contains(runner.Status(job), "status=completed") {
-		t.Fatalf("investigation did not complete: %s", runner.Status(job))
+	if !strings.Contains(report, "status=completed") {
+		t.Fatalf("investigation did not complete: %s", report)
 	}
 	if len(parent.Plan().Steps) != 0 {
 		t.Fatalf("investigation unexpectedly created plan: %#v", parent.Plan())
@@ -85,20 +81,18 @@ func TestSubAgentReceivesFullPlanAndRequiresAcceptance(t *testing.T) {
 	manager := newSubAgentManager(agent, agent.SubAgentConfig)
 	runner := &subAgentRunner{manager: manager, parent: parent}
 	_ = parent.SetPlan([]string{"inspect and change A", "implement B", "verify C"})
-	job, err := runner.Delegate(context.Background(), "inspect and change A")
+	report, err := runner.Delegate(context.Background(), "inspect and change A")
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && strings.Contains(runner.Status(job), "status=running") {
-		time.Sleep(10 * time.Millisecond)
+	if !strings.Contains(report, "worker done") || !strings.Contains(report, "status=completed") {
+		t.Fatalf("blocking call lost the handoff report: %s", report)
 	}
 	state := parent.Plan()
 	if state.Current != 0 || state.Steps[0].Status != "awaiting_review" || state.Steps[1].Status != "pending" {
 		t.Fatalf("worker must await review: %+v", state)
 	}
-	_ = runner.History(job)
-	if err := runner.Accept(job, "Reviewed worker changes and validation"); err != nil {
+	if err := runner.Accept(jobIDFromReport(report), "Reviewed worker changes and validation"); err != nil {
 		t.Fatal(err)
 	}
 	state = parent.Plan()
@@ -109,6 +103,15 @@ func TestSubAgentReceivesFullPlanAndRequiresAcceptance(t *testing.T) {
 	if !strings.Contains(req.SystemPrompt, "1. inspect and change A") || !strings.Contains(req.SystemPrompt, "2. implement B") || !strings.Contains(req.SystemPrompt, "3. verify C") {
 		t.Fatalf("full plan missing from worker system prompt: %s", req.SystemPrompt)
 	}
+}
+
+func jobIDFromReport(report string) string {
+	for _, field := range strings.Fields(report) {
+		if strings.HasPrefix(field, "sa-") {
+			return strings.Trim(field, ":")
+		}
+	}
+	return ""
 }
 
 func newSubAgentTest(t *testing.T, provider Provider) (*Agent, *Session) {
@@ -134,58 +137,50 @@ func newSubAgentTest(t *testing.T, provider Provider) (*Agent, *Session) {
 
 func dbPathForTest(db *SessionDB) string { return db.path }
 
-func TestSubAgentDelegateReturnsImmediately(t *testing.T) {
+func TestSubAgentDelegateBlocksUntilTerminal(t *testing.T) {
 	provider := &subAgentBlockingProvider{started: make(chan struct{})}
 	agent, parent := newSubAgentTest(t, provider)
 	manager := newSubAgentManager(agent, agent.SubAgentConfig)
 	runner := &subAgentRunner{manager: manager, parent: parent}
 	_ = parent.SetPlan([]string{"long task"})
-	start := time.Now()
-	job, err := runner.Delegate(context.Background(), "long task")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if time.Since(start) > time.Second {
-		t.Fatalf("delegate blocked: %s", time.Since(start))
-	}
+	returned := make(chan string, 1)
+	go func() {
+		report, err := runner.Delegate(context.Background(), "long task")
+		if err != nil {
+			returned <- "error: " + err.Error()
+			return
+		}
+		returned <- report
+	}()
 	select {
 	case <-provider.started:
 	case <-time.After(time.Second):
 		t.Fatal("worker did not start")
 	}
-	if !strings.Contains(runner.Status(job), "status=running") {
-		t.Fatalf("unexpected status: %s", runner.Status(job))
+	select {
+	case report := <-returned:
+		t.Fatalf("delegate returned before the worker finished: %s", report)
+	case <-time.After(150 * time.Millisecond):
 	}
-	if !runner.Stop(job) {
-		t.Fatal("stop request was rejected")
+	// Stopping unblocks the waiting delegate with the final report (REQ-020).
+	id := manager.runningJobID()
+	if id == "" {
+		t.Fatal("running job not registered")
 	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && !strings.Contains(runner.Status(job), "status=stopped") {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !strings.Contains(runner.Status(job), "status=stopped") {
-		t.Fatalf("worker did not stop: %s", runner.Status(job))
-	}
-}
-
-func TestSubAgentCompletionEmitsLifecycleEvent(t *testing.T) {
-	agent, parent := newSubAgentTest(t, &subAgentImmediateProvider{})
-	manager := newSubAgentManager(agent, agent.SubAgentConfig)
-	eventCh := make(chan SubAgentEvent, 1)
-	manager.SetEventSink(func(event SubAgentEvent) { eventCh <- event })
-	runner := &subAgentRunner{manager: manager, parent: parent}
-	_ = parent.SetPlan([]string{"quick task"})
-	job, err := runner.Delegate(context.Background(), "quick task")
+	stopReport, err := runner.Stop(context.Background(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(stopReport, "status=stopped") {
+		t.Fatalf("stop did not wait for the terminal state: %s", stopReport)
+	}
 	select {
-	case event := <-eventCh:
-		if event.JobID != job || event.Status != "completed" || event.PlanStep.Index != 1 {
-			t.Fatalf("unexpected event: %+v", event)
+	case report := <-returned:
+		if !strings.Contains(report, "status=stopped") {
+			t.Fatalf("delegate lost the stopped report: %s", report)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("sub-agent lifecycle event was not emitted")
+		t.Fatal("delegate did not return after the job stopped")
 	}
 }
 
@@ -194,15 +189,52 @@ func TestSubAgentUsesSeparateSession(t *testing.T) {
 	manager := newSubAgentManager(agent, agent.SubAgentConfig)
 	runner := &subAgentRunner{manager: manager, parent: parent}
 	_ = parent.SetPlan([]string{"isolated task"})
-	job, err := runner.Delegate(context.Background(), "isolated task")
-	if err != nil {
+	if _, err := runner.Delegate(context.Background(), "isolated task"); err != nil {
 		t.Fatal(err)
-	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && strings.Contains(runner.Status(job), "status=running") {
-		time.Sleep(10 * time.Millisecond)
 	}
 	if len(parent.History()) != 0 {
 		t.Fatalf("worker changed parent history: %#v", parent.History())
+	}
+}
+
+func TestSubAgentRunnerHasNoPollingTools(t *testing.T) {
+	names := map[string]bool{}
+	for _, tool := range (&subAgentTool{}).Definitions() {
+		names[tool.Name] = true
+	}
+	for gone := range map[string]bool{"subagent_status": true, "subagent_history": true} {
+		if names[gone] {
+			t.Fatalf("polling tool %q must not be exposed (REQ-034)", gone)
+		}
+	}
+	for _, want := range []string{"delegate_to_subagent", "follow_up_subagent", "continue_subagent", "stop_subagent", "accept_subagent_result"} {
+		if !names[want] {
+			t.Fatalf("missing orchestration tool %q", want)
+		}
+	}
+}
+
+func TestSubAgentStopWaitsForStoppedWorker(t *testing.T) {
+	provider := &subAgentBlockingProvider{started: make(chan struct{})}
+	agent, parent := newSubAgentTest(t, provider)
+	manager := newSubAgentManager(agent, agent.SubAgentConfig)
+	runner := &subAgentRunner{manager: manager, parent: parent}
+	id, err := manager.startAndRegister(parent, "never finishing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-provider.started
+	report, err := runner.Stop(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report, "status=stopped") {
+		t.Fatalf("stop returned before the worker stopped: %s", report)
+	}
+	if !strings.Contains(report, "task: never finishing") {
+		t.Fatalf("stop report lost the task: %s", report)
+	}
+	if _, err := runner.Stop(context.Background(), id); err == nil {
+		t.Fatal("stop accepted for an already stopped job")
 	}
 }

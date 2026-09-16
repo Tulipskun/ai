@@ -5,7 +5,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 type toolUsingProvider struct {
@@ -23,47 +22,47 @@ func (p *toolUsingProvider) Generate(_ context.Context, req Request) (Response, 
 	return Response{Content: []ContentPart{{Type: ContentText, Text: "worker done after tool"}}}, nil
 }
 
-func TestSubAgentHistoryShowsToolsArgsAndResults(t *testing.T) {
-	r, events := orchestrationRunner(t, &toolUsingProvider{})
-	id, err := r.Delegate(context.Background(), "use tools")
+func TestSubAgentReportShowsToolsArgsAndResults(t *testing.T) {
+	agent, parent := newSubAgentTest(t, &toolUsingProvider{})
+	manager := newSubAgentManager(agent, agent.SubAgentConfig)
+	r := &subAgentRunner{manager: manager, parent: parent}
+	report, err := r.Delegate(context.Background(), "use tools")
 	if err != nil {
 		t.Fatal(err)
 	}
-	awaitSubAgent(t, events)
-	history := r.History(id)
-	for _, want := range []string{"read_file", `{"path":"a.txt"}`, "tools_used:", "result: worker done after tool", "task: use tools"} {
-		if !strings.Contains(history, want) {
-			t.Fatalf("history missing %q:\n%s", want, history)
+	for _, want := range []string{"read_file", "a.txt", "tools_used:", "worker done after tool", "task: use tools"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
 		}
 	}
-	status := r.Status(id)
-	if !strings.Contains(status, "read_file") || !strings.Contains(status, "tools=") {
-		t.Fatalf("status missing tool summary: %s", status)
+	if !strings.Contains(report, "result:") {
+		t.Fatalf("report missing final result:\n%s", report)
 	}
 }
 
 func TestSubAgentContinueReusesWorkerSession(t *testing.T) {
 	provider := &subAgentCaptureProvider{}
-	r, events := orchestrationRunner(t, provider)
-	_ = r.parent.SetPlan([]string{"step one"})
-	id, err := r.Delegate(context.Background(), "step one")
+	agent, parent := newSubAgentTest(t, provider)
+	manager := newSubAgentManager(agent, agent.SubAgentConfig)
+	r := &subAgentRunner{manager: manager, parent: parent}
+	_ = parent.SetPlan([]string{"step one"})
+	report, err := r.Delegate(context.Background(), "step one")
 	if err != nil {
 		t.Fatal(err)
 	}
-	awaitSubAgent(t, events)
-	r.History(id)
+	id := jobIDFromReport(report)
 	if err := r.Accept(id, "verified step one"); err != nil {
 		t.Fatal(err)
 	}
 	// New work into the same worker session must be allowed after acceptance.
-	next, err := r.Continue(context.Background(), id, "follow-on work in same session")
+	nextReport, err := r.Continue(context.Background(), id, "follow-on work in same session")
 	if err != nil {
 		t.Fatalf("continue rejected: %v", err)
 	}
+	next := jobIDFromReport(nextReport)
 	if next == id {
 		t.Fatal("continue reused job identity")
 	}
-	manager := r.manager
 	manager.mu.RLock()
 	first, ok1 := manager.jobs[id]
 	second, ok2 := manager.jobs[next]
@@ -74,7 +73,6 @@ func TestSubAgentContinueReusesWorkerSession(t *testing.T) {
 	if first.workerID != second.workerID {
 		t.Fatalf("worker session not reused: %q vs %q", first.workerID, second.workerID)
 	}
-	awaitSubAgent(t, events)
 	req := provider.lastRequest()
 	var history strings.Builder
 	for _, turn := range req.Messages {
@@ -90,15 +88,17 @@ func TestSubAgentContinueReusesWorkerSession(t *testing.T) {
 		t.Fatal("follow-up on accepted job should fail")
 	}
 	// Cross-parent continue must be denied.
-	other := &subAgentRunner{manager: r.manager, parent: NewSession(SessionConfig{ID: "other"}, nil)}
+	other := &subAgentRunner{manager: manager, parent: NewSession(SessionConfig{ID: "other"}, nil)}
 	if _, err := other.Continue(context.Background(), id, "steal"); err == nil {
 		t.Fatal("cross-parent continue succeeded")
 	}
 	// Continue while running must be denied.
 	blocking := &subAgentBlockingProvider{started: make(chan struct{})}
-	rb, evts := orchestrationRunner(t, blocking)
-	_ = rb.parent.SetPlan([]string{"long"})
-	running, err := rb.Delegate(context.Background(), "long")
+	agentB, parentB := newSubAgentTest(t, blocking)
+	managerB := newSubAgentManager(agentB, agentB.SubAgentConfig)
+	rb := &subAgentRunner{manager: managerB, parent: parentB}
+	_ = parentB.SetPlan([]string{"long"})
+	running, err := managerB.startAndRegister(parentB, "long")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,53 +106,45 @@ func TestSubAgentContinueReusesWorkerSession(t *testing.T) {
 	if _, err := rb.Continue(context.Background(), running, "overlap"); err == nil {
 		t.Fatal("continue overlapped running job")
 	}
-	rb.Stop(running)
-	awaitSubAgent(t, evts)
+	if _, err := rb.Stop(context.Background(), running); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSubAgentContinueToolValidation(t *testing.T) {
-	r, events := orchestrationRunner(t, &subAgentImmediateProvider{})
-	tool := newPlanningToolExecutor(nil, r.parent)
+	agent, parent := newSubAgentTest(t, &subAgentImmediateProvider{})
+	manager := newSubAgentManager(agent, agent.SubAgentConfig)
+	r := &subAgentRunner{manager: manager, parent: parent}
+	tool := newPlanningToolExecutor(nil, parent)
 	tool.ConfigureSubAgent(r)
 	if result := tool.Execute(context.Background(), ToolCall{Name: "continue_subagent", Arguments: `{"task":"missing id"}`}); !result.IsError {
 		t.Fatal("continue without ID started work")
 	}
-	_ = r.parent.SetPlan([]string{"step"})
-	id, err := r.Delegate(context.Background(), "step")
+	_ = parent.SetPlan([]string{"step"})
+	report, err := r.Delegate(context.Background(), "step")
 	if err != nil {
 		t.Fatal(err)
 	}
-	awaitSubAgent(t, events)
-	r.History(id)
+	id := jobIDFromReport(report)
 	if err := r.Accept(id, "verified"); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
-	ids := make(chan string, 16)
+	var mu sync.Mutex
+	winners := 0
 	for i := 0; i < 16; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// Acceptance has not happened yet; continue must wait for a terminal
-			// job only in the sense of no running job — the first job is
-			// terminal here so exactly one continue may win the reservation.
-			if next, err := r.Continue(context.Background(), id, "extra"); err == nil {
-				ids <- next
+			if _, err := r.Continue(context.Background(), id, "extra"); err == nil {
+				mu.Lock()
+				winners++
+				mu.Unlock()
 			}
 		}()
 	}
 	wg.Wait()
-	close(ids)
-	var winners []string
-	for next := range ids {
-		winners = append(winners, next)
-	}
-	if len(winners) != 1 {
-		t.Fatalf("continue reserved %d jobs", len(winners))
-	}
-	select {
-	case <-events:
-	case <-time.After(3 * time.Second):
-		t.Fatal("missing continue completion event")
+	if winners != 1 {
+		t.Fatalf("continue reserved %d jobs", winners)
 	}
 }

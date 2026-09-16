@@ -50,18 +50,8 @@ func runInteractiveCLI(ctx context.Context, sessions *runtime.SessionManager, ag
 			}
 		}
 	}()
-	agent.SetSubAgentEventSink(func(event sdk.SubAgentEvent) {
-		text := event.Message()
-		go func() {
-			turnMu.Lock()
-			defer turnMu.Unlock()
-			_, err := agent.RunTurnWithTrace(context.WithoutCancel(ctx), event.Parent, sdk.Turn{Role: sdk.RoleUser, Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: text}}}, sdk.Request{SystemPrompt: systemPrompt(agent), MaxOutputTokens: maxOutputTokens, Stream: true}, func(_ context.Context, trace sdk.TraceEvent) { ui.Trace(trace) })
-			ui.EndTurn()
-			if err != nil && !errors.Is(err, context.Canceled) {
-				ui.Print("sub-agent event turn failed: " + err.Error())
-			}
-		}()
-	})
+	// Sub-agent delegation is blocking since CHANGE-022: the worker report arrives
+	// as the tool result inside the current turn, so no completion continuation runs here.
 	shell := &clitransport.Shell{Editor: editor, Out: os.Stdout, Header: func() {
 		provider, model := currentModelState(ctx, sessions, currentSession)
 		ui.Header(currentSession, provider, model)

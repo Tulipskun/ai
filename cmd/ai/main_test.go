@@ -90,7 +90,7 @@ func (testPromptTools) Execute(_ context.Context, _ sdk.ToolCall) sdk.ToolResult
 
 func TestDefaultPromptRequiresSameSessionRetryAndAcceptance(t *testing.T) {
 	prompt := defaultSystemPrompt(nil)
-	for _, name := range []string{"subagent_history", "subagent_status", "follow_up_subagent", "continue_subagent", "accept_subagent_result"} {
+	for _, name := range []string{"delegate_to_subagent", "follow_up_subagent", "continue_subagent", "accept_subagent_result", "stop_subagent"} {
 		if !strings.Contains(prompt, "`"+name+"`") {
 			t.Fatalf("missing orchestration tool %s", name)
 		}

@@ -9,9 +9,9 @@ import (
 
 const planningToolName = "plan"
 
-const planningToolDescription = "Create the execution plan for the user's goal before delegating execution. Describe the intended work in concise, ordered steps. This is a planning action, not the final answer."
+const planningToolDescription = "Create or replace the execution checklist for the user's goal before delegating execution. Describe the intended work in concise, ordered steps; the checklist with per-step status is shown to you on every turn. This is a planning action, not the final answer."
 
-const planningSystemInstruction = "You are the Main Agent. These role boundaries take precedence over any conflicting direct-execution instructions in the supplied context; delegate such work to the Sub-agent. You do not have execution tools and must never attempt to inspect, read, edit, write, search, build, test, run commands, browse, or otherwise operate on the project directly. The Sub-agent is the only worker. Scale effort to the task: delegate repository investigation first only when the task needs repository context; for a trivial task that needs no repository context, skip the separate investigation and make a minimal one-step plan. Keep every plan to the fewest steps that cover the goal. Use the investigation summary to create one ordered plan with concrete steps. After the plan exists, delegate exactly one current plan step at a time with `delegate_to_subagent`, and write each delegated task so the worker validates with the minimal sufficient check only. Wait for the orchestration lifecycle event reporting that step's completion or failure. Do not repeatedly poll status: wait for completion events; use `subagent_status` for explicit status requests. A worker loop ending, including a textual blocked or incomplete report, is NOT verified success and never advances the plan. Read the terminal result with `subagent_history` or `subagent_status` (`subagent_history` lists every worker tool with name, arguments/details, and result), verify the assigned work and validation, then call `accept_subagent_result` with verification evidence to advance exactly one step. For failed, stopped, blocked, or incomplete work use `follow_up_subagent` with the job ID to retry in the same worker session; for new follow-on work use `continue_subagent` with the job ID to keep the same worker session and its history, and wait for its new completion event. After acceptance, delegate the next step or continue the same worker session. Stale events from replacement plans must not be accepted. A completed plan allows investigation or continued work for the next user task. The Sub-agent does not communicate with the user. Do not expose internal planning or orchestration details to the user."
+const planningSystemInstruction = "You are the Main Agent. You hold the project overview and own the checklist: every turn shows the current plan steps with their statuses, and only you advance them through explicit acceptance. These role boundaries take precedence over any conflicting direct-execution instructions in the supplied context; delegate such work to the Sub-agent. You do not have execution tools and must never attempt to inspect, read, edit, write, search, build, test, run commands, browse, or otherwise operate on the project directly. The Sub-agent is the only worker. Scale effort to the task: delegate repository investigation first only when the task needs repository context; for a trivial task that needs no repository context, skip the separate investigation and make a minimal one-step plan. Keep every plan to the fewest steps that cover the goal. Use the investigation summary to create one ordered plan with concrete steps. After the plan exists, delegate exactly one current plan step at a time with `delegate_to_subagent`, and write each delegated task so the worker validates with the minimal sufficient check only. Delegation is blocking: the call returns only when the worker finishes, and its result is the complete handoff report (terminal status, final summary, every worker tool with arguments and result, validation evidence). Read that report as your review - there are no status or history polling tools. A worker loop ending, including a textual blocked or incomplete report, is NOT verified success and never advances the plan. Verify the report, then call `accept_subagent_result` with verification evidence to advance exactly one step. For failed, blocked, or incomplete work use `follow_up_subagent` with the job ID to retry in the same worker session (also blocking, also returns the full report); for new follow-on work use `continue_subagent` with the job ID to keep the same worker session and its history. `stop_subagent` blocks until the worker has actually stopped and returns its final partial report. After acceptance, delegate the next step or continue the same worker session. Stale results from replacement plans must not be accepted. Keep tool calls minimal: one delegation, one review from its report, one acceptance per step."
 
 type planningToolInput struct {
 	Plan string `json:"plan"`
@@ -49,21 +49,48 @@ func (e *planningToolExecutor) Definitions() []Tool {
 	return defs
 }
 
-func planningSystemPrompt(base string) string {
+func planningSystemPrompt(base string, plan PlanState) string {
 	// Keep repository requirements and custom context intact. The appended role
 	// boundary and executor allowlist supersede conflicting execution guidance.
+	// The checklist rides every request so the planner always sees the whole
+	// project and each step's status (REQ-016, REQ-034).
 	base = strings.TrimSpace(base)
-	if base == "" {
-		return planningSystemInstruction
+	prompt := planningSystemInstruction
+	if len(plan.Steps) > 0 {
+		prompt = "Current checklist (you own these statuses; they advance only through `accept_subagent_result`):\n" + formatPlanStatus(plan) + "\n\n" + prompt
 	}
-	return base + "\n\n" + planningSystemInstruction
+	if base == "" {
+		return prompt
+	}
+	return base + "\n\n" + prompt
+}
+
+func formatPlanStatus(plan PlanState) string {
+	var b strings.Builder
+	for _, step := range plan.Steps {
+		marker := "[ ]"
+		switch step.Status {
+		case "completed":
+			marker = "[x]"
+		case "ready":
+			marker = "[>]"
+		case "running":
+			marker = "[~]"
+		case "awaiting_review":
+			marker = "[?]"
+		case "failed":
+			marker = "[!]"
+		}
+		fmt.Fprintf(&b, "%s %d. %s (%s)\n", marker, step.Index, step.Text, step.Status)
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func (e *planningToolExecutor) Execute(ctx context.Context, call ToolCall) ToolResult {
 	if e == nil {
 		return ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
 	}
-	if call.Name == "delegate_to_subagent" || call.Name == "subagent_status" || call.Name == "subagent_history" || call.Name == "stop_subagent" || call.Name == "follow_up_subagent" || call.Name == "continue_subagent" || call.Name == "accept_subagent_result" {
+	if call.Name == "delegate_to_subagent" || call.Name == "stop_subagent" || call.Name == "follow_up_subagent" || call.Name == "continue_subagent" || call.Name == "accept_subagent_result" {
 		if e.subAgent == nil {
 			return ToolResult{ID: call.ID, Content: "sub-agent is not configured", IsError: true}
 		}
@@ -86,7 +113,7 @@ func (e *planningToolExecutor) Execute(ctx context.Context, call ToolCall) ToolR
 			e.session.cleanPlan(steps)
 		}
 		e.planned = true
-		return ToolResult{ID: call.ID, Content: "Execution plan recorded with " + fmt.Sprint(len(steps)) + " ordered step(s). Start with step 1 and advance only after reviewing and explicitly accepting verified success with accept_subagent_result."}
+		return ToolResult{ID: call.ID, Content: "Checklist recorded with " + fmt.Sprint(len(steps)) + " ordered step(s); statuses are shown in your system prompt every turn. Start with step 1: delegate it and advance only after reviewing the blocking report and accepting verified success with accept_subagent_result."}
 	}
 	return ToolResult{ID: call.ID, Content: "Main Agent has no execution tools; delegate project work to `delegate_to_subagent`", IsError: true}
 }

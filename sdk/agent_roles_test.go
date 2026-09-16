@@ -61,12 +61,12 @@ func TestAgentRoleSeparation(t *testing.T) {
 								t.Fatalf("worker tools=%+v", req.Tools)
 							}
 						} else {
-							if req.SystemPrompt != planningSystemPrompt(base) || strings.Count(req.SystemPrompt, planningSystemInstruction) != 1 {
+							if !strings.HasPrefix(req.SystemPrompt, base) || strings.Count(req.SystemPrompt, planningSystemInstruction) != 1 {
 								t.Fatalf("main prompt=%q", req.SystemPrompt)
 							}
 							want := []string{"plan"}
 							if configured {
-								want = append(want, "delegate_to_subagent", "subagent_status", "subagent_history", "stop_subagent", "follow_up_subagent", "continue_subagent", "accept_subagent_result")
+								want = append(want, "delegate_to_subagent", "stop_subagent", "follow_up_subagent", "continue_subagent", "accept_subagent_result")
 							}
 							names := make(map[string]bool)
 							for _, tool := range req.Tools {

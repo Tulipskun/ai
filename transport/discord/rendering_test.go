@@ -215,11 +215,16 @@ func TestProgressHidesSecretsAndInternalChatter(t *testing.T) {
 		displayTraceEvent(t, display, sdk.TraceEvent{Stage: sdk.TraceToolResult, ToolCall: call, ToolResult: &sdk.ToolResult{Content: secret}})
 	}
 	got := strings.Join(sender.tools, "\n")
-	if strings.Contains(got, secret) || strings.Contains(got, "subagent") || strings.Contains(got, "plan") {
+	if strings.Contains(got, secret) {
 		t.Fatalf("leaked progress: %s", got)
 	}
-	if len(sender.tools) != 2 {
-		t.Fatalf("internal chatter: %q", sender.tools)
+	for _, name := range []string{"plan", "delegate to subagent", "subagent history", "subagent status", "accept subagent result", "run command"} {
+		if !strings.Contains(got, name) {
+			t.Fatalf("tool %q must be visible (REQ-032): %s", name, got)
+		}
+	}
+	if len(sender.tools) != 6 {
+		t.Fatalf("unexpected trace items: %q", sender.tools)
 	}
 }
 func TestTraceTransitionsRetainBufferOnSendFailure(t *testing.T) {

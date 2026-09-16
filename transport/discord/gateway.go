@@ -219,6 +219,8 @@ type Gateway struct {
 	sessionMapping   *SessionMapping
 	resolveSession   func(context.Context, sdk.Input) (*sdk.Session, error)
 	stop             func(string) bool
+	v2Send           func(context.Context, string, []discordgo.MessageComponent) (string, error)
+	v2Edit           func(context.Context, string, string, []discordgo.MessageComponent) error
 	retryStatusMu    sync.Mutex
 	retryStatus      map[string]string
 	authorizedUserID string
@@ -621,6 +623,50 @@ func (g *Gateway) EditEmbed(ctx context.Context, channelID, messageID string, em
 		return errors.New("discord: channel ID and message ID are required")
 	}
 	_, err := g.session.ChannelMessageEditEmbed(channelID, messageID, embed)
+	return err
+}
+
+// SendComponentsV2 posts a Components V2 message (no embeds, no content —
+// the flag disables both) and returns its ID (REQ-022, REQ-031).
+func (g *Gateway) SendComponentsV2(ctx context.Context, channelID string, components []discordgo.MessageComponent) (string, error) {
+	if g == nil {
+		return "", errors.New("discord: gateway is not initialized")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if g.v2Send != nil {
+		return g.v2Send(ctx, channelID, components)
+	}
+	if g.session == nil {
+		return "", errors.New("discord: gateway is not initialized")
+	}
+	message, err := g.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{Components: components, Flags: discordgo.MessageFlagsIsComponentsV2})
+	if err != nil {
+		return "", err
+	}
+	return message.ID, nil
+}
+
+// EditComponentsV2 rewrites a Components V2 message in place, keeping the V2
+// flag on every edit so the layout survives (REQ-022, REQ-031).
+func (g *Gateway) EditComponentsV2(ctx context.Context, channelID, messageID string, components []discordgo.MessageComponent) error {
+	if g == nil {
+		return errors.New("discord: gateway is not initialized")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if channelID == "" || messageID == "" {
+		return errors.New("discord: channel ID and message ID are required")
+	}
+	if g.v2Edit != nil {
+		return g.v2Edit(ctx, channelID, messageID, components)
+	}
+	if g.session == nil {
+		return errors.New("discord: gateway is not initialized")
+	}
+	_, err := g.session.ChannelMessageEditComplex(&discordgo.MessageEdit{Channel: channelID, ID: messageID, Components: &components, Flags: discordgo.MessageFlagsIsComponentsV2})
 	return err
 }
 func toolTraceEmbed(items []string, footer string) *discordgo.MessageEmbed {

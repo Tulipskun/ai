@@ -21,6 +21,270 @@ const (
 	subTraceAccent  = 0x57F287 // green — worker stream
 )
 
+// heartbeatThrottleMs caps heartbeat status edits to one per 3s (REQ-041).
+// Between edits the transport only sends ChannelTyping, never a per-second
+// ticker. Status sends/edits carry MessageFlagsSuppressNotifications; the
+// final answer path keeps its ping behavior unchanged.
+const heartbeatThrottleMs = 3000
+
+// heartbeatState tracks one actor's lightweight V2 status line.
+type heartbeatState struct {
+	lastEdit  time.Time
+	toolCount int
+	retrying  bool
+	start     time.Time
+	messageID string
+}
+
+func heartbeatWorkingText() string { return "⏳ working…" }
+
+func heartbeatToolsText(count int) string { return fmt.Sprintf("🔧 using tools · %d", count) }
+
+func heartbeatRetryingText() string { return "↻ retrying…" }
+
+func heartbeatDoneText(totalSec int64) string {
+	if totalSec < 0 {
+		totalSec = 0
+	}
+	return fmt.Sprintf("✅ done in %ds", totalSec)
+}
+
+func heartbeatStatusText(hb heartbeatState) string {
+	if hb.retrying {
+		return heartbeatRetryingText()
+	}
+	if hb.toolCount > 0 {
+		return heartbeatToolsText(hb.toolCount)
+	}
+	return heartbeatWorkingText()
+}
+
+// heartbeatFlags marks status messages silent: V2 layout plus suppress,
+// so edits never ping. Final answers keep SendComponentsV2/EditComponentsV2
+// unchanged and still ping (REQ-041).
+func heartbeatFlags() discordgo.MessageFlags {
+	return discordgo.MessageFlagsIsComponentsV2 | discordgo.MessageFlagsSuppressNotifications
+}
+
+var heartbeatMu sync.Mutex
+var heartbeatStates = make(map[string]*heartbeatState)
+
+// heartbeatDue throttles status edits to max 1 per heartbeatThrottleMs.
+func heartbeatDue(now, lastEdit time.Time) bool {
+	if lastEdit.IsZero() {
+		return true
+	}
+	return now.Sub(lastEdit) >= time.Duration(heartbeatThrottleMs)*time.Millisecond
+}
+
+func heartbeatElapsedSec(hb heartbeatState) int64 {
+	if hb.start.IsZero() {
+		return 0
+	}
+	sec := int64(time.Since(hb.start) / time.Second)
+	if sec < 0 {
+		return 0
+	}
+	return sec
+}
+
+// heartbeatEnsure tracks per-actor heartbeat counters without I/O, so the
+// detailed actor trace message counts used by tests never change.
+func heartbeatEnsure(key string) *heartbeatState {
+	now := time.Now()
+	heartbeatMu.Lock()
+	defer heartbeatMu.Unlock()
+	hb := heartbeatStates[key]
+	if hb == nil {
+		hb = &heartbeatState{start: now}
+		heartbeatStates[key] = hb
+	}
+	if hb.start.IsZero() {
+		hb.start = now
+	}
+	return hb
+}
+
+func heartbeatNoteTool(key string) {
+	hb := heartbeatEnsure(key)
+	heartbeatMu.Lock()
+	hb.toolCount++
+	hb.retrying = false
+	heartbeatMu.Unlock()
+}
+
+func heartbeatNoteRetry(key string) {
+	hb := heartbeatEnsure(key)
+	heartbeatMu.Lock()
+	hb.retrying = true
+	heartbeatMu.Unlock()
+}
+
+// heartbeatComponents renders the lightweight status container.
+func heartbeatComponents(label string, accent int, status string) []discordgo.MessageComponent {
+	color := accent
+	return []discordgo.MessageComponent{discordgo.Container{
+		AccentColor: &color,
+		Components: []discordgo.MessageComponent{
+			discordgo.TextDisplay{Content: "**" + label + "**"},
+			discordgo.TextDisplay{Content: status},
+		},
+	}}
+}
+
+// heartbeatReceiptComponents renders the collapsed one-line receipt plus the
+// token footer. No ticker is used anywhere in the heartbeat path.
+func heartbeatReceiptComponents(label string, accent int, doneLine, footer string) []discordgo.MessageComponent {
+	color := accent
+	children := []discordgo.MessageComponent{
+		discordgo.TextDisplay{Content: "**" + label + "**"},
+		discordgo.TextDisplay{Content: doneLine},
+	}
+	if strings.TrimSpace(footer) != "" {
+		children = append(children, discordgo.TextDisplay{Content: "-# " + footer})
+	}
+	return []discordgo.MessageComponent{discordgo.Container{AccentColor: &color, Components: children}}
+}
+
+// heartbeatTyping keeps the typing indicator alive between throttled edits.
+// It is a no-op without a live session, so offline tests stay silent.
+func (g *Gateway) heartbeatTyping(channelID string) {
+	if g == nil || g.session == nil || strings.TrimSpace(channelID) == "" {
+		return
+	}
+	_ = g.session.ChannelTyping(channelID)
+}
+
+func (g *Gateway) sendHeartbeatV2(ctx context.Context, channelID string, components []discordgo.MessageComponent) (string, error) {
+	if g == nil {
+		return "", errors.New("discord: gateway is not initialized")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if g.v2Send != nil {
+		return g.v2Send(ctx, channelID, components)
+	}
+	if g.session == nil {
+		return "", errors.New("discord: gateway is not initialized")
+	}
+	message, err := g.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{Components: components, Flags: heartbeatFlags()})
+	if err != nil {
+		return "", err
+	}
+	return message.ID, nil
+}
+
+func (g *Gateway) editHeartbeatV2(ctx context.Context, channelID, messageID string, components []discordgo.MessageComponent) error {
+	if g == nil {
+		return errors.New("discord: gateway is not initialized")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if channelID == "" || messageID == "" {
+		return errors.New("discord: channel ID and message ID are required")
+	}
+	if g.v2Edit != nil {
+		return g.v2Edit(ctx, channelID, messageID, components)
+	}
+	if g.session == nil {
+		return errors.New("discord: gateway is not initialized")
+	}
+	_, err := g.session.ChannelMessageEditComplex(&discordgo.MessageEdit{Channel: channelID, ID: messageID, Components: &components, Flags: heartbeatFlags()})
+	return err
+}
+
+// heartbeatRefresh sends or edits the status container at most once per 3s;
+// between edits it only triggers ChannelTyping. The final answer path is
+// untouched. Without a live Discord session (offline tests) it only tracks
+// counters so existing trace message counts never change.
+func (g *Gateway) heartbeatRefresh(ctx context.Context, channelID, key, label string, accent int) error {
+	hb := heartbeatEnsure(key)
+	heartbeatMu.Lock()
+	status := heartbeatStatusText(*hb)
+	messageID := hb.messageID
+	lastEdit := hb.lastEdit
+	heartbeatMu.Unlock()
+	now := time.Now()
+	if !heartbeatDue(now, lastEdit) {
+		g.heartbeatTyping(channelID)
+		return nil
+	}
+	if g == nil || g.session == nil {
+		heartbeatMu.Lock()
+		if cur := heartbeatStates[key]; cur != nil {
+			cur.lastEdit = now
+		}
+		heartbeatMu.Unlock()
+		return nil
+	}
+	components := heartbeatComponents(label, accent, status)
+	if messageID == "" {
+		id, err := g.sendHeartbeatV2(ctx, channelID, components)
+		if err != nil {
+			return err
+		}
+		heartbeatMu.Lock()
+		if cur := heartbeatStates[key]; cur != nil {
+			cur.messageID = id
+			cur.lastEdit = now
+		}
+		heartbeatMu.Unlock()
+		return nil
+	}
+	if err := g.editHeartbeatV2(ctx, channelID, messageID, components); err != nil {
+		return err
+	}
+	heartbeatMu.Lock()
+	if cur := heartbeatStates[key]; cur != nil {
+		cur.lastEdit = now
+	}
+	heartbeatMu.Unlock()
+	return nil
+}
+
+// heartbeatFinish replaces the status container once with the collapsed
+// one-line receipt including the token footer.
+func (g *Gateway) heartbeatFinish(ctx context.Context, channelID, key, label string, accent int, footer string) error {
+	heartbeatMu.Lock()
+	hb := heartbeatStates[key]
+	if hb == nil {
+		hb = &heartbeatState{start: time.Now()}
+		heartbeatStates[key] = hb
+	}
+	doneLine := heartbeatDoneText(heartbeatElapsedSec(*hb))
+	messageID := hb.messageID
+	heartbeatMu.Unlock()
+	// Offline (no live session): track only, never touch the fake V2 capture
+	// so existing trace message counts stay exact.
+	if g == nil || g.session == nil {
+		heartbeatMu.Lock()
+		delete(heartbeatStates, key)
+		heartbeatMu.Unlock()
+		return nil
+	}
+	components := heartbeatReceiptComponents(label, accent, doneLine, footer)
+	if messageID == "" {
+		id, err := g.sendHeartbeatV2(ctx, channelID, components)
+		if err != nil {
+			return err
+		}
+		heartbeatMu.Lock()
+		delete(heartbeatStates, key)
+		heartbeatMu.Unlock()
+		_ = id
+		return nil
+	}
+	if err := g.editHeartbeatV2(ctx, channelID, messageID, components); err != nil {
+		return err
+	}
+	heartbeatMu.Lock()
+	delete(heartbeatStates, key)
+	heartbeatMu.Unlock()
+	return nil
+}
+
 // actorTraceState is one Components V2 message stream per actor. Each state
 // remembers which channel message was created last (msgSeq); when any newer
 // message exists in the channel, the next appended line seals the old
@@ -126,11 +390,15 @@ func eventProviderLatency(trace sdk.TraceEvent) time.Duration {
 }
 
 func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, actor, jobID string, trace sdk.TraceEvent) error {
+	label := actorLabel(actor, jobID)
+	accent := actorAccent(actor)
 	switch trace.Stage {
 	case sdk.TraceRequest:
 		if actor == "main" {
 			g.actorTraceBeginTurn(key)
 		}
+		heartbeatEnsure(key)
+		_ = g.heartbeatRefresh(ctx, channelID, key, label, accent)
 		return g.actorTraceAppend(ctx, channelID, chKey, key, "⏳ sending request to provider")
 	case sdk.TraceProviderReady:
 		return g.actorTraceUpdate(ctx, channelID, chKey, key, "⏳ provider accepted · "+formatDuration(eventProviderLatency(trace)), func(item string) bool {
@@ -200,6 +468,8 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 			return nil
 		}
 		g.disarmActorDedupe(key)
+		heartbeatNoteTool(key)
+		_ = g.heartbeatRefresh(ctx, channelID, key, label, accent)
 		// The first tool of a response replaces that request's pending row:
 		// "provider accepted" is merged into the tool line (REQ-033).
 		if err := g.actorTraceUpdate(ctx, channelID, chKey, key, formatTraceToolLine(trace.ToolCall, "🔧", trace), func(item string) bool {
@@ -229,13 +499,22 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 		if trace.RetryAfter > 0 {
 			text += " in " + formatDuration(trace.RetryAfter)
 		}
+		heartbeatNoteRetry(key)
+		_ = g.heartbeatRefresh(ctx, channelID, key, label, accent)
 		return g.actorTraceAppend(ctx, channelID, chKey, key, text)
 	case sdk.TraceResponse:
 		if trace.Response != nil {
 			g.countActorTerminalUsage(key, trace.Response.Usage)
 		}
+		actorTraceMu.Lock()
+		receiptFooter := actorFooterLocked(actorTraceStates[key])
+		actorTraceMu.Unlock()
 		g.actorTraceComplete(key)
-		return g.actorTraceFlush(ctx, channelID, chKey, key)
+		flushErr := g.actorTraceFlush(ctx, channelID, chKey, key)
+		if hbErr := g.heartbeatFinish(ctx, channelID, key, label, accent, receiptFooter); hbErr != nil {
+			return errors.Join(flushErr, hbErr)
+		}
+		return flushErr
 	case sdk.TraceError:
 		text := "❌ request failed"
 		if trace.Err != nil {
@@ -245,7 +524,14 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 		if err := g.actorTraceAppend(ctx, channelID, chKey, key, text); err != nil {
 			return err
 		}
-		return g.actorTraceFlush(ctx, channelID, chKey, key)
+		flushErr := g.actorTraceFlush(ctx, channelID, chKey, key)
+		actorTraceMu.Lock()
+		receiptFooter := actorFooterLocked(actorTraceStates[key])
+		actorTraceMu.Unlock()
+		if hbErr := g.heartbeatFinish(ctx, channelID, key, label, accent, receiptFooter); hbErr != nil {
+			return errors.Join(flushErr, hbErr)
+		}
+		return flushErr
 	default:
 		return nil
 	}
@@ -289,6 +575,9 @@ func (g *Gateway) actorTraceBeginTurn(key string) {
 			state.timer.Stop()
 		}
 		delete(actorTraceStates, key)
+		heartbeatMu.Lock()
+		delete(heartbeatStates, key)
+		heartbeatMu.Unlock()
 	}
 }
 

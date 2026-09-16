@@ -459,3 +459,16 @@ Reason: fixed-interval ทุก 5 calls ส่ง progress บ่อยเก�
 Impact: sdk/subagent.go (SubAgentConfig.MaxMidJobReports, job lastReportedToolCount/midJobReports, shouldReportProgress, delta progressLocked), sdk/session_workspace_test.go (default 20), requirements/functional.md REQ-019, requirements/changes.md
 Validation: `go test ./sdk -count=1`; `go vet ./sdk`
 Status: accepted
+
+CHANGE-035
+
+Date: 2026-09-16
+Type: add
+Request: Implement V2 heartbeat now using known APIs, no more searches
+Conflict: none (lightweight status alongside detailed trace; final answer ping unchanged)
+Previous: No per-actor lightweight status; long turns showed only detailed trace lines with no throttled liveness signal
+New: REQ-041 — Discord per-actor V2 heartbeat status container (working / using tools with count only / retrying / done with total seconds); `heartbeatThrottleMs=3000` caps edits at 1 per 3s with ChannelTyping between edits and no per-second ticker; status send/edit use `MessageFlagsSuppressNotifications` with `MessageFlagsIsComponentsV2`; completion replaces the container once with a collapsed one-line receipt plus token footer
+Reason: Long provider/tool turns need a quiet liveness signal without edit spam, pings, or extra tickers, while the detailed trace keeps full ordering/timing
+Impact: transport/discord/actor_trace_display.go (heartbeat state, spinner helpers, throttle, typing, receipt, silent flags), requirements/functional.md (REQ-041), requirements/changes.md
+Validation: `go test ./transport/discord -count=1` and `go vet ./transport/discord`
+Status: accepted

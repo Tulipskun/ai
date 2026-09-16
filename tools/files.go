@@ -126,6 +126,91 @@ func readFileTool(rootAt func(context.Context) string) handler {
 	}
 }
 
+type readFilesArgs struct {
+	Paths         []string `json:"paths"`
+	MaxBytes      int64    `json:"max_bytes"`
+	MaxTotalBytes int64    `json:"max_total_bytes"`
+}
+
+const maxReadFiles = 32
+
+func readFilesTool(rootAt func(context.Context) string) handler {
+	return func(ctx context.Context, raw json.RawMessage) (string, error) {
+		root := rootAt(ctx)
+		var args readFilesArgs
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return "", err
+		}
+		if len(args.Paths) == 0 {
+			return "", errors.New("paths must not be empty")
+		}
+		if len(args.Paths) > maxReadFiles {
+			return "", fmt.Errorf("too many paths (max %d)", maxReadFiles)
+		}
+		perFileCap := int64(maxFileBytes)
+		if args.MaxBytes > 0 && args.MaxBytes < perFileCap {
+			perFileCap = args.MaxBytes
+		}
+		totalCap := int64(maxFileBytes)
+		if args.MaxTotalBytes > 0 && args.MaxTotalBytes < totalCap {
+			totalCap = args.MaxTotalBytes
+		}
+		type entry struct {
+			Path      string `json:"path"`
+			Bytes     int64  `json:"bytes,omitempty"`
+			Truncated bool   `json:"truncated,omitempty"`
+			Content   string `json:"content,omitempty"`
+			Error     string `json:"error,omitempty"`
+		}
+		out := make([]entry, 0, len(args.Paths))
+		var used int64
+		for _, name := range args.Paths {
+			if used >= totalCap {
+				out = append(out, entry{Path: name, Error: "total byte budget exceeded"})
+				continue
+			}
+			path, err := safePath(root, name)
+			if err != nil {
+				out = append(out, entry{Path: name, Error: err.Error()})
+				continue
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				out = append(out, entry{Path: name, Error: err.Error()})
+				continue
+			}
+			if info.IsDir() {
+				out = append(out, entry{Path: name, Error: "path is a directory"})
+				continue
+			}
+			if info.Size() > maxFileBytes {
+				out = append(out, entry{Path: name, Bytes: info.Size(), Error: fmt.Sprintf("file exceeds %d byte limit", maxFileBytes)})
+				continue
+			}
+			allowance := perFileCap
+			if remaining := totalCap - used; remaining < allowance {
+				allowance = remaining
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				out = append(out, entry{Path: name, Error: err.Error()})
+				continue
+			}
+			e := entry{Path: name, Bytes: int64(len(data))}
+			if int64(len(data)) > allowance {
+				e.Content = string(data[:allowance])
+				e.Truncated = true
+			} else {
+				e.Content = string(data)
+			}
+			used += int64(len(e.Content))
+			out = append(out, e)
+		}
+		data, err := json.Marshal(out)
+		return string(data), err
+	}
+}
+
 type writeFileArgs struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`

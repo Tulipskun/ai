@@ -33,6 +33,7 @@ func normalizeMessage(message discordMessage) (InputMessage, bool) {
 	if message.AuthorIsBot || message.ID == "" || message.ChannelID == "" || message.AuthorID == "" {
 		return InputMessage{}, false
 	}
+	log.Printf("discord intake channel=%s message=%s author=%s", message.ChannelID, message.ID, message.AuthorID)
 	return InputMessage{SessionID: "discord:channel:" + message.ChannelID, ChannelID: message.ChannelID, MessageID: message.ID, AuthorID: message.AuthorID, AuthorName: message.AuthorName, Content: message.Content, Attachments: convertAttachments(message.Attachments)}, true
 }
 

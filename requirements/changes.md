@@ -524,3 +524,16 @@ Reason: Past repro proved /json/version is always 404 on Firefox 140 ESR; live B
 Impact: tools/browser_client.go
 Validation: go test ./tools ./runtime ./cmd/ai -count=1 and go vet ./tools ./runtime ./cmd/ai plus live scratch-profile firefox headless WS 101 plus session.new session id
 Status: accepted
+
+CHANGE-040
+
+Date: 2026-09-16
+Type: add
+Request: Implement all-channel turn logging fix now, zero further discovery loops
+Conflict: none (extends failure-only OnTurnError logging; no rotation change)
+Previous: Only OnTurnError in cmd/ai/main.go logged turn failures; success turns in sdk/loop.go Entry were silent and Discord intake for unknown channels was invisible when resolve failed
+New: sdk/loop.go Entry success path logs turn ok source/session/channel (channel_id from Metadata, empty safe); transport/discord/gateway.go normalizeMessage logs discord intake channel/message/author for every non-bot message before session resolve; failure path unchanged; no log rotation change
+Reason: Missing channel turns left no trace in ai.log, so unknown/unresolved channels could not be diagnosed
+Impact: sdk/loop.go, transport/discord/gateway.go, requirements/changes.md
+Validation: go test ./transport/discord ./sdk ./cmd/ai -count=1 and go vet same packages
+Status: accepted

@@ -143,6 +143,11 @@ func (h *HarnessLoop) Entry(ctx context.Context, input Input) error {
 	if err != nil {
 		return err
 	}
+	channel := ""
+	if input.Metadata != nil {
+		channel = input.Metadata["channel_id"]
+	}
+	log.Printf("turn ok source=%s session=%s channel=%s", input.Source, input.SessionID, channel)
 	if responseTraced {
 		return nil
 	}

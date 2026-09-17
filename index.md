@@ -42,7 +42,7 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 | Provider routing, catalogue, retry | `sdk/router_client.go`, `sdk/routing.go`, `sdk/providers/` |
 | Worker tool surface | `tools/registry.go` |
 | File tools incl. batch read | `tools/files.go` |
-| Shell / jobs / fetch / browser | `tools/command.go`, `tools/jobs.go`, `tools/web_fetch.go`, `tools/browser_tools.go` |
+| Shell / jobs / fetch / browser / OS input | `tools/command.go`, `tools/jobs.go`, `tools/web_fetch.go`, `tools/browser_tools.go`, `tools/os_input.go` |
 | Attachment file store tools | `tools/attachments.go` |
 | Outbound file-send intents (worker → transport) | `sdk/outbound_attachments.go` |
 | Runtime config + session manager | `runtime/session_manager.go`, `runtime/*.go` |

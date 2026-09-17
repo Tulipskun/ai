@@ -589,3 +589,16 @@ Reason: Chromium pipe is the stable headless control channel without the TCP/Dev
 Impact: tools/browser_client.go (browserCandidates + browserAbsoluteCandidates auto order), tools/browser_client_test.go (AutoPrefersChromium), README.md, .config/browser.example.json, live ~/.local/share/ai/config/browser.json, requirements/functional.md (REQ-010)
 Validation: go test ./tools ./runtime ./cmd/ai -count=1 and go vet ./tools ./runtime ./cmd/ai
 Status: accepted
+
+CHANGE-045
+
+Date: 2026-09-17
+Type: add
+Request: Finish OS-level mouse keyboard control tools wiring, validate, commit and push
+Conflict: none (new REQ-042; browser tools untouched)
+Previous: `tools/os_input.go` existed unregistered; registry had no OS input tools
+New: REQ-042 — worker OS tools `os_mouse_move`, `os_mouse_click`, `os_key_press`, `os_type_text` via xdotool (X11) with wtype keyboard/text fallback on Wayland; mouse tools error clearly under wtype; argument validation (coords clamp 0-16384, key max 64, text max 4000 runes); dry-run via `AI_OS_INPUT_DRY_RUN=1` without touching a display server; browser tools retained
+Reason: Give the worker OS-level input control alongside browser automation for desktops where CDP is unavailable or insufficient
+Impact: tools/os_input.go (registered, already present), tools/registry.go (4 definitions + handlers), tools/os_input_test.go (dry-run tests), tools/registry_test.go (counts 19/32), requirements/functional.md (REQ-042)
+Validation: go test ./tools ./runtime -count=1 and go vet ./tools ./runtime
+Status: accepted

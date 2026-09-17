@@ -30,7 +30,9 @@ func parseCommand(args []string) (command, error) {
 		return commandCLI, nil
 	}
 	if args[0] == "update" {
-		if len(args) > 2 { return commandUpdate, fmt.Errorf("update: usage is 'ai update [version]'") }
+		if _, _, err := parseUpdateArgs(args[1:]); err != nil {
+			return commandUpdate, err
+		}
 		return commandUpdate, nil
 	}
 	if args[0] == "uninstall" {
@@ -86,6 +88,6 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  discord    Configure Discord interactively")
 	fmt.Fprintln(w, "  browser    Configure browser automation interactively")
 	fmt.Fprintln(w, "  system     Show or set the model system prompt")
-	fmt.Fprintln(w, "  update [version]  Download and replace the installed AI binary")
+	fmt.Fprintln(w, "  update [--auto] [version]  Download and replace the installed AI binary")
 	fmt.Fprintln(w, "  uninstall  Stop AI and remove the binary and runtime state")
 }

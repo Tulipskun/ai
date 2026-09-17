@@ -21,10 +21,11 @@ const maxJobOutputBytes = 1 << 20
 type JobState string
 
 const (
-	JobRunning   JobState = "running"
-	JobCompleted JobState = "completed"
-	JobFailed    JobState = "failed"
-	JobCancelled JobState = "cancelled"
+	JobRunning     JobState = "running"
+	JobCompleted   JobState = "completed"
+	JobFailed      JobState = "failed"
+	JobCancelled   JobState = "cancelled"
+	JobInterrupted JobState = "interrupted"
 )
 
 type boundedBuffer struct {
@@ -100,12 +101,20 @@ func (m *JobManager) load() {
 	}
 	for _, r := range file.Jobs {
 		j := &job{id: r.ID, sessionID: r.SessionID, command: r.Command, args: append([]string(nil), r.Args...), state: r.Status, startedAt: r.StartedAt, exitCode: r.ExitCode, err: r.Error, done: make(chan struct{})}
+		if r.Output != "" {
+			j.stdout.data = append([]byte(nil), r.Output...)
+		}
 		if r.FinishedAt != nil {
 			j.finishedAt = *r.FinishedAt
 		}
+		// Graceful-update handoff (REQ-043): a job still marked running when
+		// the daemon restarts was in flight across the binary replace, not a
+		// command failure. Keep its command/args/session/output persisted and
+		// mark it interrupted (retryable) instead of failed so the new daemon
+		// resumes with the record intact.
 		if j.state == JobRunning {
-			j.state = JobFailed
-			j.err = "job manager restarted before the job completed"
+			j.state = JobInterrupted
+			j.err = "daemon restarted during update; job did not complete"
 			j.finishedAt = time.Now()
 			if j.exitCode == 0 {
 				j.exitCode = -1

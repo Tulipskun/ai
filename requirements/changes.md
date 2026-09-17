@@ -628,3 +628,29 @@ Reason: Daemon runs without DISPLAY in its environment (started via supervisor) 
 Impact: tools/os_input.go (effectiveOSDisplay, osFallbackDisplayProbe seam, withFallbackDisplayEnv, all DISPLAY guards + exec paths), tools/os_input_test.go (fallback unit + live-path tests), requirements/functional.md (REQ-042)
 Validation: go test ./tools ./runtime -count=1 and go vet ./tools ./runtime
 Status: accepted
+
+CHANGE-048
+
+Date: 2026-09-17
+Type: revise
+Request: Fix Discord display rendering V2 cleanup (canonical path, legacy gating, receipt signature, stale outbound docs)
+Conflict: none (clarifies REQ-022/031/041; no behavior redesign, no update/reconnect change)
+Previous: `Display.Display` had no documented canonical rule for the V2 actor path vs the legacy embed `displayTrace` fallback; `heartbeatFinish` took an unused `footer` arg (receipt already footer-free per CHANGE-036) with dead `receiptFooter` computation at terminal stages; `heartbeatState` carried unused `toolCount`/`retrying` counters; `transport/discord/attachments.go` still carried the stale `TODO(stage-7)` claiming no outbound producer exists, and README repeated the same stale claim
+New: Documented V2 actor path as canonical for live gateway traffic (`Display.Display` routes `*Gateway` outputs with `trace_actor` metadata via `displayActorOutput`; HarnessLoop always stamps main/subagent); legacy embed `displayTrace` stays explicitly gated for non-Gateway senders and offline fakes without `trace_actor` (validated: ungated routing breaks legacy trace tests); `heartbeatFinish` signature drops the unused `footer` arg and documents the receipt as footer-free per REQ-041 (usage stays on the detailed actor trace footer only); unused `toolCount`/`retrying` counters removed; stale `TODO(stage-7)` replaced with the implemented producer note (`send_attachment` tool + `sdk.RecordOutboundAttachment`/`TakeOutboundAttachmentIDs` + `HarnessLoop.Entry` stamp, CHANGE-033); README outbound paragraph updated to match; Components V2 container, pagination, throttles, suppress-notifications behavior unchanged
+Reason: Live gateway output must never silently fall back to legacy embeds; dead args/counters and stale producer docs mislead future work and contradict the implemented `sdk/outbound_attachments.go` + loop drain path
+Impact: transport/discord/adapter.go (V2 canonical routing), transport/discord/actor_trace_display.go (receipt signature + dead counters), transport/discord/attachments.go (stale TODO replaced), README.md (outbound claim), requirements/changes.md
+Validation: go test ./transport/discord ./sdk -count=1 and go vet same packages
+Status: accepted
+
+CHANGE-049
+
+Date: 2026-09-17
+Type: add
+Request: Implement self-update with graceful job handoff to new daemon
+Conflict: none (extends update path; no Discord display change, no live config edit)
+Previous: `ai update [version]` verified checksum and skipped restart when hash unchanged, but stopped the daemon abruptly via stopDaemon (SIGTERM 10s then SIGKILL) with no jobs drain, no handoff record, and no post-restart health check; `tools/jobs.go` load marked any running job across restart as failed ("job manager restarted before the job completed")
+New: REQ-043 — `ai update [--auto] [version]` keeps hash verification and no-restart-if-unchanged; on change it drains (waitForJobsDrain on data/jobs.json up to 15s, graceful stopDaemonForUpdate SIGTERM with 30s drain timeout then SIGKILL fallback), preserves jobs (running across restart loads as interrupted/retryable with command/args/session/output intact, not failed), preserves intake (live transports resume on new daemon, session DBs stay persisted), writes update.handoff.json (old/new version+hash, old pid, drained flag) consumed once on daemon boot (log + remove), verifies new daemon healthy (poll ai.pid up to 30s); --auto reserved for non-interactive self-check (behavior identical, never prompts)
+Reason: Abrupt update drops in-flight turns and orphans background-job bookkeeping; graceful drain plus persisted interrupted state plus verified resume keeps sessions and jobs continuous across binary replace
+Impact: cmd/ai/update.go (graceful path), cmd/ai/update_handoff.go (new: parseUpdateArgs, drain/health/handoff helpers), cmd/ai/command.go (update usage + --auto), cmd/ai/main.go (consumeUpdateHandoff on daemon boot), tools/jobs.go (JobInterrupted + load mapping), requirements/functional.md (REQ-043), requirements/changes.md
+Validation: go test ./cmd/ai ./tools ./sdk ./runtime -count=1 and go vet same packages
+Status: accepted

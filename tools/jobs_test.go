@@ -135,3 +135,35 @@ func TestRegistryJobToolsRequireSession(t *testing.T) {
 		t.Fatal("job still running")
 	}
 }
+
+func TestInterruptedJobsPreservedAcrossRestart(t *testing.T) {
+	root := t.TempDir()
+	statePath := root + "/jobs.json"
+	payload := map[string]any{"version": 1, "jobs": []any{
+		map[string]any{"id": "job-7", "session_id": "session-a", "status": "running", "command": "sh", "args": []string{"-c", "sleep 30"}, "output": "partial", "exit_code": -1, "started_at": "2026-09-17T00:00:00Z"},
+		map[string]any{"id": "job-8", "session_id": "session-a", "status": "completed", "command": "sh", "output": "done", "exit_code": 0, "started_at": "2026-09-17T00:00:00Z"},
+	}}
+	data, _ := json.Marshal(payload)
+	if err := os.WriteFile(statePath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewJobManager(root, statePath)
+	j, err := m.Get("job-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := snapshotJob(j)
+	if snap.Status != JobInterrupted {
+		t.Fatalf("in-flight job status=%s, want interrupted", snap.Status)
+	}
+	if snap.Command != "sh" || snap.SessionID != "session-a" || snap.Output != "partial" {
+		t.Fatalf("in-flight job lost record: %+v", snap)
+	}
+	j2, err := m.Get("job-8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshotJob(j2).Status != JobCompleted {
+		t.Fatalf("completed job changed: %s", snapshotJob(j2).Status)
+	}
+}

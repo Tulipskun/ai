@@ -210,7 +210,7 @@ A file a user posts in Discord is downloaded by the transport into the session's
 
 Sending a file back is a transport responsibility, and `transport/discord` is the only module that uploads one. It reads three optional keys from `sdk.Output.Metadata` — `out_attachment_ids` (comma-separated store reference IDs), `out_attachments` (`manifest` or `latest`), and `out_attachment_raw` (refused by design, reported instead of ignored) — resolves them against that output's own session only, and uploads with one multipart message after the text has been delivered. A file that cannot be sent, or a request no sender can honour, is reported with a short safe indicator, never with raw REST error text, a path, or another session's identity.
 
-Nothing outside the transport interprets those keys, and the harness currently has no way to produce them: `HarnessLoop` builds `sdk.Output.Metadata` as a copy of the input's, so no runtime caller sets an outbound key today. The outbound half of REQ-026 is therefore consumer-complete and offline-tested, and the producer needs a canonical change in `sdk/` (see the `TODO(stage-7)` in `transport/discord/attachments.go`).
+Nothing outside the transport interprets those keys for upload, and the producer is the worker `send_attachment` tool (`tools/attachments.go`): it validates the opaque reference against the session store and records the intent via `sdk.RecordOutboundAttachment` (capped at 10); `HarnessLoop.Entry` (`sdk/loop.go`) drains via `TakeOutboundAttachmentIDs` and stamps `Output.Metadata[out_attachment_ids]` (merged, per-turn dedup) for the transport `SendFiles` path. File bytes never travel the SDK text path.
 
 ## CLI
 

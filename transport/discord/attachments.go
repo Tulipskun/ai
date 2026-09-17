@@ -76,30 +76,13 @@ const (
 	OutboundModeLatest   = "latest"
 )
 
-// TODO(stage-7): this transport is a complete outbound *consumer*, but nothing
-// in the runtime can yet *produce* the request. HarnessLoop builds sdk.Output by
-// cloning Input.Metadata (sdk/loop.go), so no worker, tool result, or orchestration
-// event can add out_attachment_ids / out_attachments to the output of the turn that
-// produced the file. Producing it requires two sdk/ changes, both out of scope here
-// by instruction (CON-009, and the planner's "don't touch sdk/"):
-//
-//  1. Carrying the worker's file references onward. sdk.SubAgentConfig's result
-//     path and the trace sink only move text, so a reference a worker names in its
-//     report cannot become output metadata. The natural shape is a bounded
-//     "attachments" field on sdk.Output filled from the worker's own attachment
-//     manifest for that job, which keeps REQ-019's "summary and evidence only"
-//     review rule because it is metadata, not content.
-//  2. Scoping the lookup. A worker's session ID is parent.ID()+":subagent:"+jobID
-//     (sdk/subagent.go), while the output that reaches a Display carries the
-//     *parent* session ID. Until either the parent session ID is mapped to its
-//     workers' attachment scopes or intake writes into the parent scope, "manifest"
-//     and "latest" resolve against the channel session's own store, which is
-//     exactly where inbound files land. Outbound therefore works today for files
-//     the transport itself stored, and needs step 1 for files a worker produced.
-//
-// Until then the wire path is exercised by tests only (see attachments_test.go),
-// and a turn that asks for nothing uploads nothing, which is the safe direction for
-// the bug to sit in.
+// Outbound producer (implemented, see CHANGE-033): the worker tool
+// `send_attachment` (tools/attachments.go) validates the opaque reference
+// against the session store and records the intent via
+// sdk.RecordOutboundAttachment (capped at MaxOutboundAttachmentIDs=10);
+// HarnessLoop.Entry (sdk/loop.go) drains via TakeOutboundAttachmentIDs and
+// stamps Output.Metadata[out_attachment_ids] (merged, per-turn dedup) for
+// this transport's SendFiles path. File bytes never travel the SDK text path.
 
 // AttachmentKey builds the indexed inbound key for one stored attachment, so a
 // reader of the metadata does not have to spell the shape out.

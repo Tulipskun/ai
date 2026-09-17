@@ -33,8 +33,6 @@ const heartbeatThrottleMs = 3000
 // args dumps, result excerpts and per-second token footers are never rendered.
 type heartbeatState struct {
 	lastEdit  time.Time
-	toolCount int
-	retrying  bool
 	start     time.Time
 	messageID string
 	entries   []heartbeatToolEntry
@@ -129,8 +127,6 @@ func heartbeatNoteTool(key, toolName string) {
 	}
 	hb := heartbeatEnsure(key)
 	heartbeatMu.Lock()
-	hb.toolCount++
-	hb.retrying = false
 	hb.entries = append(hb.entries, heartbeatToolEntry{name: toolName})
 	if len(hb.entries) > heartbeatMaxTools {
 		hb.entries = append([]heartbeatToolEntry(nil), hb.entries[len(hb.entries)-heartbeatMaxTools:]...)
@@ -164,7 +160,6 @@ func heartbeatNoteResult(key, toolName string, isError bool, elapsedSec int64) {
 			hb.entries = append([]heartbeatToolEntry(nil), hb.entries[len(hb.entries)-heartbeatMaxTools:]...)
 		}
 	}
-	hb.retrying = false
 	heartbeatMu.Unlock()
 }
 
@@ -306,8 +301,10 @@ func (g *Gateway) heartbeatRefresh(ctx context.Context, channelID, key, label st
 }
 
 // heartbeatFinish replaces the status container once with the collapsed
-// one-line receipt including the token footer.
-func (g *Gateway) heartbeatFinish(ctx context.Context, channelID, key, label string, accent int, footer string) error {
+// one-line receipt. The receipt intentionally carries no token/usage footer
+// (REQ-041, CHANGE-036); per-turn/session usage stays on the detailed actor
+// trace footer (actorTraceFooter), never on this permanent status message.
+func (g *Gateway) heartbeatFinish(ctx context.Context, channelID, key, label string, accent int) error {
 	heartbeatMu.Lock()
 	hb := heartbeatStates[key]
 	if hb == nil {
@@ -570,12 +567,9 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 		if trace.Response != nil {
 			g.countActorTerminalUsage(key, trace.Response.Usage)
 		}
-		actorTraceMu.Lock()
-		receiptFooter := actorFooterLocked(actorTraceStates[key])
-		actorTraceMu.Unlock()
 		g.actorTraceComplete(key)
 		flushErr := g.actorTraceFlush(ctx, channelID, chKey, key)
-		if hbErr := g.heartbeatFinish(ctx, channelID, key, label, accent, receiptFooter); hbErr != nil {
+		if hbErr := g.heartbeatFinish(ctx, channelID, key, label, accent); hbErr != nil {
 			return errors.Join(flushErr, hbErr)
 		}
 		return flushErr
@@ -589,10 +583,7 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 			return err
 		}
 		flushErr := g.actorTraceFlush(ctx, channelID, chKey, key)
-		actorTraceMu.Lock()
-		receiptFooter := actorFooterLocked(actorTraceStates[key])
-		actorTraceMu.Unlock()
-		if hbErr := g.heartbeatFinish(ctx, channelID, key, label, accent, receiptFooter); hbErr != nil {
+		if hbErr := g.heartbeatFinish(ctx, channelID, key, label, accent); hbErr != nil {
 			return errors.Join(flushErr, hbErr)
 		}
 		return flushErr

@@ -20,6 +20,8 @@ func TestParseCommand(t *testing.T) {
 		{name: "browser disable", args: []string{"browser", "disable"}, want: commandBrowser},
 		{name: "update", args: []string{"update"}, want: commandUpdate},
 		{name: "update pins version", args: []string{"update", "v1.35"}, want: commandUpdate},
+		{name: "update auto flag", args: []string{"update", "--auto"}, want: commandUpdate},
+		{name: "update auto plus version", args: []string{"update", "--auto", "v1.35"}, want: commandUpdate},
 		{name: "update rejects extras", args: []string{"update", "v1.35", "x"}, want: commandUpdate, err: errors.New("update usage")},
 		{name: "uninstall", args: []string{"uninstall"}, want: commandUninstall},
 		{name: "no args keeps backwards compatibility", args: nil, want: commandStart},

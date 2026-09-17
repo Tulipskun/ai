@@ -182,6 +182,11 @@ func (d Display) Display(ctx context.Context, output sdk.Output) error {
 		return errors.New("discord: display has no sender")
 	}
 	channelID := output.Metadata["channel_id"]
+	// V2 actor path is canonical for live gateway traffic (REQ-022/031/041):
+	// HarnessLoop always stamps trace_actor (main/subagent), so every live
+	// Gateway output goes through displayActorOutput. The legacy embed
+	// fallback (displayTrace) below stays gated for non-Gateway senders and
+	// offline fakes that emit trace events without trace_actor metadata.
 	if gateway, ok := d.Sender.(*Gateway); ok && output.Metadata["trace_actor"] != "" {
 		if channelID == "" {
 			return errors.New("discord: output has no channel_id")

@@ -13,18 +13,15 @@ import (
 )
 
 func runUpdate(args []string) error {
-	if len(args) > 1 {
-		return fmt.Errorf("update: usage is 'ai update [version]'")
+	targetVersion, _, err := parseUpdateArgs(args)
+	if err != nil {
+		return err
 	}
 	app, err := installedBinary()
 	if err != nil {
 		return err
 	}
 	const repo = "Tulipskun/ai"
-	targetVersion := ""
-	if len(args) == 1 {
-		targetVersion = strings.TrimSpace(args[0])
-	}
 	assetOS := runtime.GOOS
 	assetArch := runtime.GOARCH
 	if assetOS != "linux" {
@@ -98,9 +95,23 @@ func runUpdate(args []string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	// Graceful handoff (REQ-043): drain in-flight work before replacing the
+	// binary. waitForJobsDrain lets background jobs finish; the daemon keeps
+	// serving until SIGTERM so the current turn can settle and session DBs
+	// stay persisted. Intake needs no queue file: Discord/CLI inputs resume
+	// from the live transports on the new daemon.
+	state, _ := stateRoot()
+	oldPID := 0
+	if state != "" {
+		oldPID = currentDaemonPID(state)
+	}
 	wasRunning := daemonRunning()
+	drained := true
 	if wasRunning {
-		if err := stopDaemon(app); err != nil {
+		if jobsPath := jobsFilePathForUpdate(state); jobsPath != "" {
+			drained = waitForJobsDrain(jobsPath, updateJobsDrainTimeout)
+		}
+		if _, err := stopDaemonForUpdate(updateDrainTimeout); err != nil {
 			return fmt.Errorf("stop daemon for update: %w", err)
 		}
 	}
@@ -113,10 +124,33 @@ func runUpdate(args []string) error {
 		return fmt.Errorf("replace binary: %w", err)
 	}
 	fmt.Printf("[ai] updated %s\n", app)
+	if state != "" {
+		_ = writeUpdateHandoff(state, updateHandoff{
+			OldVersion: oldVersion,
+			NewVersion: newVersion,
+			OldHash:    oldHash,
+			NewHash:    newHash,
+			PID:        oldPID,
+			Drained:    drained,
+		})
+	}
 	if err := restartDaemonAfterUpdate(app, wasRunning); err != nil {
 		return fmt.Errorf("restart daemon: %w", err)
 	}
+	if wasRunning {
+		if err := verifyDaemonHealthy(updateHealthTimeout); err != nil {
+			return err
+		}
+		fmt.Println("[ai] new daemon healthy")
+	}
 	return nil
+}
+
+func jobsFilePathForUpdate(state string) string {
+	if strings.TrimSpace(state) == "" {
+		return ""
+	}
+	return filepath.Join(state, "data", "jobs.json")
 }
 
 // ghReleaseDownload downloads release assets with `gh release download`.

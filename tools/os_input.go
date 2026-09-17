@@ -26,8 +26,11 @@ import (
 // os_mouse_scroll sends wheel clicks, and os_window_list/focus/geometry
 // manage X11 windows via xdotool search and getwindowgeometry.
 //
-// DISPLAY and WAYLAND_DISPLAY handling: xdotool requires DISPLAY to be set;
-// wtype is selected when WAYLAND_DISPLAY is set and xdotool is unusable.
+// DISPLAY and WAYLAND_DISPLAY handling: xdotool uses effectiveOSDisplay(),
+// which is $DISPLAY when set and otherwise falls back to :1 when the :1 X
+// socket exists (the daemon often runs without DISPLAY while termux-x11
+// still serves :1); wtype is selected when WAYLAND_DISPLAY is set and
+// xdotool is unusable.
 // When neither binary exists in PATH every tool fails with an install hint
 // instead of a bare exec error. Set AI_OS_INPUT_DRY_RUN=1 to validate
 // arguments, clamping, and planned argv without touching a display server.
@@ -51,6 +54,7 @@ var osInputLookPath = exec.LookPath
 
 var osInputRun = func(ctx context.Context, name string, args []string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	withFallbackDisplayEnv(cmd)
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
@@ -61,6 +65,52 @@ var osInputDryRun = func() bool {
 		return true
 	}
 	return false
+}
+
+// osFallbackDisplayProbe reports ":1" when the :1 X socket exists. The daemon
+// is often started without DISPLAY in its environment (e.g. via supervisor)
+// while termux-x11 still serves :1, so xdotool paths fall back to :1 instead
+// of failing on empty DISPLAY. Injectable seam for unit tests.
+var osFallbackDisplayProbe = func() string {
+	if _, err := os.Stat("/tmp/.X11-unix/X1"); err == nil {
+		return ":1"
+	}
+	return ""
+}
+
+// effectiveOSDisplay returns $DISPLAY when set, otherwise the :1 fallback
+// when its socket exists, otherwise "".
+func effectiveOSDisplay() string {
+	if d := strings.TrimSpace(os.Getenv("DISPLAY")); d != "" {
+		return d
+	}
+	return osFallbackDisplayProbe()
+}
+
+// withFallbackDisplayEnv injects DISPLAY=:1 into cmd.Env when the process
+// environment has no DISPLAY but the :1 socket exists. An existing DISPLAY
+// entry is replaced (never duplicated) so the fallback wins in the child.
+func withFallbackDisplayEnv(cmd *exec.Cmd) {
+	if strings.TrimSpace(os.Getenv("DISPLAY")) != "" {
+		return
+	}
+	fb := osFallbackDisplayProbe()
+	if fb == "" {
+		return
+	}
+	env := os.Environ()
+	replaced := false
+	for i, kv := range env {
+		if kv == "DISPLAY" || strings.HasPrefix(kv, "DISPLAY=") {
+			env[i] = "DISPLAY="+fb
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		env = append(env, "DISPLAY="+fb)
+	}
+	cmd.Env = env
 }
 
 type osMouseMoveArgs struct {
@@ -134,7 +184,7 @@ func clampOSInputCoord(v int) int {
 func pickOSInputBackend() (string, error) {
 	_, xdErr := osInputLookPath("xdotool")
 	_, wErr := osInputLookPath("wtype")
-	display := strings.TrimSpace(os.Getenv("DISPLAY"))
+	display := effectiveOSDisplay()
 	wayland := strings.TrimSpace(os.Getenv("WAYLAND_DISPLAY"))
 	if xdErr == nil {
 		if display != "" {
@@ -184,7 +234,7 @@ func osInputDryRunResult(backend, action string, argv []string, extra map[string
 func intendedOSInputBackend() string {
 	_, xdErr := osInputLookPath("xdotool")
 	_, wErr := osInputLookPath("wtype")
-	display := strings.TrimSpace(os.Getenv("DISPLAY"))
+	display := effectiveOSDisplay()
 	wayland := strings.TrimSpace(os.Getenv("WAYLAND_DISPLAY"))
 	if xdErr == nil && display != "" {
 		return "xdotool"
@@ -246,7 +296,7 @@ func osMouseMoveHandler(ctx context.Context, raw json.RawMessage) (string, error
 	if backend == "wtype" {
 		return "", errors.New("os_mouse_move unavailable: wtype supports keyboard only, install xdotool and set DISPLAY for mouse control")
 	}
-	if strings.TrimSpace(os.Getenv("DISPLAY")) == "" {
+	if effectiveOSDisplay() == "" {
 		return "", errors.New("os_mouse_move unavailable: DISPLAY is not set (xdotool requires an X11 display)")
 	}
 	argv := []string{"mousemove", fmt.Sprint(x), fmt.Sprint(y)}
@@ -299,7 +349,7 @@ func osMouseClickHandler(ctx context.Context, raw json.RawMessage) (string, erro
 	if backend == "wtype" {
 		return "", errors.New("os_mouse_click unavailable: wtype supports keyboard only, install xdotool and set DISPLAY for mouse control")
 	}
-	if strings.TrimSpace(os.Getenv("DISPLAY")) == "" {
+	if effectiveOSDisplay() == "" {
 		return "", errors.New("os_mouse_click unavailable: DISPLAY is not set (xdotool requires an X11 display)")
 	}
 	out, err := osInputRun(ctx, "xdotool", argv)
@@ -344,7 +394,7 @@ func osKeyPressHandler(ctx context.Context, raw json.RawMessage) (string, error)
 			argv = append(argv, "-k", p)
 		}
 	} else {
-		if strings.TrimSpace(os.Getenv("DISPLAY")) == "" {
+		if effectiveOSDisplay() == "" {
 			return "", errors.New("os_key_press unavailable: DISPLAY is not set (xdotool requires an X11 display)")
 		}
 		name = "xdotool"
@@ -384,7 +434,7 @@ func osTypeTextHandler(ctx context.Context, raw json.RawMessage) (string, error)
 		name = "wtype"
 		argv = []string{args.Text}
 	} else {
-		if strings.TrimSpace(os.Getenv("DISPLAY")) == "" {
+		if effectiveOSDisplay() == "" {
 			return "", errors.New("os_type_text unavailable: DISPLAY is not set (xdotool requires an X11 display)")
 		}
 		name = "xdotool"
@@ -410,7 +460,7 @@ func requireX11Backend(tool string) (string, error) {
 	if backend == "wtype" {
 		return "", fmt.Errorf("%s unavailable: wtype supports keyboard only, install xdotool and set DISPLAY for mouse/window control", tool)
 	}
-	if strings.TrimSpace(os.Getenv("DISPLAY")) == "" {
+	if effectiveOSDisplay() == "" {
 		return "", fmt.Errorf("%s unavailable: DISPLAY is not set (xdotool requires an X11 display)", tool)
 	}
 	return backend, nil
@@ -466,6 +516,7 @@ func validOSDisplay(display string) bool {
 
 func osInputRunBytes(ctx context.Context, name string, args []string) ([]byte, string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	withFallbackDisplayEnv(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

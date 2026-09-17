@@ -362,3 +362,80 @@ func TestOSScreenshotStoresReferenceOnly(t *testing.T) {
 		t.Fatalf("screenshot not stored as PNG: %s", described)
 	}
 }
+
+func TestOSEffectiveDisplayFallback(t *testing.T) {
+	oldProbe := osFallbackDisplayProbe
+	defer func() { osFallbackDisplayProbe = oldProbe }()
+
+	t.Setenv("DISPLAY", ":0")
+	osFallbackDisplayProbe = func() string { return ":1" }
+	if got := effectiveOSDisplay(); got != ":0" {
+		t.Fatalf("explicit DISPLAY must win, got %q", got)
+	}
+
+	t.Setenv("DISPLAY", "")
+	osFallbackDisplayProbe = func() string { return ":1" }
+	if got := effectiveOSDisplay(); got != ":1" {
+		t.Fatalf("empty DISPLAY must fall back to :1, got %q", got)
+	}
+
+	t.Setenv("DISPLAY", "")
+	osFallbackDisplayProbe = func() string { return "" }
+	if got := effectiveOSDisplay(); got != "" {
+		t.Fatalf("no DISPLAY and no socket must yield empty, got %q", got)
+	}
+}
+
+func TestOSMouseMoveFallsBackToDisplayOne(t *testing.T) {
+	oldDry := osInputDryRun
+	osInputDryRun = func() bool { return false }
+	defer func() { osInputDryRun = oldDry }()
+	oldProbe := osFallbackDisplayProbe
+	osFallbackDisplayProbe = func() string { return ":1" }
+	defer func() { osFallbackDisplayProbe = oldProbe }()
+	oldRun := osInputRun
+	osInputRun = func(ctx context.Context, name string, args []string) (string, error) {
+		if name != "xdotool" {
+			t.Fatalf("unexpected binary %q", name)
+		}
+		return "", nil
+	}
+	defer func() { osInputRun = oldRun }()
+	oldLook := osInputLookPath
+	osInputLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
+	defer func() { osInputLookPath = oldLook }()
+	t.Setenv("DISPLAY", "")
+	r, err := NewRegistry(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := r.Execute(context.Background(), sdk.ToolCall{ID: "x", Name: "os_mouse_move", Arguments: `{"x":10,"y":20}`})
+	if res.IsError {
+		t.Fatalf("mouse move with :1 fallback failed: %s", res.Content)
+	}
+	if !strings.Contains(res.Content, `"ok":true`) {
+		t.Fatalf("mouse move missing ok payload: %s", res.Content)
+	}
+}
+
+func TestOSMouseMoveNoDisplayNoSocketStillErrors(t *testing.T) {
+	oldDry := osInputDryRun
+	osInputDryRun = func() bool { return false }
+	defer func() { osInputDryRun = oldDry }()
+	oldProbe := osFallbackDisplayProbe
+	osFallbackDisplayProbe = func() string { return "" }
+	defer func() { osFallbackDisplayProbe = oldProbe }()
+	oldLook := osInputLookPath
+	osInputLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
+	defer func() { osInputLookPath = oldLook }()
+	t.Setenv("DISPLAY", "")
+	t.Setenv("WAYLAND_DISPLAY", "")
+	r, err := NewRegistry(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := r.Execute(context.Background(), sdk.ToolCall{ID: "x", Name: "os_mouse_move", Arguments: `{"x":10,"y":20}`})
+	if !res.IsError || !strings.Contains(res.Content, "DISPLAY is not set") {
+		t.Fatalf("expected DISPLAY error, got: %s", res.Content)
+	}
+}

@@ -615,3 +615,16 @@ Reason: Real desktop use needs screen capture, smooth drag, wheel scroll, and wi
 Impact: tools/os_input.go (6 new handlers), tools/registry.go (6 registrations), tools/os_input_test.go (dry-run/validation/live-chain tests), tools/registry_test.go (counts 25/38), README.md (OS control docs), requirements/functional.md (REQ-042)
 Validation: go test ./tools ./runtime -count=1 and go vet ./tools ./runtime
 Status: accepted
+
+CHANGE-047
+
+Date: 2026-09-17
+Type: revise
+Request: Verify X display :1 exists and make OS input tools use it
+Conflict: none (extends REQ-042; browser files untouched)
+Previous: REQ-042 xdotool paths failed with "DISPLAY is not set" when the daemon environment had no DISPLAY, even though termux-x11 served a live :1 display
+New: REQ-042 xdotool paths fall back to DISPLAY=:1 automatically when DISPLAY is empty but the :1 socket (/tmp/.X11-unix/X1) exists (effectiveOSDisplay + withFallbackDisplayEnv on exec.Cmd, replacing never duplicating DISPLAY); explicit display param of os_screenshot still wins; wtype fallback, validation, and AI_OS_INPUT_DRY_RUN behavior unchanged
+Reason: Daemon runs without DISPLAY in its environment (started via supervisor) while termux-x11 serves :1 (xdpyinfo/xset confirm live); without the fallback every OS tool failed despite a working X server
+Impact: tools/os_input.go (effectiveOSDisplay, osFallbackDisplayProbe seam, withFallbackDisplayEnv, all DISPLAY guards + exec paths), tools/os_input_test.go (fallback unit + live-path tests), requirements/functional.md (REQ-042)
+Validation: go test ./tools ./runtime -count=1 and go vet ./tools ./runtime
+Status: accepted

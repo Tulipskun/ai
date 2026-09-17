@@ -9,6 +9,7 @@ The installed executable is separate from application state. Runtime state is al
 │   ├── entry.json                   transport configuration
 │   ├── provider.json                provider configuration and API keys
 │   ├── browser.json                 browser configuration
+│   ├── system.json                  system prompt, defaults, sub-agent config
 │   └── attachment.json              attachment file store configuration
 ├── data/
 │   ├── jobs.json                    persistent background job state
@@ -20,7 +21,12 @@ The installed executable is separate from application state. Runtime state is al
 │           ├── manifest.json        attachment metadata only
 │           └── files/<attachment-id>
 ├── ai.pid                           daemon PID
-└── ai.log                           daemon log
+├── ai.log                           daemon log
+├── discord.heartbeat                bot-connectivity timestamp (REQ-044)
+├── update.handoff.json              version/hash resume signal, consumed on boot
+└── update.bluegreen.json            handover phase (plus ai.pid.green +
+                                     discord.heartbeat.green shadows during
+                                     green probation; all removed at cutover)
 ```
 
 There is no application `.ai` runtime directory.

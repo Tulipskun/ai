@@ -99,6 +99,6 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  discord    Configure Discord interactively")
 	fmt.Fprintln(w, "  browser    Configure browser automation interactively")
 	fmt.Fprintln(w, "  system     Show or set the model system prompt")
-	fmt.Fprintln(w, "  update [--auto] [version]  Download and replace the installed AI binary")
+	fmt.Fprintln(w, "  update [--auto] [version]  Download, verify, and hand over to the new AI binary (blue-green, zero downtime)")
 	fmt.Fprintln(w, "  uninstall  Stop AI and remove the binary and runtime state")
 }

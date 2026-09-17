@@ -13,7 +13,9 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 
 ```text
 .
+├── bin/               empty placeholder (reserved install target)
 ├── cmd/ai/            CLI entry, daemon wiring, agent/registry construction
+├── cmd/demo/          throwaway provider-smoke prototype (not shipped)
 ├── sdk/               provider-neutral Agent runtime, sessions, orchestration
 ├── tools/             worker execution tools (files, shell, jobs, browser)
 ├── runtime/           config load, session manager, provider wiring, filestore
@@ -22,6 +24,8 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 │   └── discord/
 ├── requirements/      source of truth for product behavior (read before code)
 ├── docs/              install, layout, session settings, CLI mode notes
+│   └── docs/superpowers/  archived early-Sept design notes (non-normative;
+│                           requirements/ is authoritative)
 ├── skills/            contributor procedures (spec management, checklists)
 ├── scripts/           install / supervisor helpers
 ├── AGENTS.md          contributor entry: spec-first rule + module discipline

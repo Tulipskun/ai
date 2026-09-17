@@ -163,8 +163,9 @@ type SessionConfig struct {
 }
 
 // AgentMode selects how a session answers: AgentModeMain plans through the
-// Main Agent (planning prompt plus orchestration tools, no execution tools)
-// while AgentModeSub answers as a worker with the full execution tool set.
+// Main Agent (planning prompt plus orchestration and read-only context tools,
+// no write/exec tools) while AgentModeSub answers as a worker with the full
+// execution tool set.
 // The zero value behaves as AgentModeMain so stored sessions keep working.
 type AgentMode string
 

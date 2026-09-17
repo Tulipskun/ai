@@ -4,6 +4,32 @@ Dual control for worker loops: hard system caps fail a runaway turn
 automatically (`sdk/loop_control.go`), and this checklist keeps planners
 and workers disciplined so the caps are never hit in normal work.
 
+## Planner self-read (REQ-016, CHANGE-054)
+
+The Main Agent is the senior: it reads code and context itself instead of
+delegating investigation blindly. Thinking stays in the main context
+(serial on thinking); the worker executes bounded contracts.
+
+- Read `index.md` first in one call, then batch needed files with
+  `read_files` in one call — the same ordered checklist below, but executed
+  by the planner with its own read tools (`read_file`, `read_files`,
+  `list_directory`, `search_files`). No write/exec tools, ever.
+- Planner read budget per planning round: max ~10 reads total
+  (`index.md` + one batch). If the context is still unclear after that,
+  delegate a bounded read-only recon task (lookup only, no edits) instead
+  of reading in a loop.
+- Never delegate thinking work (design decisions, architecture choices,
+  tradeoff calls, judging correctness, task structure). Lookup work
+  (find files/symbols, grep call sites, read a file) may be delegated as
+  read-only recon, serial on thinking, parallel on lookup.
+- Every delegation is a contract: Objective, Non-goals, Authority (allowed
+  paths, allowed commands, forbidden actions), Expected tests, Required
+  evidence (summary, changed files with reasons, commands run, tests and
+  results, known limitations), Acceptance criteria. Verify the returned
+  work package against the evidence (spot-check by reading files if
+  needed); accept only with verification evidence via
+  `accept_subagent_result`. Verify, don't trust.
+
 ## Ordered checklist per task
 
 Every delegated task follows this order. No step is skipped, no step is

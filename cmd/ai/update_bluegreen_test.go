@@ -149,23 +149,13 @@ func TestRollbackBlueGreenKeepsLivePID(t *testing.T) {
 	}
 }
 
-func TestKeepaliveHandoverLockCheck(t *testing.T) {
-	script, err := os.ReadFile(filepath.Join("..", "..", "scripts", "keepalive.sh"))
-	if err != nil {
-		t.Skip("keepalive.sh not available from cmd/ai test dir")
-	}
-	text := string(script)
-	for _, want := range []string{
-		"bluegreen_handover_active",
-		"green_standby_alive",
-		"cutover_done",
-		"ai.pid.green",
-		"discord.heartbeat.green",
-		"update.bluegreen.json",
-		"skipping restart",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("keepalive.sh missing blue-green guard %q", want)
+func TestNoExternalSupervisorScripts(t *testing.T) {
+	// CHANGE-055: the single `ai` binary owns the handover end to end. The
+	// legacy external supervisors must stay deleted; dc-keepalive.sh is an
+	// unrelated Desktop Commander watcher and is not covered here.
+	for _, name := range []string{"keepalive.sh", "supervisor.sh"} {
+		if _, err := os.Stat(filepath.Join("..", "..", "scripts", name)); !os.IsNotExist(err) {
+			t.Fatalf("external supervisor script %s must not exist", name)
 		}
 	}
 }
@@ -192,5 +182,55 @@ func TestPromoteGreenRefusesWhileBlueAlive(t *testing.T) {
 	}
 	if blueGreenHealthTimeout < 60*time.Second || blueGreenHealthTimeout > 90*time.Second {
 		t.Fatalf("health timeout %s must stay within 60-90s", blueGreenHealthTimeout)
+	}
+}
+
+func TestEmergencyPromoteLiveGreen(t *testing.T) {
+	root := t.TempDir()
+	app := filepath.Join(root, "ai")
+	if err := os.WriteFile(app, []byte("old-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staged := filepath.Join(root, ".ai-green-test")
+	if err := os.WriteFile(staged, []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Live pid owned by another live process (pid 1, not green): refuse.
+	if err := os.WriteFile(filepath.Join(root, "ai.pid"), []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	me := os.Getpid()
+	phase := blueGreenPhase{OldVersion: "v1", NewVersion: "v2", BluePID: 1, GreenPID: me, StagedBinary: staged}
+	if err := writeBlueGreenPhase(root, phase); err != nil {
+		t.Fatal(err)
+	}
+	if err := emergencyPromoteLiveGreen(root, app, phase); err != nil {
+		t.Fatalf("emergency promote failed: %v", err)
+	}
+	if data, err := os.ReadFile(app); err != nil || string(data) != "new-binary" {
+		t.Fatalf("app not replaced by staged binary: %q %v", string(data), err)
+	}
+	got, err := readBlueGreenPhase(root)
+	if err != nil || !got.CutoverDone || got.GreenPID != me {
+		t.Fatalf("phase not marked cutover-done: %+v %v", got, err)
+	}
+	if _, err := os.Stat(greenPIDPathForRoot(root)); !os.IsNotExist(err) {
+		t.Fatal("shadow pid must be removed on emergency promote")
+	}
+}
+
+func TestEmergencyPromoteRefusesForeignLivePID(t *testing.T) {
+	root := t.TempDir()
+	staged := filepath.Join(root, ".ai-green-test")
+	if err := os.WriteFile(staged, []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	phase := blueGreenPhase{GreenPID: os.Getpid(), StagedBinary: staged}
+	// pid 1 is alive on most systems (init); if green==self and live==1 differ, refusal triggers.
+	if os.Getpid() == 1 {
+		t.Skip("test process is pid 1; refusal case not constructible here")
+	}
+	if err := emergencyPromoteLiveGreen(root, filepath.Join(root, "ai"), phase); err == nil {
+		t.Fatal("expected refusal when a foreign live pid owns ai.pid")
 	}
 }

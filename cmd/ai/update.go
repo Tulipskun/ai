@@ -78,19 +78,23 @@ func runUpdate(args []string) error {
 		return nil
 	}
 	fmt.Println("[ai] binary changed; updating")
-	// Blue-green handoff (REQ-043, CHANGE-053): blue keeps serving while the
-	// verified binary is staged and a green standby proves itself in
-	// probation. Cutover happens only after health gates pass; a failed
-	// green rolls back with blue untouched, so there is never a
-	// zero-daemon window. The no-daemon case inside runBlueGreenUpdate keeps
-	// the classic replace-and-start path.
+	// Blue-green handoff (REQ-043, CHANGE-055): one flow only, owned
+	// end-to-end by this binary. Blue keeps serving while the verified
+	// binary is staged and a green standby proves itself in probation.
+	// Cutover happens only after health gates pass; a failed green rolls
+	// back with blue untouched, so there is never a zero-daemon window.
+	// When no daemon runs, start one first so the handover still runs the
+	// same blue-green path — there is no legacy replace-and-start branch
+	// and no external supervisor involved.
 	state, _ := stateRoot()
+	if err := ensureBlueRunning(app); err != nil {
+		return err
+	}
 	oldPID := 0
 	if state != "" {
 		oldPID = currentDaemonPID(state)
 	}
-	wasRunning := daemonRunning()
-	if err := runBlueGreenUpdate(app, state, oldVersion, newVersion, oldHash, newHash, binary, oldPID, wasRunning); err != nil {
+	if err := runBlueGreenUpdate(app, state, oldVersion, newVersion, oldHash, newHash, binary, oldPID); err != nil {
 		return err
 	}
 	return nil
@@ -177,12 +181,6 @@ func releaseLabel(version string) string {
 	return strings.TrimSpace(version)
 }
 
-func restartDaemonAfterUpdate(app string, wasRunning bool) error {
-	if !wasRunning {
-		return nil
-	}
-	return startDaemon(app)
-}
 func parsePID(value string) int {
 	var pid int
 	if _, err := fmt.Sscanf(strings.TrimSpace(value), "%d", &pid); err != nil {

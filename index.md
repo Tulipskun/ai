@@ -36,8 +36,8 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 |---|---|
 | Turn loop model → tool → model | `sdk/agent.go`, `sdk/loop.go` |
 | Loop-control caps (REQ-045) | `sdk/loop_control.go`, `sdk/loop_control_test.go` |
-| Planner (Main Agent, no exec tools) | `sdk/plan_tool.go` |
-| Worker delegation, progress/final reports | `sdk/subagent.go`, `sdk/subagent_trace_sink.go` |
+| Planner (Main Agent, senior: read-only context tools) | `sdk/plan_tool.go` |
+| Worker delegation contracts, progress/final reports | `sdk/subagent.go`, `sdk/subagent_trace_sink.go` |
 | Context budget, newest-group truncation | `sdk/context_window.go` |
 | Session persistence (one db per session) | `sdk/session_db.go`, `sdk/session_settings.go` |
 | Provider routing, catalogue, retry | `sdk/router_client.go`, `sdk/routing.go`, `sdk/providers/` |
@@ -47,7 +47,7 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 | Attachment file store tools | `tools/attachments.go` |
 | Outbound file-send intents (worker → transport) | `sdk/outbound_attachments.go` |
 | Runtime config + session manager | `runtime/session_manager.go`, `runtime/*.go` |
-| Self-update + graceful handoff | `cmd/ai/update.go`, `cmd/ai/update_handoff.go`, `cmd/ai/update_bluegreen.go`, `cmd/ai/update_bluegreen_test.go`, `tools/jobs.go` |
+| Self-update: blue-green only, single-binary handoff | `cmd/ai/update.go`, `cmd/ai/update_handoff.go`, `cmd/ai/update_bluegreen.go`, `cmd/ai/update_bluegreen_test.go`, `tools/jobs.go` |
 | Discord transport + trace display | `transport/discord/gateway.go`, `transport/discord/gateway_liveness.go`, `transport/discord/actor_trace_display.go` |
 
 ## Key files (what each owns)

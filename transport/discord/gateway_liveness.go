@@ -18,8 +18,8 @@ import (
 //   - Ready/Resumed mark the gateway connected; Disconnect marks it offline.
 //     Any MessageCreate/InteractionCreate also counts as proof of life.
 //   - lastEventMs is the last proof-of-life timestamp (UnixMilli).
-//   - A heartbeat timestamp file under the state root lets keepalive.sh
-//     detect a stale bot connection even when the daemon pid is alive.
+//   - A heartbeat timestamp file under the state root exposes bot-connection
+//     liveness to the operator even when the daemon pid is alive.
 //   - A watchdog goroutine refreshes the heartbeat file while connected and
 //     reopens the session with exponential backoff when silence exceeds the
 //     threshold or the connection flag is down.
@@ -275,7 +275,7 @@ func (g *Gateway) checkGatewayLiveness(now time.Time) {
 	default:
 	}
 	if g.Connected() {
-		// Keep the keepalive.sh file fresh during idle-but-connected hours.
+		// Keep the heartbeat file fresh during idle-but-connected hours.
 		// markGatewayEvent throttles the actual write.
 		g.livenessMu.RLock()
 		path := g.heartbeatPath

@@ -54,15 +54,6 @@ func TestInstalledBinaryPreservesSymlinkInvocationPath(t *testing.T) {
 	}
 }
 
-func TestRestartDaemonAfterUpdate(t *testing.T) {
-	if err := restartDaemonAfterUpdate("/definitely/not/an/ai-binary", false); err != nil {
-		t.Fatalf("stopped daemon should not be restarted: %v", err)
-	}
-	if err := restartDaemonAfterUpdate("/definitely/not/an/ai-binary", true); err == nil {
-		t.Fatal("running daemon should attempt a restart")
-	}
-}
-
 func TestIsLatestVersion(t *testing.T) {
 	for _, v := range []string{"", "latest", "Latest", "LATEST", "  latest  "} {
 		if !isLatestVersion(v) {

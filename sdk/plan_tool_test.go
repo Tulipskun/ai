@@ -6,12 +6,29 @@ import (
 	"testing"
 )
 
-type planningTestExecutor struct{ called bool }
+type planningTestExecutor struct {
+	called []string
+	defs   []Tool
+}
 
-func (e *planningTestExecutor) Definitions() []Tool { return []Tool{{Name: "run_command"}} }
-func (e *planningTestExecutor) Execute(context.Context, ToolCall) ToolResult {
-	e.called = true
-	return ToolResult{Content: "executed"}
+func (e *planningTestExecutor) Definitions() []Tool {
+	if e.defs != nil {
+		return e.defs
+	}
+	return []Tool{{Name: "run_command"}}
+}
+func (e *planningTestExecutor) Execute(_ context.Context, call ToolCall) ToolResult {
+	e.called = append(e.called, call.Name)
+	return ToolResult{Content: "executed:" + call.Name}
+}
+
+func mainReadTestDefs() []Tool {
+	names := []string{"read_file", "read_files", "list_directory", "search_files", "write_file", "edit_file", "bash", "run_command"}
+	defs := make([]Tool, 0, len(names))
+	for _, n := range names {
+		defs = append(defs, Tool{Name: n, Description: n, InputSchema: map[string]any{"type": "object"}})
+	}
+	return defs
 }
 
 func TestPlanningToolRequiresPlanFirst(t *testing.T) {
@@ -19,7 +36,7 @@ func TestPlanningToolRequiresPlanFirst(t *testing.T) {
 	session := NewSession(SessionConfig{ID: "test"}, nil)
 	e := newPlanningToolExecutor(base, session)
 	blocked := e.Execute(context.Background(), ToolCall{ID: "1", Name: "run_command", Arguments: `{}`})
-	if !blocked.IsError || base.called {
+	if !blocked.IsError || len(base.called) != 0 {
 		t.Fatal("execution ran before plan")
 	}
 	planned := e.Execute(context.Background(), ToolCall{ID: "2", Name: "plan", Arguments: `{"plan":"inspect A\nimplement B\nverify C"}`})
@@ -27,7 +44,7 @@ func TestPlanningToolRequiresPlanFirst(t *testing.T) {
 		t.Fatalf("plan failed: %s", planned.Content)
 	}
 	blocked = e.Execute(context.Background(), ToolCall{ID: "after-plan", Name: "run_command", Arguments: `{}`})
-	if !blocked.IsError || base.called {
+	if !blocked.IsError || len(base.called) != 0 {
 		t.Fatal("main executed a worker tool after planning")
 	}
 	state := session.Plan()
@@ -83,15 +100,62 @@ func TestPlanningToolDefinition(t *testing.T) {
 	}
 }
 
-func TestMainAgentDefinitionsContainNoExecutionTools(t *testing.T) {
-	e := newPlanningToolExecutor(&planningTestExecutor{}, nil)
+func TestMainAgentToolAllowlist(t *testing.T) {
+	base := &planningTestExecutor{defs: mainReadTestDefs()}
+	e := newPlanningToolExecutor(base, nil)
 	e.ConfigureSubAgent(&subAgentStub{})
 	defs := e.Definitions()
+	names := make(map[string]bool)
 	for _, d := range defs {
-		switch d.Name {
-		case planningToolName, "delegate_to_subagent", "stop_subagent", "follow_up_subagent", "continue_subagent", "accept_subagent_result":
-		default:
-			t.Fatalf("Main Agent exposed non-orchestration tool %q", d.Name)
+		names[d.Name] = true
+	}
+	for _, want := range []string{planningToolName, "delegate_to_subagent", "stop_subagent", "follow_up_subagent", "continue_subagent", "accept_subagent_result",
+		"read_file", "read_files", "list_directory", "search_files"} {
+		if !names[want] {
+			t.Fatalf("Main Agent missing allowed tool %q: %+v", want, names)
+		}
+	}
+	for _, forbidden := range []string{"write_file", "edit_file", "bash", "run_command"} {
+		if names[forbidden] {
+			t.Fatalf("Main Agent exposed write/exec tool %q", forbidden)
+		}
+	}
+}
+
+func TestMainAgentReadToolsExecuteViaBase(t *testing.T) {
+	base := &planningTestExecutor{defs: mainReadTestDefs()}
+	session := NewSession(SessionConfig{ID: "test-reads"}, nil)
+	e := newPlanningToolExecutor(base, session)
+	// Reads run before any plan: the senior reads context first, then plans.
+	for _, name := range []string{"read_file", "read_files", "list_directory", "search_files"} {
+		got := e.Execute(context.Background(), ToolCall{ID: name, Name: name, Arguments: `{}`})
+		if got.IsError {
+			t.Fatalf("%s must execute via base: %s", name, got.Content)
+		}
+	}
+	if len(base.called) != 4 {
+		t.Fatalf("base executions=%v", base.called)
+	}
+	for _, name := range []string{"write_file", "edit_file", "bash"} {
+		got := e.Execute(context.Background(), ToolCall{ID: "x-" + name, Name: name, Arguments: `{}`})
+		if !got.IsError || !strings.Contains(got.Content, "no write/exec tools") {
+			t.Fatalf("%s must be rejected: %+v", name, got)
+		}
+	}
+	if len(base.called) != 4 {
+		t.Fatalf("write/exec must not reach base: %v", base.called)
+	}
+}
+
+func TestMainAgentDelegationContractGuidance(t *testing.T) {
+	for _, want := range []string{"engineering contract", "Objective", "Non-goals", "Authority", "Required evidence", "Acceptance criteria", "Verify, don't trust"} {
+		if !strings.Contains(planningSystemInstruction, want) {
+			t.Fatalf("planner prompt missing contract element %q", want)
+		}
+	}
+	for _, want := range []string{"delegation contract", "Authority", "work package plus evidence bundle", "known limitations"} {
+		if !strings.Contains(defaultSubAgentSystemPrompt, want) {
+			t.Fatalf("worker prompt missing contract element %q", want)
 		}
 	}
 }
@@ -107,7 +171,7 @@ Unrelated custom instructions after the requirements must survive.`
 	if !strings.HasPrefix(got, base+"\n\n") {
 		t.Fatalf("context was modified: %s", got)
 	}
-	for _, want := range []string{"You are the Main Agent", "do not have execution tools", "take precedence over any conflicting direct-execution instructions"} {
+	for _, want := range []string{"You are the Main Agent", "calls are rejected", "take precedence over any conflicting direct-execution instructions"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("role boundary missing %q: %s", want, got)
 		}

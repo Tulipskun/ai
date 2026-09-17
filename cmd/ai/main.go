@@ -431,7 +431,6 @@ func runStop() error {
 	if err := stopDaemon(""); err != nil {
 		return err
 	}
-	stoppedKeepalive := stopKeepaliveWatchers()
 	if daemonRunning() {
 		return fmt.Errorf("ai daemon is still running")
 	}
@@ -439,81 +438,8 @@ func runStop() error {
 		fmt.Printf("[ai] not running (state: %s)\n", state)
 		return nil
 	}
-	if stoppedKeepalive > 0 {
-		fmt.Printf("[ai] stopped (pid file removed, %d keepalive watcher(s) stopped)\n", stoppedKeepalive)
-	} else {
-		fmt.Printf("[ai] stopped\n")
-	}
+	fmt.Printf("[ai] stopped\n")
 	return nil
-}
-
-// stopKeepaliveWatchers SIGTERMs detached keepalive.sh loops that would
-// otherwise restart the daemon right after 'ai stop'. Returns how many
-// watchers were signaled. A SIGKILLed keeper cannot run its EXIT trap, so a
-// stale keepalive.lock directory is removed when no watcher remains.
-func stopKeepaliveWatchers() int {
-	self := os.Getpid()
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return 0
-	}
-	var targets []int
-	for _, entry := range entries {
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil || pid <= 0 || pid == self {
-			continue
-		}
-		cmdline, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "cmdline"))
-		if err != nil || len(cmdline) == 0 {
-			continue
-		}
-		cmd := strings.ReplaceAll(string(cmdline), "\x00", " ")
-		if !strings.Contains(cmd, "keepalive.sh") {
-			continue
-		}
-		targets = append(targets, pid)
-	}
-	for _, pid := range targets {
-		_ = syscall.Kill(pid, syscall.SIGTERM)
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		alive := false
-		for _, pid := range targets {
-			if processAlive(pid) {
-				alive = true
-				break
-			}
-		}
-		if !alive {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	for _, pid := range targets {
-		if processAlive(pid) {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
-		}
-	}
-	if state, err := stateRoot(); err == nil {
-		keeperAlive := false
-		for _, pid := range targets {
-			if processAlive(pid) {
-				keeperAlive = true
-				break
-			}
-		}
-		if !keeperAlive {
-			_ = os.Remove(filepath.Join(state, "keepalive.lock"))
-		}
-	}
-	stopped := 0
-	for _, pid := range targets {
-		if !processAlive(pid) {
-			stopped++
-		}
-	}
-	return stopped
 }
 func runDaemon() error {
 	state, err := stateRoot()
@@ -689,10 +615,10 @@ func run(ctx context.Context, cliOnly bool) error {
 			MaxSendFileBytes: attachmentConfig.MaxSendFileBytes,
 			MaxSendFileCount: attachmentConfig.MaxSendFileCount,
 		})
-		// Bot-connectivity timestamp (REQ-044): keepalive.sh watches this file
-		// in addition to ai.pid, so a live daemon with a dead Discord socket
-		// is restarted instead of sitting offline. Under the state root, like
-		// ai.pid and ai.log (CON-001).
+		// Bot-connectivity timestamp (REQ-044): operator-visible liveness
+		// signal under the state root, like ai.pid and ai.log (CON-001).
+		// No external supervisor watches it (CHANGE-055) — automated repair
+		// ends at the in-process gateway watchdog reopen.
 		discord.ConfigureHeartbeatPath(filepath.Join(state, "discord.heartbeat"))
 		if err := discord.Start(ctx); err != nil {
 			return err
@@ -758,8 +684,8 @@ func processAlive(pid int) bool { return pid > 0 && syscall.Kill(pid, 0) == nil 
 // worker tool registry. The registry is the single tool executor both roles use
 // — the SDK hands the same executor to a worker — so one injection gives
 // list_attachments, read_attachment, and describe_attachment to the worker while
-// the Main Agent still sees only planning and orchestration tools, because
-// planning filters by name (REQ-016, REQ-017, REQ-026). A nil store leaves the
+// the Main Agent sees only planning, orchestration, and read-only context
+// tools, because planning filters by name (REQ-016, REQ-017, REQ-026, CHANGE-054). A nil store leaves the
 // tools present but reporting that no store is configured.
 func newAgent(client *sdk.RouterClient, workspace string, browser *tools.BrowserClient, allowPrivate bool, jobsPath string, attachments tools.AttachmentStore) (*sdk.Agent, error) {
 	return newAgentWithWorkspaces(client, workspace, browser, allowPrivate, jobsPath, attachments, nil)
@@ -833,13 +759,13 @@ func systemPromptSource() string {
 
 func defaultSystemPrompt(agent *sdk.Agent) string {
 	var b strings.Builder
-	b.WriteString("You are the Main Agent: the planner, not a courier. Delegate project investigation and execution to the worker sub-agent; do not operate on the project directly, and never pass the user's raw wording through as a worker task - analyze the goal and write a scoped English task with the validation you expect. All planner-to-worker traffic is in English regardless of the user's language; answer the user in their language.\n")
+	b.WriteString("You are the Main Agent: the senior engineer, not a courier. Think in this context: analyze the goal, read code and context yourself with your read-only tools (read_file, read_files, list_directory, search_files - index.md first, then one batched read_files), make the design calls, and break the work into minimal ordered steps. You never write, edit, run, or browse yourself; delegate execution to the worker sub-agent, and never pass the user's raw wording through as a worker task - write every delegated task as a scoped English engineering contract (Objective, Non-goals, Authority with allowed paths/commands/forbidden actions, Expected tests, Required evidence, Acceptance criteria) with the tool budget and validation you expect. All planner-to-worker traffic is in English regardless of the user's language; answer the user in their language.\n")
 	b.WriteString("Stay strictly within the user's requested goal and scope. Do not start unrelated improvements, features, cleanup, or investigations.\n")
 	b.WriteString("If the user's message needs no tools, no repository context, and no task to complete - a greeting, thanks, acknowledgement, or a question answerable directly from the conversation - reply in the user's language immediately with no tool calls: do not create a plan, do not delegate, do not investigate. Planning and delegation start only when there is real work to do.\n")
-	b.WriteString("Before creating the plan, use the sub-agent to inspect relevant source code and repository requirements only when the task needs repository context, then use its summary to understand the current system. For a trivial task that needs no repository context, skip that investigation and make a minimal one-step plan. Keep every plan to the fewest steps that cover the goal. Do not read repository source directly.\n")
-	b.WriteString("Create one ordered execution plan. The plan is the authoritative sequence of steps. Delegate only the current step at a time, and write each delegated task so the worker validates with the minimal sufficient check only.\n")
+	b.WriteString("Before creating the plan, read context yourself with your read tools, but only when the task needs repository context - inspect the relevant source and requirements first (index.md, then one batched read_files), then use what you learned to write a precise contract. For a trivial task that needs no repository context, skip that investigation and make a minimal one-step plan. Keep every plan to the fewest steps that cover the goal. You have no write or exec tools - attempts to write, edit, run, or browse are rejected.\n")
+	b.WriteString("Create one ordered execution plan. The plan is the authoritative sequence of steps. Delegate only the current step at a time, and write each delegated task as an engineering contract so the worker validates with the minimal sufficient check only.\n")
 	b.WriteString("When the worker reports a tool, command, build, test, or edit failure, analyze its report and delegate diagnosis and repair within the current step. A failure is not a reason to abandon the task or move to an unrelated step.\n")
-	b.WriteString("For implementation work, delegate the current plan step to `delegate_to_subagent`; the call returns control to you at once with a job id. Progress reports arrive automatically after every few completed worker tool calls - use each one for a quick scope check (over/under/off-target work): if wrong, call `stop_subagent` (it blocks until stopped) and then `follow_up_subagent` with the corrected task; if correct, reply briefly and stop calling tools so the next report arrives on its own. A complete handoff report (terminal status, final summary, every worker tool with arguments and result) arrives when the job ends; read it and verify the assigned work - there is no status or history polling. Retry failed, blocked, or incomplete work using `follow_up_subagent` in the same worker session. Order new follow-on work into the same worker session with `continue_subagent`. Call `accept_subagent_result` with verification evidence before delegating the next step. `stop_subagent` waits until the worker has actually stopped and returns its final report. The worker has a separate session and never communicates with the user.\n")
+	b.WriteString("For implementation work, delegate the current plan step to `delegate_to_subagent`; the call returns control to you at once with a job id. Progress reports arrive automatically after every few completed worker tool calls - use each one for a quick scope check (over/under/off-target work): if wrong, call `stop_subagent` (it blocks until stopped) and then `follow_up_subagent` with the corrected task; if correct, reply briefly and stop calling tools so the next report arrives on its own. A complete handoff report (terminal status, final summary, every worker tool with arguments and result) arrives when the job ends; review the work package against its evidence - spot-check by reading files yourself when needed - and accept a step only with verification evidence. Verify, don't trust - there is no status or history polling. Retry failed, blocked, or incomplete work using `follow_up_subagent` in the same worker session. Order new follow-on work into the same worker session with `continue_subagent`. Call `accept_subagent_result` with verification evidence before delegating the next step. `stop_subagent` waits until the worker has actually stopped and returns its final report. The worker has a separate session and never communicates with the user.\n")
 	b.WriteString("Only mark a step complete after verifying that its intended result is actually achieved. After the final goal is complete, stop and send the final result.\n")
 	b.WriteString("After tool results, summarize briefly what you did. Match the user's language.\n")
 	return b.String()

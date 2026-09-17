@@ -221,7 +221,7 @@ go build -o ai ./cmd/ai
 ./ai cli
 ```
 
-`ai start` runs the daemon in the background. `ai stop` stops the running daemon (including the keepalive watcher so it does not restart). `ai cli` runs the interactive terminal UI. `ai update` updates the installed binary and restarts the daemon only when it was already running. `ai uninstall` removes the binary and runtime state.
+`ai start` runs the daemon in the background. `ai stop` stops the running daemon. `ai cli` runs the interactive terminal UI. `ai update` updates the installed binary through the blue-green handover only (starting the daemon first when it is not running); the single `ai` binary owns the handover end to end with no external supervisor. `ai uninstall` removes the binary and runtime state.
 
 ## Binary build pipeline
 

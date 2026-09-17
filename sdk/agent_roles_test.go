@@ -39,7 +39,11 @@ func TestAgentRoleSeparation(t *testing.T) {
 						p.responses[1] = Response{ToolCalls: []ToolCall{{ID: "worker-again", Name: "run_command", Arguments: `{}`}}}
 					}
 					c, s := newAgentTestSession(p)
-					tools := &agentTestTools{definitions: []Tool{{Name: "run_command", Description: "execute shell", InputSchema: map[string]any{"type": "object"}}}}
+					tools := &agentTestTools{definitions: []Tool{
+						{Name: "run_command", Description: "execute shell", InputSchema: map[string]any{"type": "object"}},
+						{Name: "read_file", Description: "read a file", InputSchema: map[string]any{"type": "object"}},
+						{Name: "write_file", Description: "write a file", InputSchema: map[string]any{"type": "object"}},
+					}}
 					a := &Agent{Client: c, Tools: tools, DisablePlanning: worker, SubAgentConfig: SubAgentConfig{Enabled: configured}, MaxRetries: -1}
 					base := "You are the worker sub-agent. Use run_command to validate.\nAvailable tools:\ncustom context\nProject Requirements (repository source of truth):\nkeep scope\ncustom trailing instruction"
 					if !worker {
@@ -64,7 +68,7 @@ func TestAgentRoleSeparation(t *testing.T) {
 							if !strings.HasPrefix(req.SystemPrompt, base) || strings.Count(req.SystemPrompt, planningSystemInstruction) != 1 {
 								t.Fatalf("main prompt=%q", req.SystemPrompt)
 							}
-							want := []string{"plan"}
+							want := []string{"plan", "read_file"}
 							if configured {
 								want = append(want, "delegate_to_subagent", "stop_subagent", "follow_up_subagent", "continue_subagent", "accept_subagent_result")
 							}
@@ -93,7 +97,7 @@ func TestAgentRoleSeparation(t *testing.T) {
 						rejected := 0
 						for _, turn := range s.History() {
 							if turn.ToolResult != nil && (turn.ToolResult.ID == "direct" || turn.ToolResult.ID == "after-plan") {
-								if !turn.ToolResult.IsError || !strings.Contains(turn.ToolResult.Content, "no execution tools") {
+								if !turn.ToolResult.IsError || !strings.Contains(turn.ToolResult.Content, "no write/exec tools") {
 									t.Fatalf("direct execution not rejected: %+v", turn.ToolResult)
 								}
 								rejected++

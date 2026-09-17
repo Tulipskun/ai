@@ -706,3 +706,29 @@ Reason: A bad build must never take the bot offline; green proves itself before 
 Impact: cmd/ai/update.go (blue-green orchestration), cmd/ai/update_bluegreen.go (new: phase, gates, standby boot, cutover, rollback), cmd/ai/update_bluegreen_test.go (new), cmd/ai/command.go + cmd/ai/main.go (daemon --standby), scripts/keepalive.sh (handover guard), requirements/functional.md (REQ-043), requirements/changes.md
 Validation: go test ./cmd/ai ./sdk ./tools -count=1 and go vet same
 Status: accepted
+
+CHANGE-054
+
+Date: 2026-09-17
+Type: revise
+Request: Main Agent ต้องสั่ง sub agent แบบ senior/junior มี tools อ่านโค้ด/บริบทเองเพื่อสั่งงานได้แม่นยำ ไม่ใช่ vibe code คนที่ 2 แต่เป็น engineering prompt
+Conflict: REQ-016 (main ได้เฉพาะ planning/orchestration/opaque-ref + ห้ามรับเนื้อหาไฟล์ทุกช่องทาง), REQ-029 (main ไม่มี execution tools), REQ-036/019 (review จำกัดที่ report), REQ-045 (budget อยู่ฝั่ง worker)
+Previous: Main ไม่มี tools อ่านโค้ดเลย — ต้อง delegate investigation ให้ worker แบบตาบอด แล้วตรวจจาก summary อย่างเดียว; task ที่สั่งเป็น free-text ไม่มี contract
+New: Main = senior — ได้ read-only context tools (read_file/read_files/list_directory/search_files) ผ่าน allowlist ใน planningToolExecutor (Definitions + Execute คู่กัน; write/exec ยัง reject เหมือนเดิม); คิด/ออกแบบ/ตัดสินใจใน main context (serial on thinking); ทุก delegation เป็น contract (Objective, Non-goals, Authority — allowed paths/commands/forbidden, Expected tests, Required evidence, Acceptance criteria); accept ต้องมี verification evidence (spot-check ด้วยการอ่านเองได้). Worker = junior — ทำตาม contract ใน authority เท่านั้น คืน work package + evidence bundle (summary, changed files+reasons, commands, tests+results, limitations) ห้าม delegate ต่อ ห้ามคุยกับ user. Planner read budget (~10 reads/round) + lookupขนานได้เฉพาะ read-only recon ใน requirements/loop-control.md
+Reason: งานวิจัย delegation contracts (Schmalbach 2026: evidence sufficiency +0.83/5) และแนวทาง senior-engineering/agent-delegation — thinking ที่ main + bounded execution ที่ worker ลด telephone-game และทำให้ review ได้จริง
+Impact: sdk/plan_tool.go (allowlist, Execute, planningSystemInstruction), sdk/subagent.go (worker prompt), cmd/ai/main.go (defaultSystemPrompt), sdk tests + cmd/ai tests, requirements/functional.md (REQ-016/019/029/036/045), requirements/loop-control.md, requirements/decisions.md (DEC-005)
+Validation: unit (allowlist/read-execute/write-reject/contract keywords); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
+Status: accepted
+
+CHANGE-055
+
+Date: 2026-09-17
+Type: revise
+Request: ระบบอัพเดทต้องเป็น blue-green อย่างเดียว (zero downtime) ส่งงานให้ daemon ใหม่ด้วย binary ตัวเดียว ไม่ต้องมี supervisor ภายนอก
+Conflict: REQ-043 (ยังมี classic replace-and-start branch ตอน daemon ไม่รัน + ผูก keepalive ต้องข้าม restart), REQ-044 (keepalive เป็น outer backstop)
+Previous: `ai update` มีสอง flow (blue-green ตอน daemon รัน / classic replace-and-start ตอนไม่รัน) + dead helper restartDaemonAfterUpdate + scripts/supervisor.sh (legacy updater) + keepalive.sh ที่ update path ต้องเกรงใจ (dual ownership); standby หมดอายุเหลือ phase orphan (เจอจริงบนเครื่อง); promote ล้มเหลวหลัง blue หยุด = zero-daemon เงียบ ๆ
+New: REQ-043 — update flow เดียวเสมอ (daemon ไม่รันให้ start เป็น blue ก่อนแล้ว handover ตามปกติ); binary `ai` ตัวเดียวทำ stage/standby/gates/stop/promote/confirm/rollback; ลบ scripts/keepalive.sh + scripts/supervisor.sh + stopKeepaliveWatchers + dead helper; cutover เจ้าของเชิงตรรกะเดียว; standby หมดอายุล้าง phase+handoff; promote ล้มเหลวหลัง blue หยุดต้อง emergency live-promote staged green. REQ-044 — automated repair จบที่ watchdog reopen (5x backoff); daemon ตาย/กู้ไม่ขึ้นต้อง `ai start` เอง (tradeoff บันทึกใน spec)
+Reason: update สอง flow + supervisor ภายนอก = สภาพที่ต้องซิงก์กันสองภาษา (Go/bash drift) และช่อง zero-daemon ที่ไม่มีใครเป็นเจ้าของ; single binary + single flow ตัด drift ทิ้งทั้งหมด
+Impact: cmd/ai/update.go (ensureBlueRunning, ลบ dead helper), cmd/ai/update_bluegreen.go (single flow, expiry cleanup, emergency promote), cmd/ai/main.go (ลบ stopKeepaliveWatchers), scripts/ (ลบ 2 ไฟล์), transport/discord/gateway_liveness.go (comments), README/docs, tests, requirements/functional.md (REQ-043/044)
+Validation: unit (phase/gates/rollback/promote/emergency/no-supervisor-files); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
+Status: accepted

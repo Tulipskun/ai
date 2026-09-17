@@ -15,17 +15,25 @@ import (
 	"time"
 )
 
-// Blue-green self-update (REQ-043, CHANGE-053).
+// Blue-green self-update (REQ-043, CHANGE-055): the ONLY update flow.
 //
-// The old path stopped the blue daemon before the replacement binary was
-// proven, leaving a zero-daemon window on a bad build. The blue-green path
-// stages the verified binary to a temp path and starts it as a green standby
-// in probation mode (shadow pid file ai.pid.green, shadow heartbeat
+// A legacy path once stopped the blue daemon before the replacement binary
+// was proven, leaving a zero-daemon window on a bad build. The blue-green
+// path stages the verified binary to a temp path and starts it as a green
+// standby in probation mode (shadow pid file ai.pid.green, shadow heartbeat
 // discord.heartbeat.green, phase file update.bluegreen.json) while blue keeps
 // serving. Only after all health gates pass within 60-90s is blue SIGTERMed
 // (existing 30s drain semantics) and green promoted atomically. A failed
 // green is rolled back (killed, shadows removed) with blue untouched, so there
-// is never a zero-daemon window.
+// is never a zero-daemon window. When no daemon runs, the updater starts one
+// first (ensureBlueRunning) so the handover still runs this same path.
+//
+// The single `ai` binary owns the handover end to end: stage, standby, gates,
+// stop, promote, confirm, rollback. There is no external supervisor —
+// scripts/keepalive.sh and scripts/supervisor.sh were removed in CHANGE-055.
+// Cutover has one logical owner: the updater performs the atomic file
+// operations while the standby idempotently re-asserts the same values (it
+// makes no cutover decision itself).
 //
 // Hash verification, no-restart-if-unchanged, jobs drain (waitForJobsDrain),
 // SIGTERM-settle with SIGKILL fallback (stopDaemonForUpdate), interrupted-job
@@ -121,8 +129,8 @@ func blueGreenPhaseAge(root string, phase blueGreenPhase) time.Duration {
 }
 
 // isBlueGreenHandoverActive reports whether a green probation is in progress:
-// phase file exists, cutover not done, and not expired. keepalive.sh mirrors
-// this rule in bash; keep both in sync.
+// phase file exists, cutover not done, and not expired. While it holds, the
+// updater owns the handover end to end (no external supervisor exists).
 func isBlueGreenHandoverActive(root string) bool {
 	phase, err := readBlueGreenPhase(root)
 	if err != nil {
@@ -401,7 +409,10 @@ func startGreenStandby(stagedBinary, state string) (int, error) {
 // the installed binary with the staged one, promotes the shadow pid file to
 // ai.pid, seeds the live heartbeat from the shadow heartbeat, and marks the
 // phase cutover-done so the standby enables live intake. It refuses cutover
-// while any live (blue) pid is still alive.
+// while any live (blue) pid is still alive. Single logical owner: the updater
+// performs these atomic file operations; the standby only re-asserts the
+// same pid/heartbeat values idempotently when it observes cutover-done and
+// makes no cutover decision itself.
 func promoteGreenToLive(state, appPath string, phase blueGreenPhase) error {
 	if strings.TrimSpace(state) == "" {
 		return fmt.Errorf("state root is required")
@@ -456,56 +467,91 @@ func promoteGreenToLive(state, appPath string, phase blueGreenPhase) error {
 	return nil
 }
 
-// runBlueGreenUpdate orchestrates the handover. When no daemon runs it keeps
-// the classic replace-and-start path (no green needed). Otherwise it drains
-// while blue serves, stages the binary, hands off to a green standby,
-// enforces health gates, stops blue with existing drain semantics, promotes
-// green, confirms live intake, and finalizes. Green failures roll back with
-// blue untouched.
-func runBlueGreenUpdate(app, state, oldVersion, newVersion, oldHash, newHash string, binary []byte, bluePID int, wasRunning bool) error {
+// ensureBlueRunning starts the daemon when none runs so every update flows
+// through the same blue-green handover (REQ-043, CHANGE-055): there is no
+// legacy replace-and-start branch. A start failure aborts the update with a
+// clear error instead of silently switching paths.
+func ensureBlueRunning(app string) error {
+	if daemonRunning() {
+		return nil
+	}
 	if strings.TrimSpace(app) == "" {
 		return fmt.Errorf("installed binary path is required")
 	}
-	if !wasRunning {
-		tmp, err := os.CreateTemp(filepath.Dir(app), ".ai-update-*")
-		if err != nil {
-			return err
-		}
-		tmpPath := tmp.Name()
-		defer os.Remove(tmpPath)
-		if _, err := tmp.Write(binary); err != nil {
-			_ = tmp.Close()
-			return err
-		}
-		if err := tmp.Chmod(0o755); err != nil {
-			_ = tmp.Close()
-			return err
-		}
-		if err := tmp.Close(); err != nil {
-			return err
-		}
-		if err := os.Rename(tmpPath, app); err != nil {
-			return fmt.Errorf("replace binary: %w", err)
-		}
-		fmt.Printf("[ai] updated %s\n", app)
-		if state != "" {
-			_ = writeUpdateHandoff(state, updateHandoff{
-				OldVersion: oldVersion,
-				NewVersion: newVersion,
-				OldHash:    oldHash,
-				NewHash:    newHash,
-				PID:        bluePID,
-				Drained:    true,
-			})
-		}
-		if err := startDaemon(app); err != nil {
-			return fmt.Errorf("restart daemon: %w", err)
-		}
-		if err := verifyDaemonHealthy(updateHealthTimeout); err != nil {
-			return err
-		}
-		fmt.Println("[ai] new daemon healthy")
-		return nil
+	fmt.Println("[ai] daemon not running; starting blue first")
+	if err := startDaemon(app); err != nil {
+		return fmt.Errorf("start blue daemon: %w", err)
+	}
+	if err := verifyDaemonHealthy(updateHealthTimeout); err != nil {
+		return fmt.Errorf("blue daemon unhealthy: %w", err)
+	}
+	return nil
+}
+
+// emergencyPromoteLiveGreen recovers a cutover that failed after blue was
+// stopped (REQ-043, CHANGE-055): instead of leaving a zero-daemon window,
+// it promotes the staged green — healthy seconds ago — through the same
+// atomic steps (binary rename, cutover-done mark) so the standby enables
+// live intake itself. A binary rename that already happened is a no-op. It
+// refuses when some other live process owns ai.pid (manual triage needed).
+// The caller still confirms live intake afterwards.
+func emergencyPromoteLiveGreen(state, appPath string, phase blueGreenPhase) error {
+	if strings.TrimSpace(state) == "" {
+		return fmt.Errorf("state root is required")
+	}
+	if strings.TrimSpace(appPath) == "" {
+		return fmt.Errorf("installed binary path is required")
+	}
+	greenPID := phase.GreenPID
+	if greenPID <= 0 {
+		greenPID = currentGreenPID(state)
+	}
+	if greenPID <= 0 || !processAlive(greenPID) {
+		return fmt.Errorf("green standby not alive; cannot recover")
+	}
+	if pid := currentDaemonPID(state); pid > 0 && processAlive(pid) && pid != greenPID {
+		return fmt.Errorf("live pid file changed under cutover (pid %d); manual triage needed", pid)
+	}
+	if strings.TrimSpace(phase.StagedBinary) == "" {
+		return fmt.Errorf("staged binary missing from phase")
+	}
+	if err := os.Rename(phase.StagedBinary, appPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("emergency promote staged binary: %w", err)
+	}
+	if p, err := readBlueGreenPhase(state); err == nil {
+		p.CutoverDone = true
+		p.GreenPID = greenPID
+		_ = writeBlueGreenPhase(state, p)
+	} else {
+		phase.CutoverDone = true
+		phase.GreenPID = greenPID
+		_ = writeBlueGreenPhase(state, phase)
+	}
+	_ = os.Remove(greenPIDPathForRoot(state))
+	return nil
+}
+
+// confirmGreenLive verifies live intake after a successful promote and
+// finalizes the handover (shadow cleanup, phase clear, completion message).
+func confirmGreenLive(state, logPath string, greenPID int, oldVersion, newVersion string) error {
+	if err := waitForGreenLive(state, logPath, blueGreenLiveTimeout); err != nil {
+		return fmt.Errorf("green promoted but live intake unconfirmed (green pid %d, state %s): %w", greenPID, state, err)
+	}
+	_ = os.Remove(greenHeartbeatPathForRoot(state))
+	clearBlueGreenPhase(state)
+	fmt.Printf("[ai] blue-green update complete green=%d %s -> %s\n", greenPID, oldVersion, newVersion)
+	return nil
+}
+
+// runBlueGreenUpdate orchestrates the handover — the only update flow. It
+// drains while blue serves, stages the binary, hands off to a green standby,
+// enforces health gates, stops blue with existing drain semantics, promotes
+// green, confirms live intake, and finalizes. Green failures roll back with
+// blue untouched; a promote failure after blue stopped recovers through
+// emergencyPromoteLiveGreen instead of leaving a zero-daemon window.
+func runBlueGreenUpdate(app, state, oldVersion, newVersion, oldHash, newHash string, binary []byte, bluePID int) error {
+	if strings.TrimSpace(app) == "" {
+		return fmt.Errorf("installed binary path is required")
 	}
 	if strings.TrimSpace(state) == "" {
 		return fmt.Errorf("state root is required for blue-green update")
@@ -540,7 +586,7 @@ func runBlueGreenUpdate(app, state, oldVersion, newVersion, oldHash, newHash str
 		return err
 	}
 	// Handoff first so green consumes it on standby boot (proves the boot
-	// path); phase tracks the handover for gates, cutover, and keepalive.
+	// path); phase tracks the handover for gates and cutover.
 	if err := writeUpdateHandoff(state, updateHandoff{
 		OldVersion: oldVersion,
 		NewVersion: newVersion,
@@ -584,16 +630,16 @@ func runBlueGreenUpdate(app, state, oldVersion, newVersion, oldHash, newHash str
 		return rollbackBlueGreen(state, phase, logPath, fmt.Sprintf("stop blue daemon: %v", err))
 	}
 	if err := promoteGreenToLive(state, app, phase); err != nil {
-		return fmt.Errorf("cutover failed after blue stopped (green standby pid %d still alive, staged binary promoted or intact): %w", greenPID, err)
+		// Blue is already stopped: never leave a silent zero-daemon window.
+		// The staged green passed health gates seconds ago — recover by
+		// promoting it live through the same cutover machinery.
+		if emberr := emergencyPromoteLiveGreen(state, app, phase); emberr != nil {
+			return fmt.Errorf("cutover failed after blue stopped (green standby pid %d): %v; emergency live-promote also failed: %v", greenPID, err, emberr)
+		}
+		fmt.Printf("[ai] cutover recovered via emergency live-promote green=%d\n", greenPID)
 	}
 	stagedOK = true
-	if err := waitForGreenLive(state, logPath, blueGreenLiveTimeout); err != nil {
-		return fmt.Errorf("green promoted but live intake unconfirmed (green pid %d, state %s): %w", greenPID, state, err)
-	}
-	_ = os.Remove(greenHeartbeatPathForRoot(state))
-	clearBlueGreenPhase(state)
-	fmt.Printf("[ai] blue-green update complete green=%d %s -> %s\n", greenPID, oldVersion, newVersion)
-	return nil
+	return confirmGreenLive(state, logPath, greenPID, oldVersion, newVersion)
 }
 
 // runDaemonStandby boots the staged binary in probation mode: no Discord
@@ -630,8 +676,13 @@ func runDaemonStandby() error {
 		case now := <-tick.C:
 			touchGreenHeartbeat(state)
 			if now.After(deadline) {
+				// Probation over with no cutover: leave no orphans behind.
+				// A stale phase file would otherwise linger (and mislead a
+				// future handover), as would a consumed-but-unread handoff.
 				_ = os.Remove(greenPIDPathForRoot(state))
 				_ = os.Remove(greenHeartbeatPathForRoot(state))
+				clearBlueGreenPhase(state)
+				clearUpdateHandoff(state)
 				return fmt.Errorf("blue-green standby expired without cutover")
 			}
 			phase, err := readBlueGreenPhase(state)

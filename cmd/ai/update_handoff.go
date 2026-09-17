@@ -14,14 +14,15 @@ import (
 
 // Graceful self-update handoff (REQ-043).
 //
-// `ai update` replaces the installed binary and restarts the daemon. An
-// abrupt SIGKILL would drop in-flight turns and orphan background-job
-// bookkeeping, so the update path drains first: it waits (with a timeout)
-// for queued background jobs to finish, SIGTERMs the daemon to let the
-// current turn settle, falls back to SIGKILL only when the daemon does not
-// exit, then verifies the new daemon is healthy. A small handoff file under
-// the state root records the old/new version and hashes so the new daemon
-// can log the resume on boot.
+// `ai update` hands the verified binary to a green standby through the single
+// blue-green flow (update_bluegreen.go) and stops blue only after the green
+// proves itself. An abrupt SIGKILL would drop in-flight turns and orphan
+// background-job bookkeeping, so the update path drains first: it waits (with
+// a timeout) for queued background jobs to finish, SIGTERMs the daemon to let
+// the current turn settle, falls back to SIGKILL only when the daemon does
+// not exit, then verifies the new daemon is healthy. A small handoff file
+// under the state root records the old/new version and hashes so the new
+// daemon can log the resume on boot.
 
 const updateHandoffFileName = "update.handoff.json"
 

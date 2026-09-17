@@ -67,12 +67,12 @@ func TestDefaultSystemPromptUsesPlanAndSubagent(t *testing.T) {
 	client := sdk.NewRouterClient(sdk.NewRouter())
 	agent := &sdk.Agent{Client: client, Tools: &testPromptTools{}}
 	got := defaultSystemPrompt(agent)
-	for _, forbidden := range []string{"gets things done with tools", "CALL the matching tool", "Prefer acting first", "run_command", "read_file", "Available tools:", "call the tool in the SAME response", "Execute only the current step"} {
+	for _, forbidden := range []string{"gets things done with tools", "CALL the matching tool", "Prefer acting first", "run_command", "write_file", "edit_file", "Available tools:", "call the tool in the SAME response", "Execute only the current step"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("main default contains execution instruction %q: %s", forbidden, got)
 		}
 	}
-	for _, want := range []string{"Before creating the plan", "ordered execution plan", "delegate the current plan step to `delegate_to_subagent`", "Call `accept_subagent_result` with verification evidence before delegating the next step"} {
+	for _, want := range []string{"Before creating the plan", "ordered execution plan", "delegate the current plan step to `delegate_to_subagent`", "Call `accept_subagent_result` with verification evidence before delegating the next step", "read-only tools (read_file, read_files, list_directory, search_files", "engineering contract", "Required evidence", "Verify, don't trust"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("prompt missing %q", want)
 		}

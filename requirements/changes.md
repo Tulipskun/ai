@@ -667,3 +667,16 @@ Reason: The daemon process survives gateway death (pid alive, bot offline); pid-
 Impact: transport/discord/gateway_liveness.go (new: handlers, Connected/LastEventMs, heartbeat file, watchdog, backoff reopen), transport/discord/gateway.go (handler registration, event stamps, Start/Close hooks), transport/discord/gateway_liveness_test.go (new), cmd/ai/main.go (heartbeat path wiring), scripts/keepalive.sh (heartbeat freshness + restart), requirements/functional.md (REQ-044), requirements/changes.md
 Validation: go test ./transport/discord ./cmd/ai ./runtime -count=1 and go vet same packages
 Status: accepted
+
+CHANGE-051
+
+Date: 2026-09-17
+Type: revise
+Request: Discord slide-window actor panels with args excerpts and usage lines plus unified main panel
+Conflict: none (clarifies REQ-041/031; no liveness/throttle/accents/routing change)
+Previous: Permanent status listed tool name + ok/error + seconds only with no args and no usage footer; main response content sent as separate sendActorResponse message outside the actor trace items
+New: REQ-041 slide-window status rows carry truncated args excerpts plus two usage lines (turn/session via existing turnUsage/sessionUsage and format helpers) under latest-10 cap and 3900-rune top-truncation budget with 3s throttle and suppress-notifications unchanged; REQ-031 main TraceResponseContent appends content pages into the same actorTraceState items (seal/seq/accents and provider-accepted rules kept) instead of a separate response message; sub stays tool-only
+Reason: Tool rows without args hide what ran; missing usage forces a second lookup; split main messages break per-actor ordering and duplicate panels
+Impact: transport/discord/actor_trace_display.go (heartbeatNoteTool args, heartbeatComponents usage lines, heartbeatRefresh sums, main content append), requirements/functional.md (REQ-041/031), requirements/changes.md
+Validation: go test ./transport/discord -count=1 and go vet ./transport/discord
+Status: accepted

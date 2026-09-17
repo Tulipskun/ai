@@ -39,8 +39,12 @@ type heartbeatState struct {
 }
 
 // heartbeatToolEntry is one tool row in the permanent status message.
+// Slide-window (CHANGE-051): name + ok/error + elapsed plus a truncated
+// args excerpt (one-line, actorTraceArgsRunes). Oldest rows drop from the
+// top when exceeding heartbeatMaxTools or the 3900-rune budget.
 type heartbeatToolEntry struct {
 	name       string
+	args       string
 	done       bool
 	isError    bool
 	elapsedSec int64
@@ -56,11 +60,16 @@ func heartbeatDoneText(totalSec int64) string {
 	return fmt.Sprintf("✅ done in %ds", totalSec)
 }
 
-// heartbeatToolLine renders one permanent tool row: name + ok/error +
-// elapsed seconds only. No args, no excerpts, no footers (CHANGE-036).
+// heartbeatToolLine renders one slide-window tool row: name + ok/error +
+// elapsed seconds plus a truncated args excerpt (one-line, 120 runes).
+// No result excerpts, no footers beyond the two usage lines (CHANGE-051).
 func heartbeatToolLine(entry heartbeatToolEntry) string {
 	marker := "🔧"
 	status := "…"
+	args := ""
+	if excerpt := truncateRunes(oneLine(entry.args), actorTraceArgsRunes); excerpt != "" && excerpt != "{}" {
+		args = " · " + excerpt
+	}
 	if entry.done {
 		if entry.isError {
 			marker = "❌"
@@ -69,9 +78,9 @@ func heartbeatToolLine(entry heartbeatToolEntry) string {
 			marker = "✅"
 			status = "ok"
 		}
-		return fmt.Sprintf("%s %s · %s · %ds", marker, entry.name, status, entry.elapsedSec)
+		return fmt.Sprintf("%s %s%s · %s · %ds", marker, entry.name, args, status, entry.elapsedSec)
 	}
-	return fmt.Sprintf("%s %s · %s", marker, entry.name, status)
+	return fmt.Sprintf("%s %s%s · %s", marker, entry.name, args, status)
 }
 
 // heartbeatFlags marks status messages silent: V2 layout plus suppress,
@@ -120,14 +129,19 @@ func heartbeatEnsure(key string) *heartbeatState {
 	return hb
 }
 
-func heartbeatNoteTool(key, toolName string) {
+func heartbeatNoteTool(key, toolName string, argsOpt ...string) {
 	toolName = strings.TrimSpace(toolName)
 	if toolName == "" {
 		toolName = "tool"
 	}
+	args := ""
+	if len(argsOpt) > 0 {
+		args = argsOpt[0]
+	}
+	excerpt := truncateRunes(oneLine(args), actorTraceArgsRunes)
 	hb := heartbeatEnsure(key)
 	heartbeatMu.Lock()
-	hb.entries = append(hb.entries, heartbeatToolEntry{name: toolName})
+	hb.entries = append(hb.entries, heartbeatToolEntry{name: toolName, args: excerpt})
 	if len(hb.entries) > heartbeatMaxTools {
 		hb.entries = append([]heartbeatToolEntry(nil), hb.entries[len(hb.entries)-heartbeatMaxTools:]...)
 	}
@@ -169,10 +183,18 @@ func heartbeatNoteRetry(key string) {
 	_ = heartbeatEnsure(key)
 }
 
-// heartbeatComponents renders the permanent tool-call-only container: label
-// plus latest tool rows only. No working/retrying lines, no args, no excerpts,
-// no footer (CHANGE-036).
-func heartbeatComponents(label string, accent int, entries []heartbeatToolEntry) []discordgo.MessageComponent {
+// heartbeatComponents renders the permanent slide-window container: label
+// plus latest tool rows (N=10 cap) plus two usage lines (turn/session).
+// 3900-rune budget enforced with top-truncation; throttle 3s and
+// suppress-notifications behavior unchanged (CHANGE-051).
+func heartbeatComponentsWithUsage(label string, accent int, entries []heartbeatToolEntry, turn sdk.Usage, session sdk.Usage, hasSession bool, turnStartMs int64) []discordgo.MessageComponent {
+	if len(entries) > heartbeatMaxTools {
+		entries = append([]heartbeatToolEntry(nil), entries[len(entries)-heartbeatMaxTools:]...)
+	}
+	usageLines := heartbeatUsageLines(turn, session, hasSession, turnStartMs)
+	for len(entries) > 0 && heartbeatComponentsWithUsageSize(label, entries, usageLines) > actorTraceMaxTextRunes {
+		entries = append([]heartbeatToolEntry(nil), entries[1:]...)
+	}
 	color := accent
 	children := []discordgo.MessageComponent{
 		discordgo.TextDisplay{Content: "**" + label + "**"},
@@ -180,10 +202,47 @@ func heartbeatComponents(label string, accent int, entries []heartbeatToolEntry)
 	for _, entry := range entries {
 		children = append(children, discordgo.TextDisplay{Content: heartbeatToolLine(entry)})
 	}
+	for _, line := range usageLines {
+		children = append(children, discordgo.TextDisplay{Content: "-# " + line})
+	}
 	return []discordgo.MessageComponent{discordgo.Container{
 		AccentColor: &color,
 		Components:  children,
 	}}
+}
+
+// heartbeatUsageLines builds the two usage footer lines for the permanent
+// status message: turn line (in total/cached out total + time) and session
+// line (same shape). It reuses the turnUsage/sessionUsage sums already kept
+// for the detailed actor trace plus existing format helpers.
+func heartbeatUsageLines(turn, session sdk.Usage, hasSession bool, turnStartMs int64) []string {
+	if turnStartMs == 0 {
+		return nil
+	}
+	elapsedMs := nowMillis() - turnStartMs
+	if elapsedMs < 0 {
+		elapsedMs = 0
+	}
+	turnLine := "turn: in " + formatCount(turn.InputTokens) + "/" + formatCount(turn.CacheReadTokens) +
+		" out " + formatCount(turn.OutputTokens) + "/" + formatCount(turn.CacheWriteTokens) +
+		" · ⏱ " + formatElapsed(time.Duration(elapsedMs)*time.Millisecond)
+	if !hasSession {
+		return []string{turnLine}
+	}
+	sessionLine := "session: in " + formatCount(session.InputTokens) + "/" + formatCount(session.CacheReadTokens) +
+		" out " + formatCount(session.OutputTokens) + "/" + formatCount(session.CacheWriteTokens)
+	return []string{turnLine, sessionLine}
+}
+
+func heartbeatComponentsWithUsageSize(label string, entries []heartbeatToolEntry, usageLines []string) int {
+	total := len([]rune("**" + label + "**"))
+	for _, entry := range entries {
+		total += 1 + len([]rune(heartbeatToolLine(entry)))
+	}
+	for _, line := range usageLines {
+		total += 1 + len([]rune("-# "+line))
+	}
+	return total
 }
 
 // heartbeatReceiptComponents renders the collapsed one-line receipt. The token
@@ -262,6 +321,25 @@ func (g *Gateway) heartbeatRefresh(ctx context.Context, channelID, key, label st
 		lastEdit = cur.lastEdit
 	}
 	heartbeatMu.Unlock()
+	var turn sdk.Usage
+	var session sdk.Usage
+	var hasSession bool
+	var turnStartMs int64
+	actorTraceMu.Lock()
+	if st := actorTraceStates[key]; st != nil {
+		turn = st.turnUsage
+		session = st.sessionUsage
+		hasSession = st.hasSession
+		turnStartMs = st.turnStartMs
+		if turnStartMs == 0 {
+			turnStartMs = nowMillis()
+			st.turnStartMs = turnStartMs
+		}
+		g.refreshSessionUsageLocked(st)
+		session = st.sessionUsage
+		hasSession = st.hasSession
+	}
+	actorTraceMu.Unlock()
 	now := time.Now()
 	if !heartbeatDue(now, lastEdit) {
 		g.heartbeatTyping(channelID)
@@ -275,7 +353,7 @@ func (g *Gateway) heartbeatRefresh(ctx context.Context, channelID, key, label st
 		heartbeatMu.Unlock()
 		return nil
 	}
-	components := heartbeatComponents(label, accent, entries)
+	components := heartbeatComponentsWithUsage(label, accent, entries, turn, session, hasSession, turnStartMs)
 	if messageID == "" {
 		id, err := g.sendHeartbeatV2(ctx, channelID, components)
 		if err != nil {
@@ -519,16 +597,18 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 			}
 		}
 		actorTraceMu.Unlock()
-		if err := g.actorTraceFlush(ctx, channelID, chKey, key); err != nil {
-			return err
+		for _, p := range pages {
+			if err := g.actorTraceAppend(ctx, channelID, chKey, key, p); err != nil {
+				return err
+			}
 		}
-		return g.sendActorResponse(ctx, channelID, chKey, actor, jobID, text)
+		return g.actorTraceFlush(ctx, channelID, chKey, key)
 	case sdk.TraceToolCall:
 		if trace.ToolCall == nil {
 			return nil
 		}
 		g.disarmActorDedupe(key)
-		heartbeatNoteTool(key, trace.ToolCall.Name)
+		heartbeatNoteTool(key, trace.ToolCall.Name, trace.ToolCall.Arguments)
 		_ = g.heartbeatRefresh(ctx, channelID, key, label, accent)
 		// The first tool of a response replaces that request's pending row:
 		// "provider accepted" is merged into the tool line (REQ-033).
@@ -1062,4 +1142,9 @@ func paginateActorText(text string, max int) []string {
 		pages = append(pages, text)
 	}
 	return pages
+}
+
+// heartbeatComponents keeps the 3-arg form for existing tests; production uses WithUsage.
+func heartbeatComponents(label string, accent int, entries []heartbeatToolEntry) []discordgo.MessageComponent {
+	return heartbeatComponentsWithUsage(label, accent, entries, sdk.Usage{}, sdk.Usage{}, false, 0)
 }

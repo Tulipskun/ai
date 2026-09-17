@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -192,11 +193,7 @@ func TestEmergencyPromoteLiveGreen(t *testing.T) {
 		t.Fatal(err)
 	}
 	staged := filepath.Join(root, ".ai-green-test")
-	if err := os.WriteFile(staged, []byte("new"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Live pid owned by another live process (pid 1, not green): refuse.
-	if err := os.WriteFile(filepath.Join(root, "ai.pid"), []byte("1\n"), 0o644); err != nil {
+	if err := os.WriteFile(staged, []byte("new-binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	me := os.Getpid()
@@ -225,12 +222,26 @@ func TestEmergencyPromoteRefusesForeignLivePID(t *testing.T) {
 	if err := os.WriteFile(staged, []byte("new"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	phase := blueGreenPhase{GreenPID: os.Getpid(), StagedBinary: staged}
-	// pid 1 is alive on most systems (init); if green==self and live==1 differ, refusal triggers.
-	if os.Getpid() == 1 {
-		t.Skip("test process is pid 1; refusal case not constructible here")
+	// A foreign live process (sleep child, never green) owns ai.pid: refuse.
+	sleep := exec.Command("sleep", "60")
+	if err := sleep.Start(); err != nil {
+		t.Skip("sleep unavailable; cannot stage a foreign live pid")
 	}
+	defer func() {
+		_ = sleep.Process.Kill()
+		_, _ = sleep.Process.Wait()
+	}()
+	foreign := sleep.Process.Pid
+	if foreign <= 0 || foreign == os.Getpid() {
+		t.Fatal("no foreign live pid staged")
+	}
+	if err := os.WriteFile(filepath.Join(root, "ai.pid"), []byte(strconv.Itoa(foreign)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	phase := blueGreenPhase{GreenPID: os.Getpid(), StagedBinary: staged}
 	if err := emergencyPromoteLiveGreen(root, filepath.Join(root, "ai"), phase); err == nil {
 		t.Fatal("expected refusal when a foreign live pid owns ai.pid")
+	} else if !strings.Contains(err.Error(), "manual triage") {
+		t.Fatalf("expected triage refusal, got: %v", err)
 	}
 }

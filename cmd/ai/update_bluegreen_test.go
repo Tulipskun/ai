@@ -87,13 +87,54 @@ func TestCheckGreenHealthAllPass(t *testing.T) {
 	if err := os.WriteFile(greenPIDPathForRoot(root), []byte(strconv.Itoa(me)+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(logPath, []byte("boot\n"+greenReadyMarker+" pid=1\n"), 0o644); err != nil {
+	if err := os.WriteFile(logPath, []byte("boot\n"+greenReadyMarker+" pid="+strconv.Itoa(me)+" standby probation\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	touchGreenHeartbeat(root)
 	// Handoff absent counts as consumed; gates must all pass.
 	if err := checkGreenHealth(root, logPath); err != nil {
 		t.Fatalf("expected all gates to pass: %v", err)
+	}
+}
+
+func TestCheckGreenHealthRejectsStaleMarker(t *testing.T) {
+	// CHANGE-057: a ready marker from a previous handover (different pid)
+	// must not satisfy the gate even though this green is alive.
+	root := t.TempDir()
+	logPath := filepath.Join(root, "ai.log")
+	me := os.Getpid()
+	if err := os.WriteFile(greenPIDPathForRoot(root), []byte(strconv.Itoa(me)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logPath, []byte("boot\n"+greenReadyMarker+" pid=424242 standby probation\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	touchGreenHeartbeat(root)
+	if err := checkGreenHealth(root, logPath); err == nil {
+		t.Fatal("stale ready marker from another pid must fail the gate")
+	} else if !strings.Contains(err.Error(), "ready marker") {
+		t.Fatalf("expected ready-marker gate, got: %v", err)
+	}
+}
+
+func TestPidMarkerScope(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "ai.log")
+	content := "x\n" + greenLiveMarker + " pid=111\n" + greenLiveMarker + " pid=222 extra=1\n"
+	if err := os.WriteFile(logPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !logTailContainsPidMarker(logPath, greenLiveMarker, 111) {
+		t.Fatal("exact marker+pid line must match")
+	}
+	if !logTailContainsPidMarker(logPath, greenLiveMarker, 222) {
+		t.Fatal("marker+pid with trailing fields must match")
+	}
+	if logTailContainsPidMarker(logPath, greenLiveMarker, 333) {
+		t.Fatal("foreign pid must not match")
+	}
+	if logTailContainsPidMarker(logPath, greenLiveMarker, 0) || logTailContainsPidMarker(logPath, "", 111) {
+		t.Fatal("empty marker or pid must not match")
 	}
 }
 

@@ -745,3 +745,16 @@ Reason: สองระบบ render ข้อมูลชุดเดียว�
 Impact: transport/discord/actor_trace_display.go, requirements/functional.md (REQ-041)
 Validation: unit (full tool cycle มีเฉพาะ actor-panel messages + heartbeatStates ไม่ค้าง); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-057
+
+Date: 2026-09-17
+Type: revise (bugfix)
+Request: `ai update` บอก complete แต่ bot ดับ — green ค้าง standby บน ai.pid ตัวจริง (เจอจริงตอน deploy v1.106)
+Conflict: none (tightens REQ-043 gates; no flow/architecture change)
+Previous: health gates/live-confirm ค้น log marker แบบ substring ใน tail — marker ของ handover ก่อนหน้ายังค้างอยู่ ทำให้ waitForGreenLive ผ่านทันทีจากหลักฐานของ blue เก่า แล้ว updater ล้าง phase ก่อน green เห็น cutover-done: green รอ probation เปล่า ๆ บน ai.pid ที่ชี้มันอยู่ bot ไม่มี intake
+New: REQ-043 — ready/live marker ต้อง correlate `marker + pid=<greenPID>` (logTailContainsPidMarker; markers มี pid อยู่แล้ว); waitForGreenLive รับ greenPID; phase จะถูก clear ก็ต่อเมื่อ green ตัวนั้น log live เอง (green เห็น cutover แน่นอน); บทเรียน LESSON-002
+Reason: หลักฐาน readiness ที่ไม่ผูก identity ของ run จะถูกหลักฐานเก่าปลอมผ่านได้เสมอ — gate ต้องผูก pid
+Impact: cmd/ai/update_bluegreen.go (gates), cmd/ai/update_bluegreen_test.go (stale-marker tests), requirements/functional.md (REQ-043), requirements/lessons.md (LESSON-002)
+Validation: unit (stale marker ตก gate, pid ตรงผ่าน); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`; deploy จริงต้องเห็น live intake ของ green pid ใหม่ใน log
+Status: accepted

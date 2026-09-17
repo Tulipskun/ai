@@ -213,6 +213,23 @@ func logContainsMarker(logPath, marker string) bool {
 	return fileTailContains(logPath, marker, 128*1024)
 }
 
+// logTailContainsPidMarker scopes a readiness marker to one process: the log
+// line must contain both the marker and pid=<pid> (REQ-043, CHANGE-057). An
+// unscoped tail search accepts a stale marker line from a previous handover
+// and confirms a green that never went live — this stranded a standby on a
+// live ai.pid with the bot down.
+func logTailContainsPidMarker(logPath, marker string, pid int) bool {
+	if strings.TrimSpace(marker) == "" || pid <= 0 {
+		return false
+	}
+	want := fmt.Sprintf("%s pid=%d", marker, pid)
+	if fileTailContains(logPath, want, 128*1024) {
+		return true
+	}
+	// Tolerate extra fields between marker and pid (e.g. "marker pid=1 foo").
+	return fileTailContains(logPath, marker+" pid=", 128*1024) && fileTailContains(logPath, fmt.Sprintf("pid=%d", pid), 128*1024)
+}
+
 // handoffConsumed is true once the green standby has booted and consumed
 // update.handoff.json (consumeUpdateHandoff deletes it).
 func handoffConsumed(root string) bool {
@@ -224,15 +241,17 @@ func handoffConsumed(root string) bool {
 }
 
 // checkGreenHealth verifies every pre-cutover gate: green pid alive via
-// kill-0, ready marker in the log tail, shadow heartbeat fresh within 60s,
-// and the handoff consumed. All four must pass before blue is stopped.
+// kill-0, ready marker in the log tail correlated to that pid (CHANGE-057),
+// shadow heartbeat fresh within 60s, and the handoff consumed. All four must
+// pass before blue is stopped.
 func checkGreenHealth(root, logPath string) error {
 	var problems []string
-	if pid := currentGreenPID(root); pid <= 0 || !processAlive(pid) {
+	greenPID := currentGreenPID(root)
+	if greenPID <= 0 || !processAlive(greenPID) {
 		problems = append(problems, fmt.Sprintf("green pid not alive (shadow %s)", greenPIDFileName))
 	}
-	if !logContainsMarker(logPath, greenReadyMarker) {
-		problems = append(problems, fmt.Sprintf("green log missing ready marker %q", greenReadyMarker))
+	if greenPID > 0 && processAlive(greenPID) && !logTailContainsPidMarker(logPath, greenReadyMarker, greenPID) {
+		problems = append(problems, fmt.Sprintf("green log missing ready marker %q for pid %d", greenReadyMarker, greenPID))
 	}
 	if !shadowHeartbeatFresh(root, shadowHeartbeatMaxAge) {
 		problems = append(problems, fmt.Sprintf("shadow heartbeat %s not fresh within %s", greenHeartbeatFileName, shadowHeartbeatMaxAge))
@@ -268,17 +287,18 @@ func waitForGreenHealth(root, logPath string, timeout time.Duration) error {
 }
 
 // waitForGreenLive confirms the cutover: live ai.pid points at a live
-// process, the green logged live-intake enablement, and the live heartbeat is
-// fresh (seeded from the shadow heartbeat at promotion, then refreshed by the
-// gateway once Discord connects).
-func waitForGreenLive(state, logPath string, timeout time.Duration) error {
+// process, THIS green logged live-intake enablement (marker correlated to
+// greenPID, CHANGE-057 — a stale marker from a previous handover must not
+// confirm), and the live heartbeat is fresh (seeded from the shadow heartbeat
+// at promotion, then refreshed by the gateway once Discord connects).
+func waitForGreenLive(state, logPath string, greenPID int, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = blueGreenLiveTimeout
 	}
 	deadline := time.Now().Add(timeout)
 	last := fmt.Errorf("not ready")
 	for {
-		if daemonRunning() && logContainsMarker(logPath, greenLiveMarker) {
+		if daemonRunning() && logTailContainsPidMarker(logPath, greenLiveMarker, greenPID) {
 			if fileFreshWithin(liveHeartbeatPathForRoot(state), liveHeartbeatConfirmAge) {
 				return nil
 			}
@@ -534,7 +554,7 @@ func emergencyPromoteLiveGreen(state, appPath string, phase blueGreenPhase) erro
 // confirmGreenLive verifies live intake after a successful promote and
 // finalizes the handover (shadow cleanup, phase clear, completion message).
 func confirmGreenLive(state, logPath string, greenPID int, oldVersion, newVersion string) error {
-	if err := waitForGreenLive(state, logPath, blueGreenLiveTimeout); err != nil {
+	if err := waitForGreenLive(state, logPath, greenPID, blueGreenLiveTimeout); err != nil {
 		return fmt.Errorf("green promoted but live intake unconfirmed (green pid %d, state %s): %w", greenPID, state, err)
 	}
 	_ = os.Remove(greenHeartbeatPathForRoot(state))

@@ -563,3 +563,16 @@ Reason: Remove the loopback TCP listener and DevToolsActivePort file race for ma
 Impact: tools/browser_client.go (pipe launch + framed stdio transport + readiness branch + Close pipe cleanup, dead TCP helper removed), tools/browser_attach.go (pipe ListPages via Target.getTargets), requirements/functional.md (REQ-010), requirements/changes.md
 Validation: go test ./tools -count=1 and go vet ./tools
 Status: accepted
+
+CHANGE-043
+
+Date: 2026-09-17
+Type: revise
+Request: Switch default browser config to Chromium pipe, validate, commit and push
+Conflict: none (extends REQ-010; Firefox BiDi path and CHANGE-041/042 pipe transport untouched)
+Previous: REQ-010 default `browser` was `firefox` (managed launch used Firefox BiDi /session)
+New: REQ-010 default `browser` is `chromium` (managed launch uses `--remote-debugging-pipe` with no loopback TCP listener); Firefox ESR 140 remains selectable via explicit `firefox` config through the BiDi `/session` path; `auto` still prefers Firefox first
+Reason: Chromium pipe is the stable headless control channel without the TCP/DevToolsActivePort race; Firefox stays available for explicit selection
+Impact: tools/browser_client.go (empty-config default), runtime/browser_config.go (defaults), tools/browser_client_test.go (DefaultsToChromiumPipe), runtime/browser_config_test.go, .config/browser.example.json, README.md, requirements/functional.md (REQ-010)
+Validation: go test ./tools ./runtime -count=1 and go vet ./tools ./runtime
+Status: accepted

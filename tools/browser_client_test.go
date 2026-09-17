@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-func TestBrowserClientDefaultsToFirefox(t *testing.T) {
+func TestBrowserClientDefaultsToChromiumPipe(t *testing.T) {
 	client := NewBrowserClient(BrowserClientConfig{})
-	if client.cfg.Browser != "firefox" { t.Fatalf("browser = %q", client.cfg.Browser) }
+	if client.cfg.Browser != "chromium" { t.Fatalf("browser = %q", client.cfg.Browser) }
 	if client.cfg.IdleTimeout != 30*time.Minute || client.cfg.NavigationTimeout != 30*time.Second || client.cfg.ActionTimeout != 10*time.Second || client.cfg.SnapshotTimeout != 10*time.Second {
 		t.Fatalf("unexpected defaults: %#v", client.cfg)
 	}

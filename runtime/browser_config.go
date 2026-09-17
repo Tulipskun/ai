@@ -28,7 +28,7 @@ const DefaultBrowserConfigPath = "config/browser.json"
 
 func defaultBrowserConfig() BrowserConfig {
 	return BrowserConfig{
-		Browser:           "firefox",
+		Browser:           "chromium",
 		Mode:              "managed",
 		Profile:           "data/browser/profile",
 		Headless:          false,
@@ -49,7 +49,7 @@ func LoadBrowserConfig(path string) (BrowserConfig, error) {
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil { return BrowserConfig{}, fmt.Errorf("browser: decode config %q: %w", path, err) }
 	cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode)); if cfg.Mode == "" { cfg.Mode = "managed" }
-	cfg.Browser = strings.ToLower(strings.TrimSpace(cfg.Browser)); if cfg.Browser == "" { cfg.Browser = "firefox" }
+	cfg.Browser = strings.ToLower(strings.TrimSpace(cfg.Browser)); if cfg.Browser == "" { cfg.Browser = "chromium" }
 	if cfg.Mode != "managed" && cfg.Mode != "attach" { return BrowserConfig{}, fmt.Errorf("browser mode must be one of managed, attach") }
 	switch cfg.Browser { case "auto", "chrome", "chromium", "edge", "firefox": default: return BrowserConfig{}, fmt.Errorf("browser must be one of auto, chrome, chromium, edge, firefox") }
 	if cfg.Mode == "managed" && strings.TrimSpace(cfg.Profile) == "" { return BrowserConfig{}, fmt.Errorf("browser profile is required") }

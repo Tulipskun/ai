@@ -229,6 +229,15 @@ type Gateway struct {
 	authorizedUserID string
 	toolTraceMu      sync.Mutex
 	toolTrace        map[string]*toolTraceState
+	// Gateway liveness (REQ-044): last-event timestamp, connection flag,
+	// heartbeat file path, watchdog once gate, and injectable reopen hook.
+	livenessMu       sync.RWMutex
+	lastEventMs      int64
+	connected        bool
+	heartbeatPath    string
+	lastHeartbeatMs  int64
+	watchdogOnce     sync.Once
+	reopenGatewayFunc func() error
 }
 
 // The gateway receives Discord events in per-event goroutines (discordgo
@@ -251,8 +260,12 @@ func NewGateway(token string) (*Gateway, error) {
 		return nil, err
 	}
 	gateway := &Gateway{session: session, raw: make(chan InputMessage, inboundBuffer), messages: make(chan InputMessage, inboundBuffer), done: make(chan struct{}), retryStatus: make(map[string]string), toolTrace: make(map[string]*toolTraceState), sessionMapping: NewSessionMapping()}
+	session.AddHandler(gateway.onGatewayReady)
+	session.AddHandler(gateway.onGatewayResumed)
+	session.AddHandler(gateway.onGatewayDisconnect)
 	session.Identify.Intents = gatewayIntents()
 	session.AddHandler(func(_ *discordgo.Session, event *discordgo.MessageCreate) {
+		gateway.markGatewayEvent(true, nowMillis())
 		if event == nil || event.Author == nil {
 			return
 		}
@@ -275,6 +288,7 @@ func NewGateway(token string) (*Gateway, error) {
 		}
 	})
 	session.AddHandler(func(s *discordgo.Session, event *discordgo.InteractionCreate) {
+		gateway.markGatewayEvent(true, nowMillis())
 		if event == nil {
 			return
 		}
@@ -492,6 +506,8 @@ func (g *Gateway) Start(ctx context.Context) error {
 	if err := g.session.Open(); err != nil {
 		return err
 	}
+	g.markGatewayEvent(true, nowMillis())
+	g.startGatewayWatchdog(ctx)
 	if g.modelSettings != nil {
 		if err := g.registerCommand(&discordgo.ApplicationCommand{Name: "model", Description: "Configure the AI model for this session"}); err != nil {
 			return err
@@ -1045,6 +1061,9 @@ func (g *Gateway) Close(_ context.Context) error {
 	}
 	g.closed = true
 	close(g.done)
+	g.livenessMu.Lock()
+	g.connected = false
+	g.livenessMu.Unlock()
 	g.closeMu.Unlock()
 	g.toolTraceMu.Lock()
 	for _, state := range g.toolTrace {

@@ -671,6 +671,11 @@ func run(ctx context.Context, cliOnly bool) error {
 			MaxSendFileBytes: attachmentConfig.MaxSendFileBytes,
 			MaxSendFileCount: attachmentConfig.MaxSendFileCount,
 		})
+		// Bot-connectivity timestamp (REQ-044): keepalive.sh watches this file
+		// in addition to ai.pid, so a live daemon with a dead Discord socket
+		// is restarted instead of sitting offline. Under the state root, like
+		// ai.pid and ai.log (CON-001).
+		discord.ConfigureHeartbeatPath(filepath.Join(state, "discord.heartbeat"))
 		if err := discord.Start(ctx); err != nil {
 			return err
 		}

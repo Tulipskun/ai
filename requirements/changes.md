@@ -654,3 +654,16 @@ Reason: Abrupt update drops in-flight turns and orphans background-job bookkeepi
 Impact: cmd/ai/update.go (graceful path), cmd/ai/update_handoff.go (new: parseUpdateArgs, drain/health/handoff helpers), cmd/ai/command.go (update usage + --auto), cmd/ai/main.go (consumeUpdateHandoff on daemon boot), tools/jobs.go (JobInterrupted + load mapping), requirements/functional.md (REQ-043), requirements/changes.md
 Validation: go test ./cmd/ai ./tools ./sdk ./runtime -count=1 and go vet same packages
 Status: accepted
+
+CHANGE-050
+
+Date: 2026-09-17
+Type: add
+Request: Fix Discord offline while daemon alive (liveness probe, reconnect, watchdog)
+Conflict: none (new REQ-044; V2 display, OS tools, update path untouched)
+Previous: Discord gateway had no connection tracking: a dead websocket left the bot offline with no log signal and no repair except a manual daemon restart; scripts/keepalive.sh only watched ai.pid, so a live pid with a dead Discord socket looked healthy forever
+New: REQ-044 — Discord gateway tracks liveness via Ready/Disconnect/Resumed handlers plus last-event timestamp on every MessageCreate/InteractionCreate; Connected() reports the flag; a watchdog goroutine refreshes the discord.heartbeat timestamp file while connected and reopens the session with exponential backoff (5 attempts, 1s doubling) when silence exceeds 3 minutes or the flag is down; daemon passes <state>/discord.heartbeat as the heartbeat path; scripts/keepalive.sh also checks heartbeat freshness (max age 300s, missing file before first Ready is not a failure) and restarts a live-but-stale daemon; V2 display path, pagination, accent colors, routing, OS tools, and update files unchanged
+Reason: The daemon process survives gateway death (pid alive, bot offline); pid-only supervision cannot see it. In-process reopen handles transient socket drops, and keepalive is the outer backstop for wedged gateways.
+Impact: transport/discord/gateway_liveness.go (new: handlers, Connected/LastEventMs, heartbeat file, watchdog, backoff reopen), transport/discord/gateway.go (handler registration, event stamps, Start/Close hooks), transport/discord/gateway_liveness_test.go (new), cmd/ai/main.go (heartbeat path wiring), scripts/keepalive.sh (heartbeat freshness + restart), requirements/functional.md (REQ-044), requirements/changes.md
+Validation: go test ./transport/discord ./cmd/ai ./runtime -count=1 and go vet same packages
+Status: accepted

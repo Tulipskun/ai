@@ -156,3 +156,16 @@ func TestPlanningGuidanceShortCircuitsNonTasks(t *testing.T) {
 		t.Fatal("planner must answer non-task messages directly without planning")
 	}
 }
+
+func TestLoopControlDisciplineInPrompts(t *testing.T) {
+	for _, want := range []string{"tool budget", "requirements/loop-control.md", "requirements/lessons.md", "REQ-045"} {
+		if !strings.Contains(planningSystemInstruction, want) {
+			t.Fatalf("planner prompt missing loop-control discipline %q", want)
+		}
+	}
+	for _, want := range []string{"tool budget", "requirements/loop-control.md", "requirements/lessons.md"} {
+		if !strings.Contains(defaultSubAgentSystemPrompt, want) {
+			t.Fatalf("worker prompt missing loop-control discipline %q", want)
+		}
+	}
+}

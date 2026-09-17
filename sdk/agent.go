@@ -201,6 +201,9 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 	}
 	baseSystemPrompt := req.SystemPrompt
 
+	// REQ-045: hard loop-control caps for this attempt. Normal turns stay
+	// far under the limits and behave exactly as before.
+	lc := &loopControlTracker{}
 	for {
 		if err := ctx.Err(); err != nil {
 			return Response{}, err
@@ -248,6 +251,9 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 				callCopy := cloneToolCall(call)
 				traceEvent(ctx, trace, newTraceEvent(TraceToolCall, withToolCall(callCopy)))
 				traceEvent(ctx, trace, newTraceEvent(TraceToolRunning, withToolCall(callCopy)))
+				if err := lc.noteCall(call.Name); err != nil {
+					return Response{}, err
+				}
 				result := ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
 				traceEvent(ctx, trace, newTraceEvent(TraceToolResult, withToolCall(callCopy), withToolResult(cloneToolResult(result))))
 				if entry != nil {
@@ -268,8 +274,14 @@ func (a *Agent) runAttempt(ctx context.Context, session *Session, user Turn, req
 			callCopy := cloneToolCall(call)
 			traceEvent(ctx, trace, newTraceEvent(TraceToolCall, withToolCall(callCopy)))
 			traceEvent(ctx, trace, newTraceEvent(TraceToolRunning, withToolCall(callCopy)))
+			if err := lc.noteCall(call.Name); err != nil {
+				return Response{}, err
+			}
 			result := executor.Execute(ctx, call)
 			if err := ctx.Err(); err != nil {
+				return Response{}, err
+			}
+			if err := lc.noteResult(call.Name, result); err != nil {
 				return Response{}, err
 			}
 			if result.ID == "" {
@@ -304,6 +316,8 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 		planner.ConfigureSubAgent(&subAgentRunner{manager: a.subAgentManager(), parent: session})
 	}
 	baseSystemPrompt := req.SystemPrompt
+	// REQ-045: hard loop-control caps for this attempt (same as runAttempt).
+	lc := &loopControlTracker{}
 	for {
 		if err := ctx.Err(); err != nil {
 			return Response{}, err
@@ -407,6 +421,9 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 			for _, call := range resp.ToolCalls {
 				callCopy := cloneToolCall(call)
 				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolRunning, ToolCall: callCopy})
+				if err := lc.noteCall(call.Name); err != nil {
+					return Response{}, err
+				}
 				result := ToolResult{ID: call.ID, Content: "tool execution is not configured", IsError: true}
 				traceEvent(ctx, trace, TraceEvent{Stage: TraceToolResult, ToolCall: callCopy, ToolResult: cloneToolResult(result)})
 				resultCopy := result
@@ -426,8 +443,14 @@ func (a *Agent) runStreamAttempt(ctx context.Context, session *Session, req Requ
 			}
 			callCopy := cloneToolCall(call)
 			traceEvent(ctx, trace, TraceEvent{Stage: TraceToolRunning, ToolCall: callCopy})
+			if err := lc.noteCall(call.Name); err != nil {
+				return Response{}, err
+			}
 			result := executor.Execute(ctx, call)
 			if err := ctx.Err(); err != nil {
+				return Response{}, err
+			}
+			if err := lc.noteResult(call.Name, result); err != nil {
 				return Response{}, err
 			}
 			if result.ID == "" {
@@ -571,6 +594,11 @@ func cloneToolResult(in ToolResult) *ToolResult { out := in; return &out }
 
 func retryableAgentError(ctx context.Context, err error) bool {
 	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	// REQ-045: loop-control budget failures are fatal, never retried.
+	// Retrying a runaway loop only burns more provider calls.
+	if isLoopControlFatal(err) {
 		return false
 	}
 	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)

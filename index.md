@@ -35,6 +35,7 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 | Responsibility | Key files |
 |---|---|
 | Turn loop model → tool → model | `sdk/agent.go`, `sdk/loop.go` |
+| Loop-control caps (REQ-045) | `sdk/loop_control.go`, `sdk/loop_control_test.go` |
 | Planner (Main Agent, no exec tools) | `sdk/plan_tool.go` |
 | Worker delegation, progress/final reports | `sdk/subagent.go`, `sdk/subagent_trace_sink.go` |
 | Context budget, newest-group truncation | `sdk/context_window.go` |
@@ -53,6 +54,12 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 
 - `sdk/agent.go` — provider-neutral control loop; owns request composition,
   tool-result continuation, and per-session planning switch. No transport code.
+  Enforces REQ-045 loop-control caps per attempt (fail-fast, never retried).
+- `sdk/loop_control.go` — hard loop caps (max tools/turn, max consecutive
+  read/edit, max bash output) with the fatal-error classifier. No transport.
+- `requirements/loop-control.md` — ordered checklist, per-delegation tool
+  budgets, batch-read and stop rules (REQ-045 prompt discipline).
+- `requirements/lessons.md` — append-only failure lessons (REQ-045).
 - `sdk/subagent.go` — async delegation (`delegate/follow_up/continue` return
   job id at once, `stop` blocks); progress report every X tool calls plus
   complete handoff report (tool names, args, results, error flags).
@@ -73,6 +80,8 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 - `requirements/README.md` — how to read the spec directory.
 - `requirements/product.md` — product purpose and goals.
 - `requirements/functional.md` — stable REQ-xxx behavior (check before code).
+- `requirements/loop-control.md` — loop checklist + tool budgets (REQ-045).
+- `requirements/lessons.md` — failure lessons log (REQ-045).
 - `requirements/constraints.md` — non-negotiable limits (CON-xxx).
 - `requirements/decisions.md` — accepted architecture decisions.
 - `requirements/changes.md` — append-only CHANGE-xxx history.

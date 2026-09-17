@@ -680,3 +680,16 @@ Reason: Tool rows without args hide what ran; missing usage forces a second look
 Impact: transport/discord/actor_trace_display.go (heartbeatNoteTool args, heartbeatComponents usage lines, heartbeatRefresh sums, main content append), requirements/functional.md (REQ-041/031), requirements/changes.md
 Validation: go test ./transport/discord -count=1 and go vet ./transport/discord
 Status: accepted
+
+CHANGE-052
+
+Date: 2026-09-17
+Type: add
+Request: Enforce dual loop-control: system caps plus prompt discipline with checklist, tool budgets, failure lessons
+Conflict: none (new REQ-045; clarifies REQ-004/016/017 proportionality with hard enforcement; no display/liveness/OS/update change)
+Previous: No hard caps on worker loops — a runaway turn (e.g. slide-window incident: 47 tools, sed loops, test drift) looped until the provider stopped; prompt discipline (minimal checks, batch reads, proportionality) existed in REQ-016/017 and prompts but had no fail-fast backstop and no per-delegation budget or lessons log
+New: REQ-045 — system caps enforced in sdk/loop_control.go and wired into both turn paths (runAttempt + runStreamAttempt, executor and no-executor branches): max 30 tool calls per attempt, max 8 consecutive read/edit probes without progress, max 1 MiB bash output per result; exceeded = auto-fail with clear error, budget failures never retried; prompt discipline via requirements/loop-control.md (ordered checklist, per-delegation tool budget, batch reads via read_files, stop=fail+write lesson) referenced by planner/worker prompts; first lesson from the slide-window incident in requirements/lessons.md (LESSON-001)
+Reason: Prompt discipline alone does not stop a runaway loop; system caps fail fast while the checklist, budgets, and lessons keep normal work from ever reaching the caps
+Impact: sdk/loop_control.go (new: caps, tracker, fatal classifier), sdk/agent.go (tracker wiring in runAttempt/runStreamAttempt + non-retryable budget errors), sdk/plan_tool.go (planner budget reference), sdk/subagent.go (worker budget reference), sdk/loop_control_test.go (new), sdk/plan_tool_test.go (discipline assertions), requirements/functional.md (REQ-045), requirements/loop-control.md (new), requirements/lessons.md (new, LESSON-001), index.md (new files); transport/discord, gateway liveness, keepalive, OS tools, update path untouched
+Validation: go test ./sdk ./tools ./runtime -count=1 and go vet same packages
+Status: accepted

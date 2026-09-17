@@ -602,3 +602,16 @@ Reason: Give the worker OS-level input control alongside browser automation for 
 Impact: tools/os_input.go (registered, already present), tools/registry.go (4 definitions + handlers), tools/os_input_test.go (dry-run tests), tools/registry_test.go (counts 19/32), requirements/functional.md (REQ-042)
 Validation: go test ./tools ./runtime -count=1 and go vet ./tools ./runtime
 Status: accepted
+
+CHANGE-046
+
+Date: 2026-09-17
+Type: revise
+Request: Add full OS control suite for real use: screenshot, drag, window tools plus docs, validate, commit, push
+Conflict: none (extends REQ-042; browser tools untouched)
+Previous: REQ-042 covered 4 OS tools only (`os_mouse_move`, `os_mouse_click`, `os_key_press`, `os_type_text`)
+New: REQ-042 covers the full 10-tool OS control suite — existing 4 tools untouched plus `os_screenshot` (PNG via ImageMagick `import -root -png` stored in the session attachment store as file reference only with display/name/advisory-scale support), `os_mouse_drag` (x1/y1 to x2/y2 with button and 1-50 interpolation steps via xdotool mousedown/mousemove/mouseup chain), `os_mouse_scroll` (wheel up/down/left/right via buttons 4-7, amount 1-20), `os_window_list`/`os_window_focus`/`os_window_geometry` (xdotool search/windowactivate/getwindowgeometry); validation (coord clamp 0-16384, drag steps, scroll amount, pattern/window-id/display/name limits) and dry-run via `AI_OS_INPUT_DRY_RUN=1`; docs in README
+Reason: Real desktop use needs screen capture, smooth drag, wheel scroll, and window management alongside mouse/keyboard, with reference-only screenshots consistent with the attachment store contract
+Impact: tools/os_input.go (6 new handlers), tools/registry.go (6 registrations), tools/os_input_test.go (dry-run/validation/live-chain tests), tools/registry_test.go (counts 25/38), README.md (OS control docs), requirements/functional.md (REQ-042)
+Validation: go test ./tools ./runtime -count=1 and go vet ./tools ./runtime
+Status: accepted

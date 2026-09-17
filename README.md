@@ -144,6 +144,25 @@ browser_get_text
 browser_screenshot
 ```
 
+## OS control tools
+
+Worker OS-level desktop control (`tools/os_input.go`, REQ-042) alongside browser automation:
+
+```text
+os_mouse_move
+os_mouse_click
+os_key_press
+os_type_text
+os_screenshot
+os_mouse_drag
+os_mouse_scroll
+os_window_list
+os_window_focus
+os_window_geometry
+```
+
+Primary backend is xdotool on X11 (requires `DISPLAY`); keyboard/text fall back to wtype on Wayland sessions (mouse/window tools return a clear keyboard-only error under wtype). `os_screenshot` captures via ImageMagick `import -root -png` and stores the PNG in the session attachment store as a file reference only (`name`, `content_type`, `size`, `ref_id`, `path`; never bytes/base64 on the text path, queued for upload like `send_attachment`). Optional `display` (e.g. `:0`), optional `name`, optional advisory `scale` within `(0,1]` with a resize note. `os_mouse_drag` holds a button from `x1,y1` to `x2,y2` with 1–50 interpolation steps (default 10). Validation clamps coordinates to 0–16384 and enforces key/text/steps/scroll/pattern/window-id/display/name limits. Set `AI_OS_INPUT_DRY_RUN=1` to validate arguments and planned argv without touching a display server.
+
 ## Provider configuration
 
 `config/provider.json`:

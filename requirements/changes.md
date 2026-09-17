@@ -576,3 +576,16 @@ Reason: Chromium pipe is the stable headless control channel without the TCP/Dev
 Impact: tools/browser_client.go (empty-config default), runtime/browser_config.go (defaults), tools/browser_client_test.go (DefaultsToChromiumPipe), runtime/browser_config_test.go, .config/browser.example.json, README.md, requirements/functional.md (REQ-010)
 Validation: go test ./tools ./runtime -count=1 and go vet ./tools ./runtime
 Status: accepted
+
+CHANGE-044
+
+Date: 2026-09-17
+Type: revise
+Request: Switch all browser references and live config to Chromium, validate, commit and push
+Conflict: none (extends REQ-010; Firefox BiDi path and CHANGE-041/042 pipe transport untouched)
+Previous: REQ-010 `auto` preferred Firefox first (`firefox`/`firefox-esr` before Chromium candidates, incl. absolute paths); live daemon `config/browser.json` had `"browser": "firefox"`
+New: REQ-010 default `browser` stays `chromium` (`--remote-debugging-pipe`, no loopback TCP listener) and `auto` prefers Chromium first (chromium/chromium-browser, Chrome, Edge candidates before Firefox, incl. absolute paths); Firefox ESR 140 remains selectable via explicit `firefox` config through the BiDi `/session` path; live daemon `config/browser.json` set to `"browser": "chromium"`
+Reason: Chromium pipe is the stable headless control channel without the TCP/DevToolsActivePort race; auto resolution and the live config must match the Chromium default instead of launching Firefox
+Impact: tools/browser_client.go (browserCandidates + browserAbsoluteCandidates auto order), tools/browser_client_test.go (AutoPrefersChromium), README.md, .config/browser.example.json, live ~/.local/share/ai/config/browser.json, requirements/functional.md (REQ-010)
+Validation: go test ./tools ./runtime ./cmd/ai -count=1 and go vet ./tools ./runtime ./cmd/ai
+Status: accepted

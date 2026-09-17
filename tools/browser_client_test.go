@@ -35,10 +35,10 @@ func TestBrowserClientCallWithoutStart(t *testing.T) {
 	}
 }
 
-func TestBrowserAutoPrefersFirefox(t *testing.T) {
+func TestBrowserAutoPrefersChromium(t *testing.T) {
 	got := browserCandidates("auto")
-	if len(got) < 2 || got[0] != "firefox" || got[1] != "firefox-esr" {
-		t.Fatalf("auto candidates = %#v, want firefox first", got)
+	if len(got) < 2 || got[0] != "chromium" || got[1] != "chromium-browser" {
+		t.Fatalf("auto candidates = %#v, want chromium first", got)
 	}
 }
 

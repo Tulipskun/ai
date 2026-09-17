@@ -17,4 +17,4 @@ jobs:
       - run: go test ./... -timeout 2m
       - run: go vet ./...
       - run: bash -n scripts/install.sh
-      - run: bash -n scripts/supervisor.sh
+      - run: bash -n scripts/dc-keepalive.sh

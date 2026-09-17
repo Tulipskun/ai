@@ -22,11 +22,15 @@ const (
 
 func parseCommand(args []string) (command, error) {
 	if len(args) == 0 || args[0] == "start" {
-		if len(args) > 1 { return commandStart, fmt.Errorf("start: unexpected argument %q", args[1]) }
+		if len(args) > 1 {
+			return commandStart, fmt.Errorf("start: unexpected argument %q", args[1])
+		}
 		return commandStart, nil
 	}
 	if args[0] == "cli" {
-		if len(args) > 1 { return commandCLI, fmt.Errorf("cli: unexpected argument %q", args[1]) }
+		if len(args) > 1 {
+			return commandCLI, fmt.Errorf("cli: unexpected argument %q", args[1])
+		}
 		return commandCLI, nil
 	}
 	if args[0] == "update" {
@@ -36,11 +40,18 @@ func parseCommand(args []string) (command, error) {
 		return commandUpdate, nil
 	}
 	if args[0] == "uninstall" {
-		if len(args) > 1 { return commandUninstall, fmt.Errorf("uninstall: unexpected argument %q", args[1]) }
+		if len(args) > 1 {
+			return commandUninstall, fmt.Errorf("uninstall: unexpected argument %q", args[1])
+		}
 		return commandUninstall, nil
 	}
 	if args[0] == "daemon" {
-		if len(args) > 1 { return commandDaemon, fmt.Errorf("daemon: unexpected argument %q", args[1]) }
+		if len(args) == 2 && args[1] == "--standby" {
+			return commandDaemon, nil
+		}
+		if len(args) > 1 {
+			return commandDaemon, fmt.Errorf("daemon: usage is 'ai daemon [--standby]'")
+		}
 		return commandDaemon, nil
 	}
 	if args[0] == "discord" {

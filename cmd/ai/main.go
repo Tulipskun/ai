@@ -61,6 +61,12 @@ func main() {
 			log.Fatal(err)
 		}
 	case commandDaemon:
+		if isStandbyDaemonArgs(os.Args[1:]) {
+			if err := runDaemonStandby(); err != nil && !errors.Is(err, context.Canceled) {
+				log.Fatal(err)
+			}
+			return
+		}
 		if err := runDaemon(); err != nil && !errors.Is(err, context.Canceled) {
 			log.Fatal(err)
 		}
@@ -524,6 +530,18 @@ func runDaemon() error {
 	defer stop()
 	consumeUpdateHandoff(state)
 	return run(ctx, false)
+}
+
+// isStandbyDaemonArgs detects the blue-green probation boot
+// (`ai daemon --standby`, REQ-043): green boots without Discord intake
+// connect, on shadow pid/heartbeat paths, until cutover marks it live.
+func isStandbyDaemonArgs(args []string) bool {
+	for _, a := range args {
+		if strings.TrimSpace(a) == greenStandbyArg {
+			return true
+		}
+	}
+	return false
 }
 func runCLI() error {
 	state, err := stateRoot()

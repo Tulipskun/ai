@@ -78,70 +78,20 @@ func runUpdate(args []string) error {
 		return nil
 	}
 	fmt.Println("[ai] binary changed; updating")
-	tmp, err := os.CreateTemp(filepath.Dir(app), ".ai-update-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmp.Write(binary); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(0o755); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	// Graceful handoff (REQ-043): drain in-flight work before replacing the
-	// binary. waitForJobsDrain lets background jobs finish; the daemon keeps
-	// serving until SIGTERM so the current turn can settle and session DBs
-	// stay persisted. Intake needs no queue file: Discord/CLI inputs resume
-	// from the live transports on the new daemon.
+	// Blue-green handoff (REQ-043, CHANGE-053): blue keeps serving while the
+	// verified binary is staged and a green standby proves itself in
+	// probation. Cutover happens only after health gates pass; a failed
+	// green rolls back with blue untouched, so there is never a
+	// zero-daemon window. The no-daemon case inside runBlueGreenUpdate keeps
+	// the classic replace-and-start path.
 	state, _ := stateRoot()
 	oldPID := 0
 	if state != "" {
 		oldPID = currentDaemonPID(state)
 	}
 	wasRunning := daemonRunning()
-	drained := true
-	if wasRunning {
-		if jobsPath := jobsFilePathForUpdate(state); jobsPath != "" {
-			drained = waitForJobsDrain(jobsPath, updateJobsDrainTimeout)
-		}
-		if _, err := stopDaemonForUpdate(updateDrainTimeout); err != nil {
-			return fmt.Errorf("stop daemon for update: %w", err)
-		}
-	}
-	if err := os.Rename(tmpPath, app); err != nil {
-		if wasRunning {
-			if restartErr := startDaemon(app); restartErr != nil {
-				return fmt.Errorf("replace binary: %w; restore daemon: %v", err, restartErr)
-			}
-		}
-		return fmt.Errorf("replace binary: %w", err)
-	}
-	fmt.Printf("[ai] updated %s\n", app)
-	if state != "" {
-		_ = writeUpdateHandoff(state, updateHandoff{
-			OldVersion: oldVersion,
-			NewVersion: newVersion,
-			OldHash:    oldHash,
-			NewHash:    newHash,
-			PID:        oldPID,
-			Drained:    drained,
-		})
-	}
-	if err := restartDaemonAfterUpdate(app, wasRunning); err != nil {
-		return fmt.Errorf("restart daemon: %w", err)
-	}
-	if wasRunning {
-		if err := verifyDaemonHealthy(updateHealthTimeout); err != nil {
-			return err
-		}
-		fmt.Println("[ai] new daemon healthy")
+	if err := runBlueGreenUpdate(app, state, oldVersion, newVersion, oldHash, newHash, binary, oldPID, wasRunning); err != nil {
+		return err
 	}
 	return nil
 }

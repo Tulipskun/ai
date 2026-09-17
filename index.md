@@ -47,7 +47,7 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 | Attachment file store tools | `tools/attachments.go` |
 | Outbound file-send intents (worker → transport) | `sdk/outbound_attachments.go` |
 | Runtime config + session manager | `runtime/session_manager.go`, `runtime/*.go` |
-| Self-update + graceful handoff | `cmd/ai/update.go`, `cmd/ai/update_handoff.go`, `tools/jobs.go` |
+| Self-update + graceful handoff | `cmd/ai/update.go`, `cmd/ai/update_handoff.go`, `cmd/ai/update_bluegreen.go`, `cmd/ai/update_bluegreen_test.go`, `tools/jobs.go` |
 | Discord transport + trace display | `transport/discord/gateway.go`, `transport/discord/gateway_liveness.go`, `transport/discord/actor_trace_display.go` |
 
 ## Key files (what each owns)

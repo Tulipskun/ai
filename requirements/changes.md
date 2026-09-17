@@ -693,3 +693,16 @@ Reason: Prompt discipline alone does not stop a runaway loop; system caps fail f
 Impact: sdk/loop_control.go (new: caps, tracker, fatal classifier), sdk/agent.go (tracker wiring in runAttempt/runStreamAttempt + non-retryable budget errors), sdk/plan_tool.go (planner budget reference), sdk/subagent.go (worker budget reference), sdk/loop_control_test.go (new), sdk/plan_tool_test.go (discipline assertions), requirements/functional.md (REQ-045), requirements/loop-control.md (new), requirements/lessons.md (new, LESSON-001), index.md (new files); transport/discord, gateway liveness, keepalive, OS tools, update path untouched
 Validation: go test ./sdk ./tools ./runtime -count=1 and go vet same packages
 Status: accepted
+
+CHANGE-053
+
+Date: 2026-09-17
+Type: revise
+Request: Implement blue-green self-update with new-daemon health gate and safe old shutdown plus tests
+Conflict: none (extends REQ-043; hash verify, drain, SIGTERM settle, interrupted-job mapping untouched)
+Previous: `ai update` drained then stopped blue before the replacement was proven (zero-daemon window on a bad build); health check polled live ai.pid only; keepalive.sh restarted on any dead pid/heartbeat with no handover awareness
+New: REQ-043 blue-green — stage verified binary to temp path, start green standby (`daemon --standby`, no Discord intake connect, shadow ai.pid.green + discord.heartbeat.green + update.bluegreen.json) while blue serves; health gates within 60-90s (green pid alive via kill-0, log ready marker, shadow heartbeat fresh <60s, handoff consumed) then SIGTERM blue with existing 30s drain, atomically promote green pid to ai.pid, enable live intake and confirm; rollback on green failure (kill green, delete shadows/phase/staged, keep blue serving + old binary, clear error with log tail), never a zero-daemon window; keepalive.sh handover-aware (skip restart branches while phase active and not cutover-done/expired, watch green pid during probation); standby boot flag, phase/health/rollback helpers, keepalive lock check, and cutover-refusal unit tests
+Reason: A bad build must never take the bot offline; green proves itself before blue stops, and the outer supervisor must not fight the handover
+Impact: cmd/ai/update.go (blue-green orchestration), cmd/ai/update_bluegreen.go (new: phase, gates, standby boot, cutover, rollback), cmd/ai/update_bluegreen_test.go (new), cmd/ai/command.go + cmd/ai/main.go (daemon --standby), scripts/keepalive.sh (handover guard), requirements/functional.md (REQ-043), requirements/changes.md
+Validation: go test ./cmd/ai ./sdk ./tools -count=1 and go vet same
+Status: accepted

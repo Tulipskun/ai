@@ -21,79 +21,24 @@ const (
 	subTraceAccent  = 0x57F287 // green — worker stream
 )
 
-// heartbeatThrottleMs caps heartbeat status edits to one per 3s (REQ-041).
-// Between edits the transport only sends ChannelTyping, never a per-second
-// ticker. Status sends/edits carry MessageFlagsSuppressNotifications; the
-// final answer path keeps its ping behavior unchanged.
+// heartbeatThrottleMs caps Channel typing indicators to one per 3s (REQ-041,
+// CHANGE-056). Actor panels (REQ-031) are the only progress surface; the
+// heartbeat permanent status box and its receipt were removed because they
+// duplicated the panels' tool lines and usage. Between panel edits the
+// transport only sends typing, never a per-second ticker and never a new
+// progress message.
 const heartbeatThrottleMs = 3000
 
-// heartbeatState tracks one permanent tool-call-only V2 status message per
-// user turn (REQ-041, CHANGE-036). The message lists only tool calls (latest
-// 10 max, name + ok/error + elapsed seconds); working/retrying text lines,
-// args dumps, result excerpts and per-second token footers are never rendered.
+// heartbeatState tracks only the last typing-indicator timestamp per actor
+// key, so typing stays throttled without any message of its own.
 type heartbeatState struct {
-	lastEdit  time.Time
-	start     time.Time
-	messageID string
-	entries   []heartbeatToolEntry
-}
-
-// heartbeatToolEntry is one tool row in the permanent status message.
-// Slide-window (CHANGE-051): name + ok/error + elapsed plus a truncated
-// args excerpt (one-line, actorTraceArgsRunes). Oldest rows drop from the
-// top when exceeding heartbeatMaxTools or the 3900-rune budget.
-type heartbeatToolEntry struct {
-	name       string
-	args       string
-	done       bool
-	isError    bool
-	elapsedSec int64
-}
-
-// heartbeatMaxTools caps the permanent message to the latest 10 tool calls.
-const heartbeatMaxTools = 10
-
-func heartbeatDoneText(totalSec int64) string {
-	if totalSec < 0 {
-		totalSec = 0
-	}
-	return fmt.Sprintf("✅ done in %ds", totalSec)
-}
-
-// heartbeatToolLine renders one slide-window tool row: name + ok/error +
-// elapsed seconds plus a truncated args excerpt (one-line, 120 runes).
-// No result excerpts, no footers beyond the two usage lines (CHANGE-051).
-func heartbeatToolLine(entry heartbeatToolEntry) string {
-	marker := "🔧"
-	status := "…"
-	args := ""
-	if excerpt := truncateRunes(oneLine(entry.args), actorTraceArgsRunes); excerpt != "" && excerpt != "{}" {
-		args = " · " + excerpt
-	}
-	if entry.done {
-		if entry.isError {
-			marker = "❌"
-			status = "error"
-		} else {
-			marker = "✅"
-			status = "ok"
-		}
-		return fmt.Sprintf("%s %s%s · %s · %ds", marker, entry.name, args, status, entry.elapsedSec)
-	}
-	return fmt.Sprintf("%s %s%s · %s", marker, entry.name, args, status)
-}
-
-// heartbeatFlags marks status messages silent: V2 layout plus suppress,
-// so edits never ping. Final answers keep SendComponentsV2/EditComponentsV2
-// unchanged and still ping (REQ-041).
-func heartbeatFlags() discordgo.MessageFlags {
-	return discordgo.MessageFlagsIsComponentsV2 | discordgo.MessageFlagsSuppressNotifications
+	lastEdit time.Time
 }
 
 var heartbeatMu sync.Mutex
 var heartbeatStates = make(map[string]*heartbeatState)
 
-// heartbeatDue throttles status edits to max 1 per heartbeatThrottleMs.
+// heartbeatDue throttles typing indicators to max 1 per heartbeatThrottleMs.
 func heartbeatDue(now, lastEdit time.Time) bool {
 	if lastEdit.IsZero() {
 		return true
@@ -101,163 +46,20 @@ func heartbeatDue(now, lastEdit time.Time) bool {
 	return now.Sub(lastEdit) >= time.Duration(heartbeatThrottleMs)*time.Millisecond
 }
 
-func heartbeatElapsedSec(hb heartbeatState) int64 {
-	if hb.start.IsZero() {
-		return 0
-	}
-	sec := int64(time.Since(hb.start) / time.Second)
-	if sec < 0 {
-		return 0
-	}
-	return sec
-}
-
-// heartbeatEnsure tracks per-actor heartbeat counters without I/O, so the
-// detailed actor trace message counts used by tests never change.
+// heartbeatEnsure tracks the per-actor typing throttle timestamp without I/O.
 func heartbeatEnsure(key string) *heartbeatState {
-	now := time.Now()
 	heartbeatMu.Lock()
 	defer heartbeatMu.Unlock()
 	hb := heartbeatStates[key]
 	if hb == nil {
-		hb = &heartbeatState{start: now}
+		hb = &heartbeatState{}
 		heartbeatStates[key] = hb
-	}
-	if hb.start.IsZero() {
-		hb.start = now
 	}
 	return hb
 }
 
-func heartbeatNoteTool(key, toolName string, argsOpt ...string) {
-	toolName = strings.TrimSpace(toolName)
-	if toolName == "" {
-		toolName = "tool"
-	}
-	args := ""
-	if len(argsOpt) > 0 {
-		args = argsOpt[0]
-	}
-	excerpt := truncateRunes(oneLine(args), actorTraceArgsRunes)
-	hb := heartbeatEnsure(key)
-	heartbeatMu.Lock()
-	hb.entries = append(hb.entries, heartbeatToolEntry{name: toolName, args: excerpt})
-	if len(hb.entries) > heartbeatMaxTools {
-		hb.entries = append([]heartbeatToolEntry(nil), hb.entries[len(hb.entries)-heartbeatMaxTools:]...)
-	}
-	heartbeatMu.Unlock()
-}
-
-func heartbeatNoteResult(key, toolName string, isError bool, elapsedSec int64) {
-	toolName = strings.TrimSpace(toolName)
-	if toolName == "" {
-		toolName = "tool"
-	}
-	if elapsedSec < 0 {
-		elapsedSec = 0
-	}
-	hb := heartbeatEnsure(key)
-	heartbeatMu.Lock()
-	updated := false
-	for i := len(hb.entries) - 1; i >= 0; i-- {
-		if hb.entries[i].name == toolName && !hb.entries[i].done {
-			hb.entries[i].done = true
-			hb.entries[i].isError = isError
-			hb.entries[i].elapsedSec = elapsedSec
-			updated = true
-			break
-		}
-	}
-	if !updated {
-		hb.entries = append(hb.entries, heartbeatToolEntry{name: toolName, done: true, isError: isError, elapsedSec: elapsedSec})
-		if len(hb.entries) > heartbeatMaxTools {
-			hb.entries = append([]heartbeatToolEntry(nil), hb.entries[len(hb.entries)-heartbeatMaxTools:]...)
-		}
-	}
-	heartbeatMu.Unlock()
-}
-
-func heartbeatNoteRetry(key string) {
-	// Tool-call-only permanent message never renders retry text (CHANGE-036);
-	// keep counters only so throttling stays stable.
-	_ = heartbeatEnsure(key)
-}
-
-// heartbeatComponents renders the permanent slide-window container: label
-// plus latest tool rows (N=10 cap) plus two usage lines (turn/session).
-// 3900-rune budget enforced with top-truncation; throttle 3s and
-// suppress-notifications behavior unchanged (CHANGE-051).
-func heartbeatComponentsWithUsage(label string, accent int, entries []heartbeatToolEntry, turn sdk.Usage, session sdk.Usage, hasSession bool, turnStartMs int64) []discordgo.MessageComponent {
-	if len(entries) > heartbeatMaxTools {
-		entries = append([]heartbeatToolEntry(nil), entries[len(entries)-heartbeatMaxTools:]...)
-	}
-	usageLines := heartbeatUsageLines(turn, session, hasSession, turnStartMs)
-	for len(entries) > 0 && heartbeatComponentsWithUsageSize(label, entries, usageLines) > actorTraceMaxTextRunes {
-		entries = append([]heartbeatToolEntry(nil), entries[1:]...)
-	}
-	color := accent
-	children := []discordgo.MessageComponent{
-		discordgo.TextDisplay{Content: "**" + label + "**"},
-	}
-	for _, entry := range entries {
-		children = append(children, discordgo.TextDisplay{Content: heartbeatToolLine(entry)})
-	}
-	for _, line := range usageLines {
-		children = append(children, discordgo.TextDisplay{Content: "-# " + line})
-	}
-	return []discordgo.MessageComponent{discordgo.Container{
-		AccentColor: &color,
-		Components:  children,
-	}}
-}
-
-// heartbeatUsageLines builds the two usage footer lines for the permanent
-// status message: turn line (in total/cached out total + time) and session
-// line (same shape). It reuses the turnUsage/sessionUsage sums already kept
-// for the detailed actor trace plus existing format helpers.
-func heartbeatUsageLines(turn, session sdk.Usage, hasSession bool, turnStartMs int64) []string {
-	if turnStartMs == 0 {
-		return nil
-	}
-	elapsedMs := nowMillis() - turnStartMs
-	if elapsedMs < 0 {
-		elapsedMs = 0
-	}
-	turnLine := "turn: in " + formatCount(turn.InputTokens) + "/" + formatCount(turn.CacheReadTokens) +
-		" out " + formatCount(turn.OutputTokens) + "/" + formatCount(turn.CacheWriteTokens) +
-		" · ⏱ " + formatElapsed(time.Duration(elapsedMs)*time.Millisecond)
-	if !hasSession {
-		return []string{turnLine}
-	}
-	sessionLine := "session: in " + formatCount(session.InputTokens) + "/" + formatCount(session.CacheReadTokens) +
-		" out " + formatCount(session.OutputTokens) + "/" + formatCount(session.CacheWriteTokens)
-	return []string{turnLine, sessionLine}
-}
-
-func heartbeatComponentsWithUsageSize(label string, entries []heartbeatToolEntry, usageLines []string) int {
-	total := len([]rune("**" + label + "**"))
-	for _, entry := range entries {
-		total += 1 + len([]rune(heartbeatToolLine(entry)))
-	}
-	for _, line := range usageLines {
-		total += 1 + len([]rune("-# "+line))
-	}
-	return total
-}
-
-// heartbeatReceiptComponents renders the collapsed one-line receipt. The token
-// footer is intentionally dropped (CHANGE-036).
-func heartbeatReceiptComponents(label string, accent int, doneLine string) []discordgo.MessageComponent {
-	color := accent
-	children := []discordgo.MessageComponent{
-		discordgo.TextDisplay{Content: "**" + label + "**"},
-		discordgo.TextDisplay{Content: doneLine},
-	}
-	return []discordgo.MessageComponent{discordgo.Container{AccentColor: &color, Components: children}}
-}
-
-// heartbeatTyping keeps the typing indicator alive between throttled edits.
-// It is a no-op without a live session, so offline tests stay silent.
+// heartbeatTyping keeps the typing indicator alive between panel edits. It
+// is a no-op without a live session, so offline tests stay silent.
 func (g *Gateway) heartbeatTyping(channelID string) {
 	if g == nil || g.session == nil || strings.TrimSpace(channelID) == "" {
 		return
@@ -265,156 +67,29 @@ func (g *Gateway) heartbeatTyping(channelID string) {
 	_ = g.session.ChannelTyping(channelID)
 }
 
-func (g *Gateway) sendHeartbeatV2(ctx context.Context, channelID string, components []discordgo.MessageComponent) (string, error) {
-	if g == nil {
-		return "", errors.New("discord: gateway is not initialized")
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	if g.v2Send != nil {
-		return g.v2Send(ctx, channelID, components)
-	}
-	if g.session == nil {
-		return "", errors.New("discord: gateway is not initialized")
-	}
-	message, err := g.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{Components: components, Flags: heartbeatFlags()})
-	if err != nil {
-		return "", err
-	}
-	return message.ID, nil
-}
-
-func (g *Gateway) editHeartbeatV2(ctx context.Context, channelID, messageID string, components []discordgo.MessageComponent) error {
-	if g == nil {
-		return errors.New("discord: gateway is not initialized")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if channelID == "" || messageID == "" {
-		return errors.New("discord: channel ID and message ID are required")
-	}
-	if g.v2Edit != nil {
-		return g.v2Edit(ctx, channelID, messageID, components)
-	}
-	if g.session == nil {
-		return errors.New("discord: gateway is not initialized")
-	}
-	_, err := g.session.ChannelMessageEditComplex(&discordgo.MessageEdit{Channel: channelID, ID: messageID, Components: &components, Flags: heartbeatFlags()})
-	return err
-}
-
-// heartbeatRefresh sends or edits the status container at most once per 3s;
-// between edits it only triggers ChannelTyping. The final answer path is
-// untouched. Without a live Discord session (offline tests) it only tracks
-// counters so existing trace message counts never change.
-func (g *Gateway) heartbeatRefresh(ctx context.Context, channelID, key, label string, accent int) error {
-	heartbeatEnsure(key)
-	heartbeatMu.Lock()
-	var entries []heartbeatToolEntry
-	var messageID string
-	var lastEdit time.Time
-	if cur := heartbeatStates[key]; cur != nil {
-		entries = append([]heartbeatToolEntry(nil), cur.entries...)
-		messageID = cur.messageID
-		lastEdit = cur.lastEdit
-	}
-	heartbeatMu.Unlock()
-	var turn sdk.Usage
-	var session sdk.Usage
-	var hasSession bool
-	var turnStartMs int64
-	actorTraceMu.Lock()
-	if st := actorTraceStates[key]; st != nil {
-		turn = st.turnUsage
-		session = st.sessionUsage
-		hasSession = st.hasSession
-		turnStartMs = st.turnStartMs
-		if turnStartMs == 0 {
-			turnStartMs = nowMillis()
-			st.turnStartMs = turnStartMs
-		}
-		g.refreshSessionUsageLocked(st)
-		session = st.sessionUsage
-		hasSession = st.hasSession
-	}
-	actorTraceMu.Unlock()
+// heartbeatRefresh sends only a throttled Channel typing indicator (REQ-041,
+// CHANGE-056): actor panels are the only progress surface, so no status
+// message is created or edited here. ctx/label/accent stay in the signature
+// so existing call sites are untouched.
+func (g *Gateway) heartbeatRefresh(_ context.Context, channelID, key, _ string, _ int) error {
+	hb := heartbeatEnsure(key)
 	now := time.Now()
-	if !heartbeatDue(now, lastEdit) {
-		g.heartbeatTyping(channelID)
-		return nil
-	}
-	if g == nil || g.session == nil {
-		heartbeatMu.Lock()
-		if cur := heartbeatStates[key]; cur != nil {
-			cur.lastEdit = now
-		}
-		heartbeatMu.Unlock()
-		return nil
-	}
-	components := heartbeatComponentsWithUsage(label, accent, entries, turn, session, hasSession, turnStartMs)
-	if messageID == "" {
-		id, err := g.sendHeartbeatV2(ctx, channelID, components)
-		if err != nil {
-			return err
-		}
-		heartbeatMu.Lock()
-		if cur := heartbeatStates[key]; cur != nil {
-			cur.messageID = id
-			cur.lastEdit = now
-		}
-		heartbeatMu.Unlock()
-		return nil
-	}
-	if err := g.editHeartbeatV2(ctx, channelID, messageID, components); err != nil {
-		return err
-	}
 	heartbeatMu.Lock()
-	if cur := heartbeatStates[key]; cur != nil {
-		cur.lastEdit = now
+	due := heartbeatDue(now, hb.lastEdit)
+	if due {
+		hb.lastEdit = now
 	}
 	heartbeatMu.Unlock()
+	if due {
+		g.heartbeatTyping(channelID)
+	}
 	return nil
 }
 
-// heartbeatFinish replaces the status container once with the collapsed
-// one-line receipt. The receipt intentionally carries no token/usage footer
-// (REQ-041, CHANGE-036); per-turn/session usage stays on the detailed actor
-// trace footer (actorTraceFooter), never on this permanent status message.
-func (g *Gateway) heartbeatFinish(ctx context.Context, channelID, key, label string, accent int) error {
-	heartbeatMu.Lock()
-	hb := heartbeatStates[key]
-	if hb == nil {
-		hb = &heartbeatState{start: time.Now()}
-		heartbeatStates[key] = hb
-	}
-	doneLine := heartbeatDoneText(heartbeatElapsedSec(*hb))
-	messageID := hb.messageID
-	heartbeatMu.Unlock()
-	// Offline (no live session): track only, never touch the fake V2 capture
-	// so existing trace message counts stay exact.
-	if g == nil || g.session == nil {
-		heartbeatMu.Lock()
-		delete(heartbeatStates, key)
-		heartbeatMu.Unlock()
-		return nil
-	}
-	components := heartbeatReceiptComponents(label, accent, doneLine)
-	if messageID == "" {
-		id, err := g.sendHeartbeatV2(ctx, channelID, components)
-		if err != nil {
-			return err
-		}
-		heartbeatMu.Lock()
-		delete(heartbeatStates, key)
-		heartbeatMu.Unlock()
-		_ = id
-		return nil
-	}
-	if err := g.editHeartbeatV2(ctx, channelID, messageID, components); err != nil {
-		return err
-	}
+// heartbeatFinish drops the per-actor throttle state at turn end (REQ-041,
+// CHANGE-056). No receipt message is sent: the actor panels already show
+// completion in place.
+func (g *Gateway) heartbeatFinish(_ context.Context, _, key, _ string, _ int) error {
 	heartbeatMu.Lock()
 	delete(heartbeatStates, key)
 	heartbeatMu.Unlock()
@@ -533,7 +208,6 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 		if actor == "main" {
 			g.actorTraceBeginTurn(key)
 		}
-		heartbeatEnsure(key)
 		return g.actorTraceAppend(ctx, channelID, chKey, key, "⏳ sending request to provider")
 	case sdk.TraceProviderReady:
 		return g.actorTraceUpdate(ctx, channelID, chKey, key, "⏳ provider accepted · "+formatDuration(eventProviderLatency(trace)), func(item string) bool {
@@ -608,7 +282,6 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 			return nil
 		}
 		g.disarmActorDedupe(key)
-		heartbeatNoteTool(key, trace.ToolCall.Name, trace.ToolCall.Arguments)
 		_ = g.heartbeatRefresh(ctx, channelID, key, label, accent)
 		// The first tool of a response replaces that request's pending row:
 		// "provider accepted" is merged into the tool line (REQ-033).
@@ -628,7 +301,6 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 		if trace.ToolResult.IsError {
 			marker = "❌"
 		}
-		heartbeatNoteResult(key, trace.ToolCall.Name, trace.ToolResult.IsError, int64(eventElapsed(trace)/time.Second))
 		_ = g.heartbeatRefresh(ctx, channelID, key, label, accent)
 		return g.actorTraceUpdate(ctx, channelID, chKey, key, formatTraceToolLine(trace.ToolCall, marker, trace), func(item string) bool {
 			return strings.HasPrefix(item, "🔧 "+trace.ToolCall.Name)
@@ -641,7 +313,6 @@ func (g *Gateway) displayActorTrace(ctx context.Context, channelID, chKey, key, 
 		if trace.RetryAfter > 0 {
 			text += " in " + formatDuration(trace.RetryAfter)
 		}
-		heartbeatNoteRetry(key)
 		return g.actorTraceAppend(ctx, channelID, chKey, key, text)
 	case sdk.TraceResponse:
 		if trace.Response != nil {
@@ -1142,9 +813,4 @@ func paginateActorText(text string, max int) []string {
 		pages = append(pages, text)
 	}
 	return pages
-}
-
-// heartbeatComponents keeps the 3-arg form for existing tests; production uses WithUsage.
-func heartbeatComponents(label string, accent int, entries []heartbeatToolEntry) []discordgo.MessageComponent {
-	return heartbeatComponentsWithUsage(label, accent, entries, sdk.Usage{}, sdk.Usage{}, false, 0)
 }

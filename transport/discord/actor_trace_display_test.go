@@ -382,3 +382,58 @@ func TestActorTraceRetryShowsReason(t *testing.T) {
 		t.Fatalf("retry line must name the reason: %q", line)
 	}
 }
+
+func resetHeartbeatStates() {
+	heartbeatMu.Lock()
+	heartbeatStates = make(map[string]*heartbeatState)
+	heartbeatMu.Unlock()
+}
+
+// TestActorPanelsAreTheOnlyProgressSurface (REQ-041, CHANGE-056): a full
+// main tool cycle must produce actor-panel messages only — no separate
+// heartbeat status box or receipt — and leave no heartbeat state behind.
+func TestActorPanelsAreTheOnlyProgressSurface(t *testing.T) {
+	g := &Gateway{}
+	capture := newV2Capture(g)
+	resetActorTrace()
+	resetHeartbeatStates()
+	ctx := context.Background()
+	chKey, mainKey := actorKeys(g, "c1", "main", "")
+	call := &sdk.ToolCall{ID: "t1", Name: "read_file", Arguments: `{"path":"index.md"}`}
+	events := []sdk.TraceEvent{
+		{Stage: sdk.TraceRequest},
+		{Stage: sdk.TraceToolCall, ToolCall: call},
+		{Stage: sdk.TraceToolResult, ToolCall: call, ToolResult: &sdk.ToolResult{ID: "t1", Content: "ok"}},
+		{Stage: sdk.TraceResponseContent, Text: "answer", Response: &sdk.Response{}},
+		{Stage: sdk.TraceResponse, Response: &sdk.Response{}},
+	}
+	for _, ev := range events {
+		if err := g.displayActorTrace(ctx, "c1", chKey, mainKey, "main", "", ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := g.actorTraceFlush(ctx, "c1", chKey, mainKey); err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.sent) == 0 {
+		t.Fatal("expected actor panel messages")
+	}
+	for i, comps := range capture.sent {
+		if text := v2Texts(comps); !strings.Contains(text, "Main Agent") {
+			t.Fatalf("sent message %d is not a Main Agent panel: %q", i, text)
+		}
+	}
+	for id, versions := range capture.edited {
+		for _, comps := range versions {
+			if text := v2Texts(comps); !strings.Contains(text, "Main Agent") {
+				t.Fatalf("edited message %s is not a Main Agent panel: %q", id, text)
+			}
+		}
+	}
+	heartbeatMu.Lock()
+	leftover := len(heartbeatStates)
+	heartbeatMu.Unlock()
+	if leftover != 0 {
+		t.Fatalf("heartbeat state must not survive the turn: %d keys", leftover)
+	}
+}

@@ -732,3 +732,16 @@ Reason: update สอง flow + supervisor ภายนอก = สภาพท�
 Impact: cmd/ai/update.go (ensureBlueRunning, ลบ dead helper), cmd/ai/update_bluegreen.go (single flow, expiry cleanup, emergency promote), cmd/ai/main.go (ลบ stopKeepaliveWatchers), scripts/ (ลบ 2 ไฟล์), transport/discord/gateway_liveness.go (comments), README/docs, tests, requirements/functional.md (REQ-043/044)
 Validation: unit (phase/gates/rollback/promote/emergency/no-supervisor-files); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
 Status: accepted
+
+CHANGE-056
+
+Date: 2026-09-17
+Type: revise
+Request: Discord แสดงผลซ้อนกันหลายอย่างเกิน — heartbeat status กับ actor panels แสดง tools/usage ซ้ำกัน
+Conflict: REQ-041 (ข้อความสถานะถาวร tool-call-only + receipt ต่อ turn)
+Previous: ทุก turn มีทั้ง heartbeat status box (tool lines + usage 2 บรรทัด, ยุบเป็น receipt ตอนจบ) และ actor panels (tool lines + content + usage footer) — tool lines โผล่ 2-4 ครั้ง, usage 2 ครั้ง, ต่อ actor อีก (main + worker)
+New: REQ-041 — เหลือ actor panels อย่างเดียว (ตามที่ผู้ใช้เลือก; worker panels คงเต็มรูปแบบ): heartbeatRefresh เหลือแค่ throttled Channel typing (3s) ไม่สร้าง/แก้ข้อความใด ๆ, heartbeatFinish แค่ล้าง state ไม่ส่ง receipt; ลบ builders ที่ตาย (status container, usage lines, receipt, send/editHeartbeatV2) และ note call sites; panels ยังคง tools + content + footer ครบ
+Reason: สองระบบ render ข้อมูลชุดเดียวกัน — panels มีครบทุกอย่างที่ status box มีอยู่แล้ว เหลืออันเดียวจบ
+Impact: transport/discord/actor_trace_display.go, requirements/functional.md (REQ-041)
+Validation: unit (full tool cycle มีเฉพาะ actor-panel messages + heartbeatStates ไม่ค้าง); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
+Status: accepted

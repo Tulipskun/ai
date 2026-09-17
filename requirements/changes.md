@@ -537,3 +537,16 @@ Reason: Missing channel turns left no trace in ai.log, so unknown/unresolved cha
 Impact: sdk/loop.go, transport/discord/gateway.go, requirements/changes.md
 Validation: go test ./transport/discord ./sdk ./cmd/ai -count=1 and go vet same packages
 Status: accepted
+
+CHANGE-041
+
+Date: 2026-09-17
+Type: revise
+Request: Implement BiDi timeout hardening now, zero further dumps
+Conflict: none (extends REQ-010; Chromium untouched)
+Previous: Firefox BiDi session.new used a 5s write deadline with no retry; bidiCommand had no write deadline and no reconnect retry
+New: BiDi timeout hardening only — session.new write deadline 5s to 20s with 3 attempts and fresh dial each retry; bidiCommand adds a 20s write deadline plus one reconnect retry via stored bidi endpoint
+Reason: Live Firefox BiDi handshake hit i/o timeout on 127.0.0.1, hardening the write path without touching the Chromium DevToolsActivePort path
+Impact: tools/browser_client.go
+Validation: go test ./tools -count=1 and go vet ./tools
+Status: accepted

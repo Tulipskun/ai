@@ -186,23 +186,14 @@ func TestActorTraceContentForcesNewSegmentBelow(t *testing.T) {
 	if err := g.actorTraceFlush(ctx, "c1", chKey, key); err != nil {
 		t.Fatal(err)
 	}
-	// send order: [main trace msg a], [content msg b], [main segment msg c]
-	if len(capture.sent) != 3 {
-		t.Fatalf("expected 3 messages in order: %d", len(capture.sent))
+	// Unified main panel: tools plus content together in one message.
+	if len(capture.sent) != 1 {
+		t.Fatalf("expected unified panel with 1 message: %d", len(capture.sent))
 	}
-	first := v2Texts(capture.sent[0])
-	if !strings.Contains(first, "read_file") || strings.Contains(first, "answer") {
-		t.Fatalf("first message mixed tool and content: %s", first)
-	}
-	if !strings.Contains(v2Texts(capture.sent[1]), "here is the answer") {
-		t.Fatalf("content message wrong: %s", v2Texts(capture.sent[1]))
-	}
-	third := v2Texts(capture.sent[2])
-	if !strings.Contains(third, "go test") || strings.Contains(third, "read_file") {
-		t.Fatalf("post-content tool must open a new segment below content: %s", third)
-	}
-	if len(capture.edited["a"]) != 0 {
-		t.Fatalf("new segment must not edit the old message: %v", capture.edited)
+	items := actorTraceStates[key].items
+	joined := strings.Join(items, "\n")
+	if !strings.Contains(joined, "read_file") || !strings.Contains(joined, "go test") || !strings.Contains(joined, "here is the answer") {
+		t.Fatalf("unified panel must hold tools plus content together: %#v", items)
 	}
 }
 
@@ -359,20 +350,21 @@ func TestActorTraceAcceptedDroppedWhenOtherLinesExist(t *testing.T) {
 			t.Fatalf("accepted marker must be removed when other lines exist: %#v", items)
 		}
 	}
-	if len(capture.sent) != 2 {
-		t.Fatalf("expected tool msg + response msg: %d", len(capture.sent))
+	// Unified main panel: content appended into same message, tools plus content together.
+	if len(capture.sent) != 1 {
+		t.Fatalf("expected unified panel with 1 message: %d", len(capture.sent))
 	}
-	response := v2Texts(capture.sent[1])
-	if !strings.Contains(response, "answer") {
-		t.Fatalf("response not sent: %s", response)
+	joined := strings.Join(items, "\n")
+	if !strings.Contains(joined, "bash") || !strings.Contains(joined, "answer") {
+		t.Fatalf("unified panel must hold tools plus content together: %#v", items)
 	}
 	edits := capture.edited["a"]
 	if len(edits) == 0 {
-		t.Fatal("tool message must be edited to drop the accepted marker")
+		t.Fatal("unified message must be edited to drop the accepted marker and append content")
 	}
 	last := v2Texts(edits[len(edits)-1])
-	if strings.Contains(last, "⏳") {
-		t.Fatalf("old container still holds the accepted marker: %s", last)
+	if strings.Contains(last, "⏳") || !strings.Contains(last, "answer") {
+		t.Fatalf("unified container must hold answer without accepted marker: %s", last)
 	}
 }
 

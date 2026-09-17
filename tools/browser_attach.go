@@ -48,6 +48,7 @@ func (c *BrowserClient) Attach(ctx context.Context, endpoint string) error {
 
 func (c *BrowserClient) ListPages(ctx context.Context) ([]BrowserPage, error) {
 	if err := c.ensureStarted(ctx); err != nil { return nil, err }
+	if c.inPipeMode() { return c.listPagesPipe(ctx) }
 	endpoint, err := c.cdpHTTPBase()
 	if err != nil { return nil, err }
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/json/list", nil)
@@ -60,6 +61,26 @@ func (c *BrowserClient) ListPages(ctx context.Context) ([]BrowserPage, error) {
 	if err := json.NewDecoder(response.Body).Decode(&pages); err != nil { return nil, fmt.Errorf("decode browser pages: %w", err) }
 	out := make([]BrowserPage, 0, len(pages))
 	for _, page := range pages { if page.Type != "page" && page.Type != "webview" { continue }; out = append(out, BrowserPage{TargetID:page.ID,Type:page.Type,URL:page.URL,Title:page.Title}) }
+	return out, nil
+}
+
+func (c *BrowserClient) listPagesPipe(ctx context.Context) ([]BrowserPage, error) {
+	var res struct {
+		TargetInfos []struct {
+			TargetID string `json:"targetId"`
+			Type     string `json:"type"`
+			URL      string `json:"url"`
+			Title    string `json:"title"`
+		} `json:"targetInfos"`
+	}
+	if err := c.commandWithTimeout(ctx, "Target.getTargets", map[string]any{}, "", &res, 10*1000000000); err != nil {
+		return nil, err
+	}
+	out := make([]BrowserPage, 0, len(res.TargetInfos))
+	for _, ti := range res.TargetInfos {
+		if ti.Type != "page" && ti.Type != "webview" { continue }
+		out = append(out, BrowserPage{TargetID: ti.TargetID, Type: ti.Type, URL: ti.URL, Title: ti.Title})
+	}
 	return out, nil
 }
 

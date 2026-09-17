@@ -550,3 +550,16 @@ Reason: Live Firefox BiDi handshake hit i/o timeout on 127.0.0.1, hardening the 
 Impact: tools/browser_client.go
 Validation: go test ./tools -count=1 and go vet ./tools
 Status: accepted
+
+CHANGE-042
+
+Date: 2026-09-17
+Type: revise
+Request: Switch Chromium to remote-debugging-pipe with no TCP port
+Conflict: none (extends REQ-010; Firefox BiDi port path and CHANGE-041 retry logic untouched)
+Previous: Chromium (Chrome/Chromium/Edge) launched with `--remote-debugging-address=127.0.0.1 --remote-debugging-port=0`, waited on the `DevToolsActivePort` file, then probed `/json/version` over loopback TCP for the WebSocket debugger URL
+New: REQ-010 Chromium launches with `--remote-debugging-pipe` only (no `--remote-debugging-port`, no loopback TCP listener, no `DevToolsActivePort` file); CDP frames travel over process stdio pipes (fd 3/4, NUL-terminated JSON) via `startChromiumPipe`/`pipeCommandLocked`; `ListPages` uses `Target.getTargets` in pipe mode; `cdpHTTPBase`/`Attach` TCP path retained for explicit attach endpoints; Firefox BiDi `/session` port path and CHANGE-041 retry logic unchanged
+Reason: Remove the loopback TCP listener and DevToolsActivePort file race for managed Chromium; pipe transport is the Chromium-native headless control channel
+Impact: tools/browser_client.go (pipe launch + framed stdio transport + readiness branch + Close pipe cleanup, dead TCP helper removed), tools/browser_attach.go (pipe ListPages via Target.getTargets), requirements/functional.md (REQ-010), requirements/changes.md
+Validation: go test ./tools -count=1 and go vet ./tools
+Status: accepted

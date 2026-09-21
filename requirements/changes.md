@@ -758,3 +758,16 @@ Reason: หลักฐาน readiness ที่ไม่ผูก identity ข
 Impact: cmd/ai/update_bluegreen.go (gates), cmd/ai/update_bluegreen_test.go (stale-marker tests), requirements/functional.md (REQ-043), requirements/lessons.md (LESSON-002)
 Validation: unit (stale marker ตก gate, pid ตรงผ่าน); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`; deploy จริงต้องเห็น live intake ของ green pid ใหม่ใน log
 Status: accepted
+
+CHANGE-058
+
+Date: 2026-09-21
+Type: revise
+Request: เปลี่ยน persistence สำหรับ mobile/Kaggle architecture จาก SQLite บนเครื่อง compute ไปเก็บบน Cloudflare และให้ Kaggle ทำหน้าที่ compute เพียงอย่างเดียว
+Conflict: REQ-003/CON-002 ในโหมด compute (เดิมกำหนด persistent session ผ่านหนึ่ง SQLite database ต่อ session) และ REQ-011 (configuration ต้องอยู่ใน config/*.json); ไม่ลบ local SQLite สำหรับ CLI/daemon เดิม
+Previous: Session state ถาวรของ runtime อยู่ใน SQLite ภายใต้ state/data และหนึ่ง session map ไปหนึ่ง database
+New: Mobile/Kaggle compute ใช้ Cloudflare D1 เป็น durable source of truth สำหรับ session, history, usage, jobs และ job events; Kaggle local state เป็น disposable และต้องสามารถ restart/drop ได้โดยไม่สูญเสีย durable state; configuration ยังคงเป็น config/*.json และ authentication ใช้ token ที่ส่งผ่าน environment/secret injection ของ deployment เท่านั้น ไม่เพิ่ม .env
+Reason: Kaggle session สามารถถูกยุติและลบไฟล์ทั้งหมด จึงไม่เหมาะเป็น persistence layer
+Impact: sdk SessionStore abstraction + Cloudflare store, runtime Cloudflare session manager/compute worker, Cloudflare Worker + D1 schema, Android frontend, Kaggle launcher/docs; local SessionDB remains for existing CLI/daemon mode
+Validation: go test ./... -timeout 2m; go vet ./...; node --check cloudflare/index.js; Android project configuration inspection/build; manual Cloudflare D1 deployment and Kaggle job claim/complete test before production use
+Status: accepted

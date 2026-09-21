@@ -17,6 +17,7 @@ const (
 	commandDiscord
 	commandBrowser
 	commandSystem
+	commandCompute
 	commandStop
 )
 
@@ -75,6 +76,10 @@ func parseCommand(args []string) (command, error) {
 		}
 		return commandSystem, nil
 	}
+	if args[0] == "compute" {
+		if len(args) > 1 { return commandCompute, fmt.Errorf("compute: unexpected argument %q", args[1]) }
+		return commandCompute, nil
+	}
 	if args[0] == "stop" {
 		if len(args) > 1 {
 			return commandStop, fmt.Errorf("stop: unexpected argument %q", args[1])
@@ -99,6 +104,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  discord    Configure Discord interactively")
 	fmt.Fprintln(w, "  browser    Configure browser automation interactively")
 	fmt.Fprintln(w, "  system     Show or set the model system prompt")
+	fmt.Fprintln(w, "  compute    Run a stateless Kaggle worker using Cloudflare for durable state")
 	fmt.Fprintln(w, "  update [--auto] [version]  Download, verify, and hand over to the new AI binary (blue-green, zero downtime)")
 	fmt.Fprintln(w, "  uninstall  Stop AI and remove the binary and runtime state")
 }

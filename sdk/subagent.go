@@ -536,7 +536,16 @@ func (m *subAgentManager) runWorker(ctx context.Context, job *subAgentJob) (Resp
 	if store == nil {
 		return Response{}, errors.New("sdk: parent session is not persistent")
 	}
-	worker, err := OpenSession(SessionDBPath(store.Dir(), workerID), SessionConfig{ID: workerID, Provider: ProviderID(provider), Model: model, KeyIndex: parentCfg.KeyIndex, ThinkingLevel: chooseThinking(m.cfg.ThinkingLevel, parentCfg.ThinkingLevel), Temperature: parentCfg.Temperature, Workspace: workspace}, keys)
+	workerConfig := SessionConfig{ID: workerID, Provider: ProviderID(provider), Model: model, KeyIndex: parentCfg.KeyIndex, ThinkingLevel: chooseThinking(m.cfg.ThinkingLevel, parentCfg.ThinkingLevel), Temperature: parentCfg.Temperature, Workspace: workspace}
+	var worker *Session
+	var err error
+	if opener, ok := store.(WorkerSessionOpener); ok {
+		worker, err = opener.OpenWorkerSession(workerConfig, keys)
+	} else if local, ok := store.(interface{ Dir() string }); ok {
+		worker, err = OpenSession(SessionDBPath(local.Dir(), workerID), workerConfig, keys)
+	} else {
+		return Response{}, errors.New("sdk: session store cannot open sub-agent sessions")
+	}
 	if err != nil {
 		return Response{}, err
 	}

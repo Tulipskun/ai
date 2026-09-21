@@ -21,8 +21,7 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 ├── runtime/           config load, session manager, provider wiring, filestore
 ├── transport/         CLI + Discord transports (display only, no core logic)
 │   ├── cli/
-│   ├── discord/
-│   └── mobile/        Cloudflare/mobile transport contracts
+│   └── discord/
 ├── cloudflare/        Cloudflare Worker + D1 control plane
 ├── kaggle/             Stateless Kaggle compute worker launcher/docs
 ├── android/            Native Android frontend harness

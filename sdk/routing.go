@@ -181,7 +181,7 @@ type Session struct {
 	config    SessionConfig
 	keys      *KeyPool
 	history   []Turn
-	store     *SessionDB
+	store     SessionStore
 	plan      PlanState
 	activeJob string
 }
@@ -189,27 +189,36 @@ type Session struct {
 func NewSession(config SessionConfig, keys *KeyPool) *Session {
 	return &Session{config: config, keys: keys}
 }
+func openSessionWithStore(config SessionConfig, keys *KeyPool, store SessionStore) (*Session, error) {
+	if store == nil {
+		return nil, errors.New("sdk: session store is required")
+	}
+	persisted, loadErr := store.LoadSession(config.ID)
+	if loadErr == nil {
+		config = persisted
+	} else if errors.Is(loadErr, sql.ErrNoRows) || errors.Is(loadErr, ErrCloudflareNotFound) {
+		if err := store.SaveSession(config); err != nil {
+			_ = store.Close()
+			return nil, err
+		}
+	} else {
+		_ = store.Close()
+		return nil, loadErr
+	}
+	history, err := store.LoadHistory(config.ID)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	return &Session{config: config, keys: keys, history: history, store: store}, nil
+}
+
 func OpenSession(path string, config SessionConfig, keys *KeyPool) (*Session, error) {
 	store, err := OpenSessionDB(path)
 	if err != nil {
 		return nil, err
 	}
-	persisted, loadErr := store.LoadSession(config.ID)
-	if loadErr == nil {
-		config = persisted
-	} else if !errors.Is(loadErr, sql.ErrNoRows) {
-		store.Close()
-		return nil, loadErr
-	} else if err := store.SaveSession(config); err != nil {
-		store.Close()
-		return nil, err
-	}
-	history, err := store.LoadHistory(config.ID)
-	if err != nil {
-		store.Close()
-		return nil, err
-	}
-	return &Session{config: config, keys: keys, history: history, store: store}, nil
+	return openSessionWithStore(config, keys, store)
 }
 func (s *Session) Close() error {
 	s.mu.RLock()

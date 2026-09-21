@@ -146,12 +146,20 @@ export default {
       }
       return json({ error:'not found' },404);
     } catch (error) {
-      return json({ error: error instanceof Error ? error.message : String(error) },500);
+      const status = error && typeof error.status === 'number' ? error.status : 500;
+      return json({ error: error instanceof Error ? error.message : String(error) }, status);
     }
   }
 };
 
-function requireToken(request, env, kind) { const expected = kind === 'compute' ? env.COMPUTE_TOKEN : env.CLIENT_TOKEN; if (!expected) throw new Error(`${kind} token is not configured`); if ((request.headers.get('Authorization') || '') !== `Bearer ${expected}`) throw new Error('unauthorized'); }
+class HttpError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
+function requireToken(request, env, kind) {
+  const expected = kind === 'compute' ? env.COMPUTE_TOKEN : env.CLIENT_TOKEN;
+  if (!expected) throw new HttpError(500, kind + ' token is not configured');
+  if ((request.headers.get('Authorization') || '') !== 'Bearer ' + expected) throw new HttpError(401, 'unauthorized');
+}
 function normalizeConfig(id, body) { return { id, provider:String(body.provider||''), model:String(body.model||''), key_index:Number(body.key_index||0), thinking_level:String(body.thinking_level||''), temperature:body.temperature===null||body.temperature===undefined?null:Number(body.temperature), agent_mode:String(body.agent_mode||'main'), workspace:String(body.workspace||'') }; }
 function zeroUsage(){return {input_tokens:0,output_tokens:0,total_tokens:0,cache_read_tokens:0,cache_write_tokens:0};}
 async function getSession(env,id){return env.DB.prepare(`SELECT id, config_json, history_json, usage_json, created_at, updated_at FROM sessions WHERE id=?`).bind(id).first();}

@@ -21,3 +21,5 @@ CON-009 — หลีกเลี่ยงการ refactor ที่ไม่�
 CON-010 — ห้ามนำเส้นทาง model-call แบบ streaming กลับมาใช้; `Generate` เป็นเส้นทาง model call เพียงเส้นทางเดียว
 
 CON-011 — File store ของ attachment ต้องอยู่ใต้ state root (`~/.local/share/ai/data/attachments/`) เท่านั้น ไม่ใช่ใน repository/working tree และไม่ใช่ session database; ต้องมีขีดจำกัดขนาดต่อไฟล์/ต่อ session พร้อม TTL cleanup; ห้ามเก็บเนื้อหาไฟล์ใน `data/sessions/` (คง CON-002, CON-003) และ path/limit ต้องกำหนดใน `config/*.json` เท่านั้น (คง CON-001)
+
+CON-012 — โหมด Kaggle compute ต้องไม่ใช้ local SQLite/session files เป็น source of truth; durable session/job/event state ต้องอยู่ใน Cloudflare D1 ผ่าน authenticated API และไฟล์/DB ชั่วคราวบน Kaggle ต้องถือเป็น disposable compute state เท่านั้น

@@ -25,8 +25,6 @@ func runCompute() error {
     if err != nil { return err }
 
     providerPath := filepath.Join(state, runtime.DefaultProviderConfigPath)
-    providerFile, err := runtime.LoadProviderFile(providerPath)
-    if err != nil { return err }
     rt, err := runtime.Load(providerPath)
     if err != nil { return err }
     if len(rt.ProviderConfigs) == 0 { return errors.New("compute: no providers configured") }
@@ -59,7 +57,9 @@ func runCompute() error {
     if err != nil { return err }
     agent, err := newAgentWithWorkspaces(
         rt.Client, workspace, rt.Browser, browserConfig.AllowPrivate,
-        filepath.Join(state, "data", "jobs.json"), nil, sessions.WorkspaceFor,
+        filepath.Join(state, "data", "jobs.json"), nil, func(ctx context.Context) string {
+            return sessions.WorkspaceFor(sdk.SessionIDFromContext(ctx))
+        },
     )
     if err != nil { return err }
 

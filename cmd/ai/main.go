@@ -60,6 +60,10 @@ func main() {
 		if err := runUpdate(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
+	case commandCompute:
+		if err := runCompute(); err != nil && !errors.Is(err, context.Canceled) {
+			log.Fatal(err)
+		}
 	case commandDaemon:
 		if isStandbyDaemonArgs(os.Args[1:]) {
 			if err := runDaemonStandby(); err != nil && !errors.Is(err, context.Canceled) {

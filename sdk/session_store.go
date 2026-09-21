@@ -1,5 +1,9 @@
 package sdk
 
+type WorkerSessionOpener interface {
+	OpenWorkerSession(SessionConfig, *KeyPool) (*Session, error)
+}
+
 type SessionStore interface {
 	SaveSession(SessionConfig) error
 	LoadSession(string) (SessionConfig, error)

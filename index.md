@@ -21,7 +21,12 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 ├── runtime/           config load, session manager, provider wiring, filestore
 ├── transport/         CLI + Discord transports (display only, no core logic)
 │   ├── cli/
-│   └── discord/
+│   ├── discord/
+│   └── mobile/        Cloudflare/mobile transport contracts
+├── cloudflare/        Cloudflare Worker + D1 control plane
+├── kaggle/             Stateless Kaggle compute worker launcher/docs
+├── android/            Native Android frontend harness
+
 ├── requirements/      source of truth for product behavior (read before code)
 ├── docs/              install, layout, session settings, CLI mode notes
 │   └── docs/superpowers/  archived early-Sept design notes (non-normative;
@@ -43,7 +48,10 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 | Planner (Main Agent, senior: read-only context tools) | `sdk/plan_tool.go` |
 | Worker delegation contracts, progress/final reports | `sdk/subagent.go`, `sdk/subagent_trace_sink.go` |
 | Context budget, newest-group truncation | `sdk/context_window.go` |
-| Session persistence (one db per session) | `sdk/session_db.go`, `sdk/session_settings.go` |
+| Session persistence | `sdk/session_db.go`, `sdk/session_store.go`, `sdk/cloudflare_store.go` |
+| Cloudflare control plane | `cloudflare/index.js`, `cloudflare/schema.sql` |
+| Kaggle compute worker | `runtime/cloudflare_compute.go`, `runtime/cloudflare_session_manager.go`, `cmd/ai/compute.go`, `kaggle/run.sh` |
+| Android frontend harness | `android/app/src/main/java/ai/harness/mobile/MainActivity.java` |
 | Provider routing, catalogue, retry | `sdk/router_client.go`, `sdk/routing.go`, `sdk/providers/` |
 | Worker tool surface | `tools/registry.go` |
 | File tools incl. batch read | `tools/files.go` |
@@ -102,8 +110,7 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
   file; keep the change in the owning module (no cross-module refactors).
 - Provider / catalogue / retry issue: `sdk/router_client.go` +
   `sdk/routing.go` + `sdk/providers/<adapter>/`.
-- Session persist / workspace / settings: `sdk/session_db.go` +
-  `sdk/session_settings.go` + `runtime/session_manager.go`.
+- Session persistence / mobile compute: `sdk/session_store.go` + `sdk/cloudflare_store.go` + `runtime/cloudflare_session_manager.go` + `runtime/cloudflare_compute.go`.
 - Discord display / trace / command: `transport/discord/` only; core
   orchestration and canonical contracts stay untouched.
 - New spec conflict: update `requirements/` + append `requirements/changes.md`

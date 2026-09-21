@@ -1,0 +1,11 @@
+name = "ai-control-plane"
+main = "index.js"
+compatibility_date = "2026-09-21"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ai-control-plane"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[vars]
+# Set CLIENT_TOKEN and COMPUTE_TOKEN with `wrangler secret put`.

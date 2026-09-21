@@ -113,10 +113,8 @@ func adapterForProvider(name, explicit string) (sdk.AdapterID, error) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "openai", "openrouter":
 		return sdk.AdapterOpenAI, nil
-	case "anthropic":
+	case "anthropic", "opencode":
 		return sdk.AdapterAnthropic, nil
-	case "opencode":
-		return sdk.AdapterOpenCode, nil
 	case "gemini", "google":
 		return sdk.AdapterGemini, nil
 	default:

@@ -35,7 +35,13 @@ type cloudflareSessionEnvelope struct {
 }
 
 type cloudflareSessionListEnvelope struct {
-	Sessions []SessionInfo `json:"sessions"`
+	Sessions []struct {
+		ID        string `json:"id"`
+		Provider  string `json:"provider"`
+		Model     string `json:"model"`
+		UpdatedAt string `json:"updated_at"`
+		TurnCount int    `json:"turn_count"`
+	} `json:"sessions"`
 }
 
 func NewCloudflareSessionStore(config CloudflareStoreConfig, sessionID string) (*CloudflareSessionStore, error) {
@@ -60,7 +66,13 @@ func ListCloudflareSessions(config CloudflareStoreConfig, limit int) ([]SessionI
 	if err != nil { return nil, err }
 	var out cloudflareSessionListEnvelope
 	if err := store.request(http.MethodGet, "/v1/compute/storage/sessions?limit="+strconv.Itoa(limit), nil, &out); err != nil { return nil, err }
-	return out.Sessions, nil
+	items := make([]SessionInfo, 0, len(out.Sessions))
+	for _, row := range out.Sessions {
+		item := SessionInfo{ID: row.ID, Provider: ProviderID(row.Provider), Model: row.Model, TurnCount: row.TurnCount}
+		if parsed, err := time.Parse(time.RFC3339Nano, row.UpdatedAt); err == nil { item.UpdatedAt = parsed }
+		items = append(items, item)
+	}
+	return items, nil
 }
 
 func (s *CloudflareSessionStore) Close() error { return nil }

@@ -133,6 +133,7 @@ func (h *HarnessLoop) Entry(ctx context.Context, input Input) error {
 		}
 	}
 	ctx = WithSessionID(ctx, session.ID())
+	ctx = WithWorkspace(ctx, session.Config().Workspace)
 	ctx = context.WithValue(ctx, lifecycleInputKey{}, cloneInputRoute(input))
 	var resp Response
 	if h.Agent != nil {

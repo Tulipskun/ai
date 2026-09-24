@@ -160,16 +160,17 @@ func run(ctx context.Context) error {
 	var displays []sdk.Display
 	// Mobile transport (REQ-046/REQ-047): the daemon's only gateway. It is
 	// reachable exclusively through the Cloudflare quick tunnel, authenticated
-	// with the D1 token a phone presents, and it hydrates runtime state from D1
-	// on the first verified connection.
+	// with the Cloudflare token a phone presents, and it hydrates runtime state
+	// from D1 on the first verified connection.
 	mobileRT, err := newMobileRuntime(state, mobileSessionDir(state), runtimeMobileConfig{
-		workerBase:   transportConfig.Mobile.WorkerBase,
-		listen:       transportConfig.Mobile.Listen,
-		publicListen: transportConfig.Mobile.PublicListen,
-		tunnel:       transportConfig.Mobile.Tunnel,
-		cloudflared:  transportConfig.Mobile.Cloudflared,
-		syncConfig:   transportConfig.Mobile.SyncConfig,
-		syncSessions: transportConfig.Mobile.SyncSessions,
+		cloudflareAPI: transportConfig.Mobile.CloudflareAPI,
+		d1Database:    transportConfig.Mobile.D1Database,
+		listen:        transportConfig.Mobile.Listen,
+		publicListen:  transportConfig.Mobile.PublicListen,
+		tunnel:        transportConfig.Mobile.Tunnel,
+		cloudflared:   transportConfig.Mobile.Cloudflared,
+		syncConfig:    transportConfig.Mobile.SyncConfig,
+		syncSessions:  transportConfig.Mobile.SyncSessions,
 	}, func(ctx context.Context) error {
 		configs, err := providerManager.Reload(ctx)
 		if err != nil {
@@ -192,8 +193,8 @@ func run(ctx context.Context) error {
 	}
 	sources = append(sources, mobileRT.transport)
 	displays = append(displays, mobileDisplayAdapter{mobile: mobileRT})
-	log.Printf("ai daemon ready: mobile gateway on %s (tunnel=%v worker=%s)",
-		transportConfig.Mobile.Listen, transportConfig.Mobile.Tunnel, transportConfig.Mobile.WorkerBase)
+	log.Printf("ai daemon ready: mobile gateway on %s (tunnel=%v d1=%s)",
+		transportConfig.Mobile.Listen, transportConfig.Mobile.Tunnel, transportConfig.Mobile.D1Database)
 	if len(sources) == 0 {
 		return fmt.Errorf("no transports enabled; configure config/entry.json")
 	}

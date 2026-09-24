@@ -823,3 +823,16 @@ Reason: เป็นการทำตามเจตนาของสเปก
 Impact: transport/mobile/auth.go (TokenCache, fast path, logRejected), transport/mobile/gateway.go (ส่ง Tokens เป็น Cache), transport/mobile/auth_test.go (เทสต์ cache hit ไม่ยิง Worker / token อื่นยัง 401+429 / token ที่ไม่ผ่านไม่ถูกแคช), requirements/functional.md (REQ-046(2)), requirements/changes.md
 Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 4m`; e2e: handshake แรกผ่าน Worker แล้ว hydrate, handshake ที่สองในทันทีตอบผ่าน cache (turn สำเร็จทั้งสองครั้ง), มือถือจริง+emulator ขึ้น `● ออนไลน์`
 Status: accepted
+
+CHANGE-063
+
+Date: 2026-09-25
+Type: revise (credential model + data path)
+Request: "AIxodia ใส่ URL และ token ของ cloudflare ที่นำไปหา Account id/Database id ได้" + "ทำเดี๋ยวนี้" (เปิด daemon ให้ลอง) — ผู้ใช้สั่งลบ secret `AIXODIA_TOKEN` ที่ผมสร้างเองพร้อมร่องรอยทั้งหมด
+Conflict: REQ-046(2)(3)(5)(6), CON-012, REQ-047, `transport/config.go` (`mobile.worker_base`), `runtime/d1store` (ผ่าน Worker), `transport/mobile/proxy.go` (proxy ไป Worker)
+Previous: daemon เชื่อม Worker ผ่าน `worker_base` และใช้ D1 token ที่ผมสร้างเป็น Worker secret; แอปต้องมี Worker URL; `d1store` เรียก `/api/state` ของ Worker
+New: credential เดียวของระบบคือ **Cloudflare API token ที่ผู้ใช้เป็นเจ้าของ** ส่งมาใน `Authorization` header ของ handshake — daemon ตรวจด้วย `GET /user/tokens/verify`, หา account id ด้วย `GET /accounts` และ database id ด้วย `GET /accounts/{a}/d1/database` (ค่าตั้งต้นชื่อ `d1_database`, ถ้า account มีหลายฐานต้องระบุชื่อ), แล้วคุย D1 ตรงผ่าน `POST /accounts/{a}/d1/database/{d}/query`; `transport/mobile` เสิร์จ history API เองจาก D1 (`history.go`) แทนการ proxy ไป Worker และไม่เสิร์จ `/api/state`; tunnel ประกาศตัวเองลงตาราง `nodes` ใน D1; `config/entry.json` เปลี่ยนจาก `worker_base` เป็น `cloudflare_api` + `d1_database`
+Reason: ผู้ใช้ระบุชัดว่า credential คือ Cloudflare token ที่หา account/database id ได้เอง และสั่งลบ Worker secret ที่ผมสร้างโดยไม่ได้ขอ — สเปกเดิมบอกว่า "operator สร้าง token" ผมจึงต้องลบสิ่งที่ผมสร้างและย้ายไปใช้ token ของผู้ใช้จริงแทน
+Impact: runtime/d1store/{client.go,client_test ใหม่: fakecloudflare_test.go, d1store_test.go}, transport/mobile/{history.go ใหม่, history_test.go ใหม่, proxy.go+proxy_test.go ลบ, gateway.go, auth.go, tunnel.go}, transport/config.go + config_test.go, cmd/ai/{mobile.go, main.go}, requirements/{functional,constraints,changes}.md, index.md
+Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 4m`; e2e จริงผ่าน quick tunnel ด้วย Cloudflare token: 401 เมื่อไม่มี header, 401 เมื่อ token ผิดรูปแบบถูกแต่ใช้ไม่ได้, 503 เมื่อ Cloudflare ตอบผิดรูป, `/api/sessions` = 200 พร้อมแชทจริง 4 รายการ, handshake → hydrate `config:provider` → reload 6 provider → `turn ok`, turn ถูกเขียนกลับ D1 เรียง `seq`, `/api/node` คืน tunnel URL ปัจจุบัน
+Status: accepted

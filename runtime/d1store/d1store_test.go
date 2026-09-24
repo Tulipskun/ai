@@ -3,319 +3,386 @@ package d1store
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"errors"
 	"os"
 	"path/filepath"
-	"strings"
-	"sync"
 	"testing"
 )
 
-// fakeWorker implements the subset of the AIxodia Worker contract the client
-// uses: /api/ping, /api/state (GET/PUT) and /api/state?prefix=.
-type fakeWorker struct {
-	mu     sync.Mutex
-	state  map[string]string
-	token  string
-	calls  int
-	prefix string
-}
-
-func newFakeWorker(token string) *fakeWorker {
-	return &fakeWorker{state: map[string]string{}, token: token}
-}
-
-func (f *fakeWorker) handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
-		f.mu.Lock()
-		f.calls++
-		f.mu.Unlock()
-		if r.Header.Get("Authorization") != "Bearer "+f.token {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		w.Header().Set("content-type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true}`))
-	})
-	mux.HandleFunc("/api/state", func(w http.ResponseWriter, r *http.Request) {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		if r.Header.Get("Authorization") != "Bearer "+f.token {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		f.prefix = r.URL.Query().Get("prefix")
-		keys := []string{}
-		for k := range f.state {
-			if strings.HasPrefix(k, f.prefix) {
-				keys = append(keys, k)
-			}
-		}
-		w.Header().Set("content-type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"keys": keys})
-	})
-	mux.HandleFunc("/api/state/", func(w http.ResponseWriter, r *http.Request) {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		if r.Header.Get("Authorization") != "Bearer "+f.token {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		key := strings.TrimPrefix(r.URL.Path, "/api/state/")
-		if r.Method == http.MethodGet {
-			value, ok := f.state[key]
-			if !ok {
-				_ = json.NewEncoder(w).Encode(map[string]any{"key": key, "value": nil})
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"key": key, "value": value})
-			return
-		}
-		var body struct {
-			Value string `json:"value"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		f.state[key] = body.Value
-		w.WriteHeader(http.StatusOK)
-	})
-	return mux
-}
-
-func TestVerifyTokenDistinguishesWrongFromDown(t *testing.T) {
-	worker := newFakeWorker("d1-token")
-	server := httptest.NewServer(worker.handler())
-	defer server.Close()
-
+func testClient(t *testing.T, fake *fakeCloudflare) (*Client, *MemoryToken) {
+	t.Helper()
 	tokens := NewMemoryToken()
+	tokens.Adopt(fake.token)
+	server := fake.start(t)
 	client := NewClient(server.URL, tokens.Get)
-	if err := client.VerifyToken(context.Background(), "d1-token"); err != nil {
-		t.Fatalf("valid token rejected: %v", err)
+	if client == nil {
+		t.Fatal("NewClient returned nil for a configured base")
 	}
-	if err := client.VerifyToken(context.Background(), "nope"); !strings.Contains(err.Error(), ErrTokenRejected.Error()) {
+	return client, tokens
+}
+
+func TestVerifyTokenAcceptsActiveTokenAndResolvesDatabase(t *testing.T) {
+	fake := newFakeCloudflare("cf-token")
+	client, _ := testClient(t, fake)
+
+	if err := client.VerifyToken(context.Background(), "cf-token"); err != nil {
+		t.Fatalf("VerifyToken: %v", err)
+	}
+	target, ok := client.ResolvedTarget()
+	if !ok {
+		t.Fatal("target was not resolved")
+	}
+	if target.AccountID != "acct-1" || target.DatabaseID != "db-1" || target.Name != DefaultDatabaseName {
+		t.Fatalf("target = %+v, want acct-1/db-1/%s", target, DefaultDatabaseName)
+	}
+	if got := fake.pathCount("/user/tokens/verify"); got != 1 {
+		t.Fatalf("token verify calls = %d, want 1", got)
+	}
+}
+
+func TestVerifyTokenRejectsWrongTokenAndKeepsDownDistinct(t *testing.T) {
+	fake := newFakeCloudflare("cf-token")
+	client, _ := testClient(t, fake)
+
+	if err := client.VerifyToken(context.Background(), "not-the-token"); !errors.Is(err, ErrTokenRejected) {
 		t.Fatalf("wrong token error = %v, want ErrTokenRejected", err)
 	}
+	fake.mu.Lock()
+	fake.down = true
+	fake.mu.Unlock()
+	err := client.VerifyToken(context.Background(), "cf-token")
+	if err == nil || errors.Is(err, ErrTokenRejected) {
+		t.Fatalf("Cloudflare down error = %v, want a transport error that is not a rejection", err)
+	}
+}
 
-	server.Close()
-	if err := client.VerifyToken(context.Background(), "d1-token"); err == nil {
-		t.Fatal("expected a transport error when the Worker is down")
-	} else if strings.Contains(err.Error(), ErrTokenRejected.Error()) {
-		t.Fatalf("an outage must not look like a rejected token: %v", err)
+func TestVerifyTokenRefusesEmptyTokenWithoutCallingCloudflare(t *testing.T) {
+	fake := newFakeCloudflare("cf-token")
+	client, _ := testClient(t, fake)
+	if err := client.VerifyToken(context.Background(), "  "); !errors.Is(err, ErrTokenRejected) {
+		t.Fatalf("empty token error = %v, want ErrTokenRejected", err)
+	}
+	if got := len(fake.paths); got != 0 {
+		t.Fatalf("requests = %d, want none for an empty token", got)
 	}
 }
 
 func TestCallsWithoutTokenFailWithErrNoToken(t *testing.T) {
-	worker := newFakeWorker("d1-token")
-	server := httptest.NewServer(worker.handler())
-	defer server.Close()
-
-	tokens := NewMemoryToken()
-	client := NewClient(server.URL, tokens.Get)
-	if _, _, err := client.Get(context.Background(), "config:provider"); err != ErrNoToken {
-		t.Fatalf("Get without token = %v, want ErrNoToken", err)
+	fake := newFakeCloudflare("cf-token")
+	server := fake.start(t)
+	client := NewClient(server.URL, func() string { return "" })
+	if client == nil {
+		t.Fatal("NewClient returned nil")
 	}
-	if err := client.Put(context.Background(), "config:provider", "{}"); err != ErrNoToken {
-		t.Fatalf("Put without token = %v, want ErrNoToken", err)
+	if err := client.VerifyToken(context.Background(), "cf-token"); err != nil {
+		t.Fatalf("VerifyToken: %v", err)
+	}
+	if _, _, err := client.Get(context.Background(), "config:provider"); !errors.Is(err, ErrNoToken) {
+		t.Fatalf("Get without a token = %v, want ErrNoToken", err)
+	}
+	if err := client.Heartbeat(context.Background(), "https://x.trycloudflare.com", "v1"); !errors.Is(err, ErrNoToken) {
+		t.Fatalf("Heartbeat without a token = %v, want ErrNoToken", err)
 	}
 }
 
 func TestMemoryTokenAdoptIsVolatile(t *testing.T) {
 	tokens := NewMemoryToken()
 	if tokens.Get() != "" {
-		t.Fatal("a fresh daemon must hold no credential")
+		t.Fatal("a fresh cache must be empty")
 	}
-	tokens.Adopt("d1-token")
-	if tokens.Get() != "d1-token" {
-		t.Fatalf("token = %q", tokens.Get())
-	}
-	tokens.Adopt("   ")
-	if tokens.Get() != "d1-token" {
-		t.Fatal("a blank adopt must not wipe the token")
+	tokens.Adopt("  cf-token  ")
+	if tokens.Get() != "cf-token" {
+		t.Fatalf("cached token = %q, want the trimmed value", tokens.Get())
 	}
 	tokens.Clear()
 	if tokens.Get() != "" {
-		t.Fatal("Clear did not empty the token")
+		t.Fatal("Clear must leave the daemon with no credential")
 	}
 }
 
 func TestHydrateAndPushConfig(t *testing.T) {
-	worker := newFakeWorker("d1-token")
-	server := httptest.NewServer(worker.handler())
-	defer server.Close()
+	fake := newFakeCloudflare("cf-token")
+	client, _ := testClient(t, fake)
+	state := t.TempDir()
 
-	tokens := NewMemoryToken()
-	tokens.Adopt("d1-token")
-	client := NewClient(server.URL, tokens.Get)
+	remote := "{\"providers\":[\"nous\"]}"
+	if err := client.Put(context.Background(), "config:provider", remote); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if got := fake.state["config:provider"]; got != remote {
+		t.Fatalf("stored value = %q, want %q", got, remote)
+	}
+	report, err := client.HydrateConfig(context.Background(), DefaultConfigFiles(state))
+	if err != nil {
+		t.Fatalf("HydrateConfig: %v", err)
+	}
+	if len(report.PulledConfig) != 1 || report.PulledConfig[0] != "config:provider" {
+		t.Fatalf("pulled = %v, want config:provider", report.PulledConfig)
+	}
+	local, err := os.ReadFile(filepath.Join(state, "config", "provider.json"))
+	if err != nil {
+		t.Fatalf("read hydrated file: %v", err)
+	}
+	if string(local) != remote {
+		t.Fatalf("hydrated file = %q, want %q", local, remote)
+	}
 
-	stateRoot := t.TempDir()
-	files := DefaultConfigFiles(stateRoot)
+	if err := os.WriteFile(filepath.Join(state, "config", "system.json"), []byte("{\"x\":1}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report, err = client.PushConfig(context.Background(), DefaultConfigFiles(state))
+	if err != nil {
+		t.Fatalf("PushConfig: %v", err)
+	}
+	if len(report.PushedConfig) != 2 {
+		t.Fatalf("pushed = %v, want provider + system", report.PushedConfig)
+	}
+	if got := fake.state["config:system"]; got != "{\"x\":1}" {
+		t.Fatalf("pushed system = %q", got)
+	}
+}
 
-	// Push local files up.
-	if err := os.MkdirAll(filepath.Join(stateRoot, "config"), 0o700); err != nil {
-		t.Fatal(err)
+func TestEntryConfigIsNeverSynced(t *testing.T) {
+	files := DefaultConfigFiles(t.TempDir())
+	for _, f := range files {
+		if f.Key == "config:entry" {
+			t.Fatal("config/entry.json must stay local: it is the gateway bootstrap")
+		}
 	}
-	providerJSON := `{"providers":[{"name":"demo","adapter":"openai","http_endpoint":"https://example.invalid","api_keys":["k"]}]}`
-	if err := os.WriteFile(files[0].Path, []byte(providerJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	report, err := client.PushConfig(context.Background(), files)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.PushedConfig) != 1 || report.PushedConfig[0] != "config:provider" {
-		t.Fatalf("pushed = %v", report.PushedConfig)
-	}
-
-	// A fresh daemon state root hydrates the same content back.
-	fresh := t.TempDir()
-	report, err = client.HydrateConfig(context.Background(), DefaultConfigFiles(fresh))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.PulledConfig) != 1 {
-		t.Fatalf("pulled = %v", report.PulledConfig)
-	}
-	got, err := os.ReadFile(filepath.Join(fresh, "config", "provider.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != providerJSON {
-		t.Fatalf("hydrated config = %q", got)
-	}
-	info, err := os.Stat(filepath.Join(fresh, "config", "provider.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("hydrated config mode = %v, want 0600", info.Mode().Perm())
+	if len(files) == 0 {
+		t.Fatal("no config files to sync")
 	}
 }
 
 func TestHydrateKeepsLocalFileWhenD1HasNoCopy(t *testing.T) {
-	worker := newFakeWorker("d1-token")
-	server := httptest.NewServer(worker.handler())
-	defer server.Close()
-
-	tokens := NewMemoryToken()
-	tokens.Adopt("d1-token")
-	client := NewClient(server.URL, tokens.Get)
-
-	stateRoot := t.TempDir()
-	files := DefaultConfigFiles(stateRoot)
-	if err := os.MkdirAll(filepath.Join(stateRoot, "config"), 0o700); err != nil {
+	fake := newFakeCloudflare("cf-token")
+	client, _ := testClient(t, fake)
+	state := t.TempDir()
+	path := filepath.Join(state, "config", "browser.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(files[0].Path, []byte(`{"local":true}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("{\"enabled\":true}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	report, err := client.HydrateConfig(context.Background(), files)
+	report, err := client.HydrateConfig(context.Background(), DefaultConfigFiles(state))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("HydrateConfig: %v", err)
 	}
 	if len(report.PulledConfig) != 0 {
-		t.Fatalf("pulled = %v, want none", report.PulledConfig)
+		t.Fatalf("pulled = %v, want nothing", report.PulledConfig)
 	}
-	got, err := os.ReadFile(files[0].Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != `{"local":true}` {
-		t.Fatalf("local config was modified: %q", got)
+	raw, err := os.ReadFile(path)
+	if err != nil || string(raw) != "{\"enabled\":true}" {
+		t.Fatalf("local file = %q (err %v), want it untouched", raw, err)
 	}
 }
 
 func TestSessionRoundTrip(t *testing.T) {
-	worker := newFakeWorker("d1-token")
-	server := httptest.NewServer(worker.handler())
-	defer server.Close()
+	fake := newFakeCloudflare("cf-token")
+	client, _ := testClient(t, fake)
+	dir := t.TempDir()
+	ctx := context.Background()
 
-	tokens := NewMemoryToken()
-	tokens.Adopt("d1-token")
-	client := NewClient(server.URL, tokens.Get)
-
-	source := t.TempDir()
-	sessionDir := filepath.Join(source, "sessions")
-	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+	db := filepath.Join(dir, base64.RawURLEncoding.EncodeToString([]byte("work-1"))+".db")
+	if err := os.WriteFile(db, []byte("SQLite format 3\x00off"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// CON-002 keeps one SQLite file per session; the test uses a byte-identical
-	// stand-in because the sync layer only moves bytes.
-	dbBytes := []byte("SQLite format 3\x00pretend-session")
-	name := "c2Vzc2lvbi1vbmU.db"
-	if err := os.WriteFile(filepath.Join(sessionDir, name), dbBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	report, err := client.PushSession(context.Background(), "session-one", filepath.Join(sessionDir, name))
+	report, err := client.PushSession(ctx, "work-1", db)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("PushSession: %v", err)
 	}
 	if len(report.PushedSession) != 1 {
-		t.Fatalf("pushed sessions = %v", report.PushedSession)
+		t.Fatalf("pushed = %v, want work-1", report.PushedSession)
+	}
+	if _, ok := fake.state[SessionKeyPrefix+"work-1"]; !ok {
+		t.Fatalf("no blob in state; keys = %v", fake.state)
 	}
 
-	// A brand-new state root restores the file with the SDK's own naming.
-	fresh := t.TempDir()
-	encode := base64Name
-	report, err = client.HydrateSessions(context.Background(), filepath.Join(fresh, "sessions"), encode)
+	target := t.TempDir()
+	report, err = client.HydrateSessions(ctx, target, func(id string) string {
+		return base64.RawURLEncoding.EncodeToString([]byte(id)) + ".db"
+	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("HydrateSessions: %v", err)
 	}
-	if len(report.PulledSession) != 1 || report.PulledSession[0] != "session-one" {
-		t.Fatalf("pulled sessions = %v", report.PulledSession)
+	if len(report.PulledSession) != 1 || report.PulledSession[0] != "work-1" {
+		t.Fatalf("pulled = %v, want work-1", report.PulledSession)
 	}
-	got, err := os.ReadFile(filepath.Join(fresh, "sessions", encode("session-one")))
+	raw, err := os.ReadFile(filepath.Join(target, base64.RawURLEncoding.EncodeToString([]byte("work-1"))+".db"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("read restored db: %v", err)
 	}
-	if string(got) != string(dbBytes) {
-		t.Fatalf("restored bytes = %q", got)
+	if string(raw) != "SQLite format 3\x00off" {
+		t.Fatalf("restored db = %q", raw)
 	}
 }
 
 func TestOversizedValueIsSkippedNotTruncated(t *testing.T) {
-	worker := newFakeWorker("d1-token")
-	server := httptest.NewServer(worker.handler())
-	defer server.Close()
-
-	tokens := NewMemoryToken()
-	tokens.Adopt("d1-token")
-	client := NewClient(server.URL, tokens.Get)
-
-	stateRoot := t.TempDir()
-	files := DefaultConfigFiles(stateRoot)
-	if err := os.MkdirAll(filepath.Join(stateRoot, "config"), 0o700); err != nil {
+	fake := newFakeCloudflare("cf-token")
+	client, _ := testClient(t, fake)
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	huge := make([]byte, maxValueBytes+10)
-	for i := range huge {
-		huge[i] = 'x'
+	big := make([]byte, maxValueBytes+1)
+	for i := range big {
+		big[i] = 'a'
 	}
-	if err := os.WriteFile(files[0].Path, huge, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config", "provider.json"), big, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	report, err := client.PushConfig(context.Background(), files)
+	report, err := client.PushConfig(context.Background(), DefaultConfigFiles(dir))
 	if err != nil {
-		t.Fatalf("an oversized file must not fail the whole pass: %v", err)
+		t.Fatalf("PushConfig: %v", err)
 	}
 	if len(report.SkippedOversize) != 1 {
-		t.Fatalf("skipped = %v, want the oversized key", report.SkippedOversize)
+		t.Fatalf("skipped = %v, want the oversize file reported", report.SkippedOversize)
 	}
-	if len(report.PushedConfig) != 0 {
-		t.Fatalf("pushed = %v, want none", report.PushedConfig)
-	}
-
-	// Direct Put refuses instead of letting the Worker reject it mid-turn.
-	if err := client.Put(context.Background(), "config:provider", string(huge)); err == nil {
-		t.Fatal("expected Put to refuse an oversized value")
+	if len(fake.state) != 0 {
+		t.Fatalf("state = %v, want nothing written", fake.state)
 	}
 }
 
-// base64Name mirrors sdk.SessionDBPath so the test asserts the real naming.
-func base64Name(id string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(id)) + ".db"
+func TestAppendTurnKeepsFIFOOrderAndNamesTheChat(t *testing.T) {
+	fake := newFakeCloudflare("cf-token")
+	client, _ := testClient(t, fake)
+	ctx := context.Background()
+
+	if err := client.AppendTurn(ctx, "work-9", "user", "user", "", "สวัสดี daemon"); err != nil {
+		t.Fatalf("AppendTurn user: %v", err)
+	}
+	if err := client.AppendTurn(ctx, "work-9", "model", "main", "job-1", "ตอบแล้ว"); err != nil {
+		t.Fatalf("AppendTurn model: %v", err)
+	}
+	turns, err := client.Turns(ctx, "work-9", 0, 50)
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	if len(turns) != 2 {
+		t.Fatalf("turns = %d, want 2", len(turns))
+	}
+	if turns[0].Role != "user" || turns[1].Role != "model" {
+		t.Fatalf("order = %+v, want user then model", turns)
+	}
+	if turns[0].Seq >= turns[1].Seq {
+		t.Fatalf("seq = %d,%d, want ascending", turns[0].Seq, turns[1].Seq)
+	}
+	session, found, err := client.GetSession(ctx, "work-9")
+	if err != nil || !found {
+		t.Fatalf("GetSession: found=%v err=%v", found, err)
+	}
+	if session.Title != "สวัสดี daemon" {
+		t.Fatalf("title = %q, want the first user message", session.Title)
+	}
+}
+
+func TestRenameAndDeleteSession(t *testing.T) {
+	fake := newFakeCloudflare("cf-token")
+	client, _ := testClient(t, fake)
+	ctx := context.Background()
+	if _, err := client.CreateSession(ctx, "work-2", "เดิม", ""); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	row, found, err := client.RenameSession(ctx, "work-2", "ใหม่")
+	if err != nil || !found {
+		t.Fatalf("RenameSession: found=%v err=%v", found, err)
+	}
+	if row.Title != "ใหม่" {
+		t.Fatalf("title = %q, want ใหม่", row.Title)
+	}
+	if err := client.AppendTurn(ctx, "work-2", "user", "user", "", "หัวข้อเดิม"); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := client.DeleteSession(ctx, "work-2")
+	if err != nil || !removed {
+		t.Fatalf("DeleteSession: removed=%v err=%v", removed, err)
+	}
+	if _, found, _ := client.GetSession(ctx, "work-2"); found {
+		t.Fatal("session survived the delete")
+	}
+	turns, err := client.Turns(ctx, "work-2", 0, 50)
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	if len(turns) != 0 {
+		t.Fatalf("turns = %d, want them gone with the chat", len(turns))
+	}
+}
+
+func TestHeartbeatWritesTheNodeRow(t *testing.T) {
+	fake := newFakeCloudflare("cf-token")
+	client, _ := testClient(t, fake)
+	ctx := context.Background()
+	url := "https://quiet-fog-lands.trycloudflare.com"
+	if err := client.Heartbeat(ctx, url, "one-url"); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	node, found, err := client.Node(ctx)
+	if err != nil || !found {
+		t.Fatalf("Node: found=%v err=%v", found, err)
+	}
+	if node.TunnelURL != url || node.Version != "one-url" {
+		t.Fatalf("node = %+v, want %s", node, url)
+	}
+}
+
+func TestListOnlyReturnsKeysUnderThePrefix(t *testing.T) {
+	fake := newFakeCloudflare("cf-token")
+	client, _ := testClient(t, fake)
+	ctx := context.Background()
+	for key, value := range map[string]string{
+		"config:provider":   "{}",
+		"sessions/work-1":   "blob-1",
+		"sessions/work-10":  "blob-10",
+		"sessions/other-id": "blob-2",
+	} {
+		if err := client.Put(ctx, key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keys, err := client.List(ctx, SessionKeyPrefix)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(keys) != 3 {
+		t.Fatalf("keys = %v, want the three session blobs", keys)
+	}
+	for _, key := range keys {
+		if key[:len(SessionKeyPrefix)] != SessionKeyPrefix {
+			t.Fatalf("key %q escaped the prefix", key)
+		}
+	}
+}
+
+func TestSetDatabaseNamePicksTheNamedDatabase(t *testing.T) {
+	fake := newFakeCloudflare("cf-token")
+	fake.databases = append(fake.databases, map[string]string{"uuid": "db-2", "name": "other"})
+	client, _ := testClient(t, fake)
+	client.SetDatabaseName("other")
+	if err := client.VerifyToken(context.Background(), "cf-token"); err != nil {
+		t.Fatalf("VerifyToken: %v", err)
+	}
+	target, _ := client.ResolvedTarget()
+	if target.DatabaseID != "db-2" {
+		t.Fatalf("database = %q, want db-2 (the configured name)", target.DatabaseID)
+	}
+}
+
+func TestQueriesCarryTheBoundParameters(t *testing.T) {
+	fake := newFakeCloudflare("cf-token")
+	client, _ := testClient(t, fake)
+	if err := client.Put(context.Background(), "config:system", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	q, ok := fake.sqlContaining("INSERT INTO state(key, value")
+	if !ok {
+		t.Fatal("no INSERT INTO state was sent")
+	}
+	if len(q.params) != 2 || q.params[0] != "config:system" || q.params[1] != "{}" {
+		t.Fatalf("params = %v, want the key and value bound", q.params)
+	}
+	if q.path != "/accounts/acct-1/d1/database/db-1/query" {
+		t.Fatalf("path = %q, want the resolved account and database", q.path)
+	}
 }

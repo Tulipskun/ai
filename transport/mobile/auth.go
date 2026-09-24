@@ -167,6 +167,10 @@ func logRejected(key, token string, fails int, reason string) {
 		key, hex.EncodeToString(sum[:4]), fails, reason)
 }
 
+// CachedTokens is the RAM copy the gate trusts, so the REST surface can adopt a
+// token it just verified through the very same path the socket uses.
+func (g *Gate) CachedTokens() TokenCache { return g.cfg.Cache }
+
 // Write renders a rejection with Retry-After. The body never echoes the token.
 func (g *Gate) Write(w http.ResponseWriter, d Decision) {
 	if d.RetryAfter > 0 {

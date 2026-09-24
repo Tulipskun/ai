@@ -46,7 +46,7 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 | Outbound file-send intents (worker → transport) | `sdk/outbound_attachments.go` |
 | Runtime config + session manager | `runtime/session_manager.go`, `runtime/*.go` |
 | Stateless runtime state ↔ Cloudflare D1 | `runtime/d1store/client.go`, `runtime/d1store/sync.go` |
-| Mobile gateway (AIxodia, the only transport) + auth gate | `transport/mobile/gateway.go`, `transport/mobile/auth.go`, `transport/mobile/tunnel.go`, `transport/mobile/proxy.go`, `cmd/ai/mobile.go` |
+| Mobile gateway (AIxodia, the only transport) + auth gate | `transport/mobile/gateway.go`, `transport/mobile/auth.go`, `transport/mobile/tunnel.go`, `transport/mobile/history.go` (ประวัติแชทจาก D1 ผ่าน tunnel), `cmd/ai/mobile.go` |
 
 ## Key files (what each owns)
 

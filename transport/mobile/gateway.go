@@ -91,8 +91,8 @@ type Config struct {
 	MirrorInput  func(sdk.Input) func(context.Context) error
 	Verifier     Verifier
 	Hydrate      Hydrator
-	AnnounceURL  string // Worker base URL; when set, the tunnel URL is announced
-	WorkerBase   string // Worker base URL for the /api proxy, so the phone needs one address
+	History      HistoryStore                        // serves the phone's history from D1
+	Announce     func(context.Context, string) error // publishes the tunnel URL (D1 `nodes`)
 	InputBuffer  int
 }
 
@@ -103,6 +103,15 @@ const defaultInputBuffer = 64
 type subscriber interface {
 	WriteMessage(int, []byte) error
 	Close() error
+}
+
+// Version reports the label this build announces with, so the daemon can write
+// it into the D1 `nodes` row without duplicating the config.
+func (t *Transport) Version() string {
+	if t == nil {
+		return ""
+	}
+	return t.cfg.Version
 }
 
 // Transport is both the input source and the display for the mobile client.
@@ -483,11 +492,11 @@ func (t *Transport) StartHTTP(ctx context.Context, listen string) (func(), error
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", t.serveWS)
-	if t.cfg.WorkerBase != "" {
-		// One address for the phone: history comes through the tunnel and the
-		// daemon forwards it with the token it already holds, so the app only
-		// ever needs the tunnel URL plus the D1 token (REQ-046(3)).
-		mux.Handle("/api/", NewHistoryProxy(t.cfg.WorkerBase, t.cfg.Tokens))
+	if t.cfg.History != nil {
+		// One address for the phone: history comes through the tunnel and is
+		// answered from D1 with the token the daemon already holds, so the app
+		// only ever needs the tunnel URL plus its Cloudflare token (REQ-046(3)).
+		mux.Handle("/api/", NewHistoryHandler(t.cfg.History, t.gate))
 	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
@@ -521,15 +530,14 @@ func (t *Transport) StartHTTP(ctx context.Context, listen string) (func(), error
 }
 
 func (t *Transport) announceLoop(ctx context.Context, publicURL string) {
-	if t.cfg.AnnounceURL == "" || t.cfg.Tokens == nil {
+	if t.cfg.Announce == nil || t.cfg.Tokens == nil {
 		return
 	}
 	announce := func() {
-		token := t.cfg.Tokens.Get()
-		if token == "" {
+		if t.cfg.Tokens.Get() == "" {
 			return // no phone connected yet: nothing to authenticate with
 		}
-		if err := AnnounceTunnel(ctx, t.cfg.AnnounceURL, token, publicURL, t.cfg.Version); err != nil {
+		if err := t.cfg.Announce(ctx, publicURL); err != nil {
 			log.Printf("mobile: announce tunnel: %v", err)
 		}
 	}

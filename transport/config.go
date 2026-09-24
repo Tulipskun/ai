@@ -8,19 +8,21 @@ import (
 	"path/filepath"
 )
 
-// MobileConfig points the daemon at the AIxodia Worker and the local listener a
-// Cloudflare quick tunnel publishes (REQ-046, REQ-047). It carries no
-// credential: the D1 token arrives in the phone's Authorization header and is
-// held in memory only (CON-012).
+// MobileConfig points the daemon at the local listener a Cloudflare quick tunnel
+// publishes (REQ-046, REQ-047). It carries no credential: the Cloudflare token
+// arrives in the phone's Authorization header, is held in memory only, and is
+// used straight against Cloudflare's API — the account and database are
+// discovered from that token, so no ids are configured here (CON-012).
 type MobileConfig struct {
-	Enabled      bool   `json:"enabled"`
-	WorkerBase   string `json:"worker_base"`
-	Listen       string `json:"listen"`
-	PublicListen string `json:"public_listen"`
-	Tunnel       bool   `json:"tunnel"`
-	Cloudflared  string `json:"cloudflared"`
-	SyncConfig   bool   `json:"sync_config"`
-	SyncSessions bool   `json:"sync_sessions"`
+	Enabled       bool   `json:"enabled"`
+	CloudflareAPI string `json:"cloudflare_api,omitempty"`
+	D1Database    string `json:"d1_database,omitempty"`
+	Listen        string `json:"listen"`
+	PublicListen  string `json:"public_listen"`
+	Tunnel        bool   `json:"tunnel"`
+	Cloudflared   string `json:"cloudflared"`
+	SyncConfig    bool   `json:"sync_config"`
+	SyncSessions  bool   `json:"sync_sessions"`
 }
 
 // Config is the whole entry config: one gateway, mobile over tunnel. The
@@ -45,9 +47,6 @@ func LoadConfig(path string) (Config, error) {
 	var config Config
 	if err := json.Unmarshal(data, &config); err != nil {
 		return Config{}, fmt.Errorf("transport: decode entry config %q: %w", path, err)
-	}
-	if config.Mobile.Enabled && config.Mobile.WorkerBase == "" {
-		return Config{}, errors.New("transport: mobile worker_base is required when mobile is enabled")
 	}
 	return config, nil
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -32,21 +33,23 @@ type mobileRuntime struct {
 }
 
 type runtimeMobileConfig struct {
-	workerBase   string
-	listen       string
-	publicListen string
-	tunnel       bool
-	cloudflared  string
-	syncConfig   bool
-	syncSessions bool
+	cloudflareAPI string
+	d1Database    string
+	listen        string
+	publicListen  string
+	tunnel        bool
+	cloudflared   string
+	syncConfig    bool
+	syncSessions  bool
 }
 
 func newMobileRuntime(stateRoot, sessionDir string, cfg runtimeMobileConfig, reloadProviders func(context.Context) error) (*mobileRuntime, error) {
-	if strings.TrimSpace(cfg.workerBase) == "" {
+	if strings.TrimSpace(cfg.cloudflareAPI) == "" {
 		return nil, nil
 	}
 	tokens := d1store.NewMemoryToken()
-	client := d1store.NewClient(cfg.workerBase, tokens.Get)
+	client := d1store.NewClient(cfg.cloudflareAPI, tokens.Get)
+	client.SetDatabaseName(cfg.d1Database)
 	rt := &mobileRuntime{
 		client:          client,
 		tokens:          tokens,
@@ -62,12 +65,78 @@ func newMobileRuntime(stateRoot, sessionDir string, cfg runtimeMobileConfig, rel
 		Tunnel:       cfg.tunnel,
 		Cloudflared:  cfg.cloudflared,
 		Tokens:       tokens,
-		WorkerBase:   cfg.workerBase,
 		Verifier:     d1storeVerifier{client: client},
 		Hydrate:      rt,
-		AnnounceURL:  cfg.workerBase,
+		History:      historyStore{client: client},
+		Announce: func(ctx context.Context, publicURL string) error {
+			if target, ok := client.ResolvedTarget(); ok {
+				log.Printf("mobile: announcing tunnel to D1 account=%s database=%s", target.AccountID, target.Name)
+			}
+			return client.Heartbeat(ctx, publicURL, rt.transport.Version())
+		},
 	})
 	return rt, nil
+}
+
+// historyStore narrows the D1 client to what the phone's history endpoints
+// need, so the transport never sees the raw state table.
+type historyStore struct{ client *d1store.Client }
+
+func (h historyStore) ListSessions(ctx context.Context, limit int) ([]mobiletransport.SessionRow, error) {
+	rows, err := h.client.ListSessions(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]mobiletransport.SessionRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, mobiletransport.SessionRow{
+			ID: row.ID, Title: row.Title, Provider: row.Provider, Model: row.Model,
+			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		})
+	}
+	return out, nil
+}
+
+func (h historyStore) CreateSession(ctx context.Context, id, title, model string) (mobiletransport.SessionRow, error) {
+	row, err := h.client.CreateSession(ctx, id, title, model)
+	if err != nil {
+		return mobiletransport.SessionRow{}, err
+	}
+	return mobiletransport.SessionRow{ID: row.ID, Title: row.Title, Provider: row.Provider, Model: row.Model,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}, nil
+}
+
+func (h historyStore) RenameSession(ctx context.Context, id, title string) (mobiletransport.SessionRow, bool, error) {
+	row, found, err := h.client.RenameSession(ctx, id, title)
+	return mobiletransport.SessionRow{ID: row.ID, Title: row.Title}, found, err
+}
+
+func (h historyStore) DeleteSession(ctx context.Context, id string) (bool, error) {
+	return h.client.DeleteSession(ctx, id)
+}
+
+func (h historyStore) Turns(ctx context.Context, sessionID string, beforeSeq int64, limit int) ([]mobiletransport.TurnRow, error) {
+	rows, err := h.client.Turns(ctx, sessionID, beforeSeq, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]mobiletransport.TurnRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, mobiletransport.TurnRow{
+			Seq: row.Seq, Role: row.Role, Agent: row.Agent, JobID: row.JobID,
+			Text: row.Text, CreatedAt: row.CreatedAt,
+		})
+	}
+	return out, nil
+}
+
+func (h historyStore) AppendTurn(ctx context.Context, sessionID, role, agent, jobID, text string) (int64, error) {
+	return h.client.AppendTurnAt(ctx, sessionID, role, agent, jobID, text)
+}
+
+func (h historyStore) Node(ctx context.Context) (mobiletransport.NodeRow, bool, error) {
+	node, found, err := h.client.Node(ctx)
+	return mobiletransport.NodeRow{TunnelURL: node.TunnelURL, Version: node.Version, Heartbeat: node.Heartbeat}, found, err
 }
 
 // d1storeVerifier adapts the D1 client to the transport's Verifier contract:
@@ -80,7 +149,7 @@ func (v d1storeVerifier) VerifyToken(ctx context.Context, token string) error {
 	switch {
 	case err == nil:
 		return nil
-	case strings.Contains(err.Error(), d1store.ErrTokenRejected.Error()):
+	case errors.Is(err, d1store.ErrTokenRejected):
 		return mobiletransport.ErrTokenRejected
 	default:
 		return err

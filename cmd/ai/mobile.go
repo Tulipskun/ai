@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -24,33 +25,47 @@ type mobileRuntime struct {
 	stateRoot  string
 	sessionDir string
 	cfg        runtimeMobileConfig
+	// reloadProviders runs after config is materialized from D1. The runtime
+	// loaded providers at boot, before any phone connected, so without this
+	// the daemon would know zero providers for its whole lifetime (REQ-046(4)).
+	reloadProviders func(context.Context) error
 }
 
 type runtimeMobileConfig struct {
 	workerBase   string
+	listen       string
+	publicListen string
+	tunnel       bool
+	cloudflared  string
 	syncConfig   bool
 	syncSessions bool
 }
 
-func newMobileRuntime(stateRoot, sessionDir string, cfg runtimeMobileConfig) (*mobileRuntime, error) {
+func newMobileRuntime(stateRoot, sessionDir string, cfg runtimeMobileConfig, reloadProviders func(context.Context) error) (*mobileRuntime, error) {
 	if strings.TrimSpace(cfg.workerBase) == "" {
 		return nil, nil
 	}
 	tokens := d1store.NewMemoryToken()
 	client := d1store.NewClient(cfg.workerBase, tokens.Get)
 	rt := &mobileRuntime{
-		client:     client,
-		tokens:     tokens,
-		stateRoot:  stateRoot,
-		sessionDir: sessionDir,
-		cfg:        cfg,
+		client:          client,
+		tokens:          tokens,
+		stateRoot:       stateRoot,
+		sessionDir:      sessionDir,
+		cfg:             cfg,
+		reloadProviders: reloadProviders,
 	}
 	rt.transport = mobiletransport.New(mobiletransport.Config{
-		Tokens:      tokens,
-		WorkerBase:  cfg.workerBase,
-		Verifier:    d1storeVerifier{client: client},
-		Hydrate:     rt,
-		AnnounceURL: cfg.workerBase,
+		MirrorInput:  rt.mirrorUserTurn,
+		Listen:       cfg.listen,
+		PublicListen: cfg.publicListen,
+		Tunnel:       cfg.tunnel,
+		Cloudflared:  cfg.cloudflared,
+		Tokens:       tokens,
+		WorkerBase:   cfg.workerBase,
+		Verifier:     d1storeVerifier{client: client},
+		Hydrate:      rt,
+		AnnounceURL:  cfg.workerBase,
 	})
 	return rt, nil
 }
@@ -86,6 +101,11 @@ func (m *mobileRuntime) Hydrate(ctx context.Context) error {
 		}
 		if len(report.PulledConfig) > 0 {
 			log.Printf("mobile: hydrated config from D1: %s", strings.Join(report.PulledConfig, ", "))
+		}
+		if m.reloadProviders != nil {
+			if err := m.reloadProviders(ctx); err != nil {
+				return fmt.Errorf("reload providers after hydrate: %w", err)
+			}
 		}
 	}
 	if m.cfg.syncSessions {
@@ -139,22 +159,38 @@ func (m *mobileRuntime) PublishOutput(ctx context.Context, output sdk.Output) {
 	if err := m.transport.Display(ctx, output); err != nil {
 		log.Printf("mobile: display source=%s session=%s: %v", output.Source, output.SessionID, err)
 	}
-	if output.SessionID == "" || len(output.Content) == 0 {
+	if output.Trace != nil && strings.EqualFold(output.Metadata["trace_actor"], "subagent") {
 		return
 	}
-	agent := "main"
+	text := mobiletransport.FinalText(output)
+	if output.SessionID == "" || text == "" {
+		return
+	}
 	jobID := output.Metadata["mobile_job_id"]
-	if err := m.client.AppendTurn(ctx, output.SessionID, "model", agent, jobID, outputText(output)); err != nil {
+	if err := m.client.AppendTurn(ctx, output.SessionID, "model", "main", jobID, text); err != nil {
 		log.Printf("mobile: mirror turn to D1 session=%s: %v", output.SessionID, err)
 	}
 }
 
-func outputText(output sdk.Output) string {
+func (m *mobileRuntime) mirrorUserTurn(input sdk.Input) func(context.Context) error {
+	if m == nil || m.client == nil || input.SessionID == "" {
+		return nil
+	}
+	text := inputText(input)
+	if text == "" {
+		return nil
+	}
+	return func(ctx context.Context) error {
+		return m.client.AppendTurn(ctx, input.SessionID, "user", "user", "", text)
+	}
+}
+
+func inputText(input sdk.Input) string {
 	var b strings.Builder
-	for _, part := range output.Content {
+	for _, part := range input.Turn.Content {
 		b.WriteString(part.Text)
 	}
-	return b.String()
+	return strings.TrimSpace(b.String())
 }
 
 // sessionDBName mirrors sdk.SessionDBPath naming for the sync layer.

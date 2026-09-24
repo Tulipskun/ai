@@ -88,6 +88,7 @@ type Config struct {
 	Cloudflared  string
 	Version      string
 	Tokens       TokenStore
+	MirrorInput  func(sdk.Input) func(context.Context) error
 	Verifier     Verifier
 	Hydrate      Hydrator
 	AnnounceURL  string // Worker base URL; when set, the tunnel URL is announced
@@ -97,6 +98,13 @@ type Config struct {
 
 const defaultInputBuffer = 64
 
+// subscriber is the write side a live phone connection exposes, narrowed so
+// tests can observe the frames the gateway emits.
+type subscriber interface {
+	WriteMessage(int, []byte) error
+	Close() error
+}
+
 // Transport is both the input source and the display for the mobile client.
 type Transport struct {
 	cfg      Config
@@ -104,7 +112,7 @@ type Transport struct {
 	gate     *Gate
 
 	mu   sync.Mutex
-	subs map[string]map[*websocket.Conn]struct{}
+	subs map[string]map[subscriber]struct{}
 	seq  int64
 
 	inputs chan sdk.Input
@@ -123,7 +131,7 @@ func New(cfg Config) *Transport {
 	t := &Transport{
 		cfg:    cfg,
 		gate:   NewGate(GateConfig{Verify: cfg.Verifier}),
-		subs:   map[string]map[*websocket.Conn]struct{}{},
+		subs:   map[string]map[subscriber]struct{}{},
 		inputs: make(chan sdk.Input, cfg.InputBuffer),
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
@@ -144,10 +152,15 @@ func (t *Transport) Receive(ctx context.Context) (<-chan sdk.Input, error) {
 }
 
 // Display implements sdk.Display: one canonical sdk.Output becomes frames for
-// every phone watching that session.
+// every phone watching that session. A traced turn arrives as a trace stream
+// (sdk.HarnessLoop skips its final output once a trace ran), so the answer is
+// read from TraceResponseContent and TraceResponse closes the turn.
 func (t *Transport) Display(ctx context.Context, output sdk.Output) error {
 	if output.Source != "" && output.Source != SourceName {
 		return nil
+	}
+	if output.Trace != nil {
+		return t.displayTrace(output)
 	}
 	text := textOf(output)
 	if text == "" {
@@ -156,7 +169,7 @@ func (t *Transport) Display(ctx context.Context, output sdk.Output) error {
 	frame := Outbound{
 		Kind:         FrameMessage,
 		SessionID:    output.SessionID,
-		Role:         roleFor(output),
+		Role:         "model",
 		Agent:        agentFor(output),
 		JobID:        output.Metadata[jobMetadataKey],
 		Text:         text,
@@ -165,10 +178,88 @@ func (t *Transport) Display(ctx context.Context, output sdk.Output) error {
 		OutputTokens: output.Response.Usage.OutputTokens,
 	}
 	t.broadcast(output.SessionID, frame)
-	if frame.Role == "model" {
-		t.broadcast(output.SessionID, Outbound{Kind: FrameDone, SessionID: output.SessionID, JobID: frame.JobID})
-	}
+	t.broadcast(output.SessionID, Outbound{Kind: FrameDone, SessionID: output.SessionID, JobID: frame.JobID})
 	return nil
+}
+
+func (t *Transport) displayTrace(output sdk.Output) error {
+	trace := *output.Trace
+	agent := traceAgent(output)
+	jobID := output.Metadata[jobMetadataKey]
+	if sub := strings.TrimSpace(output.Metadata["trace_job_id"]); sub != "" {
+		jobID = sub
+	}
+	switch trace.Stage {
+	case sdk.TraceResponseText:
+		return nil
+	case sdk.TraceResponseContent:
+		text := strings.TrimSpace(trace.Text)
+		if text == "" && trace.Response != nil {
+			text = textOfParts(toContent(trace.Response.Content))
+		}
+		if text == "" {
+			return nil
+		}
+		var in, out int
+		if trace.Response != nil {
+			in, out = trace.Response.Usage.InputTokens, trace.Response.Usage.OutputTokens
+		}
+		t.broadcast(output.SessionID, Outbound{
+			Kind:         FrameMessage,
+			SessionID:    output.SessionID,
+			Role:         "model",
+			Agent:        agent,
+			JobID:        jobID,
+			Text:         text,
+			Content:      []ContentPart{{Type: "text", Text: text}},
+			InputTokens:  in,
+			OutputTokens: out,
+		})
+		return nil
+	case sdk.TraceResponse:
+		t.broadcast(output.SessionID, Outbound{Kind: FrameDone, SessionID: output.SessionID, JobID: jobID})
+		return nil
+	default:
+		text := strings.TrimSpace(sdk.TraceMessage(trace))
+		if text == "" {
+			return nil
+		}
+		t.broadcast(output.SessionID, Outbound{
+			Kind:      FrameTrace,
+			SessionID: output.SessionID,
+			Role:      "system",
+			Agent:     agent,
+			JobID:     jobID,
+			Stage:     string(trace.Stage),
+			Text:      text,
+		})
+		return nil
+	}
+}
+
+func traceAgent(output sdk.Output) string {
+	if strings.EqualFold(strings.TrimSpace(output.Metadata["trace_actor"]), "subagent") {
+		return "sub"
+	}
+	return "main"
+}
+
+// FinalText is the answer text a phone should keep for this output, whichever
+// shape the harness delivered it in: a traced turn carries it on the trace.
+func FinalText(output sdk.Output) string {
+	if output.Trace != nil {
+		if output.Trace.Stage == sdk.TraceResponseContent {
+			if text := strings.TrimSpace(output.Trace.Text); text != "" {
+				return text
+			}
+			if output.Trace.Response != nil {
+				return strings.TrimSpace(textOfParts(toContent(output.Trace.Response.Content)))
+			}
+			return ""
+		}
+		return ""
+	}
+	return textOf(output)
 }
 
 const (
@@ -289,18 +380,29 @@ func (t *Transport) serveWS(w http.ResponseWriter, r *http.Request) {
 		}
 		select {
 		case t.inputs <- input:
+			if t.cfg.MirrorInput != nil {
+				if mirror := t.cfg.MirrorInput(input); mirror != nil {
+					go func() {
+						mirrorCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 45*time.Second)
+						defer cancel()
+						if err := mirror(mirrorCtx); err != nil {
+							log.Printf("mobile: mirror user turn to D1: %v", err)
+						}
+					}()
+				}
+			}
 		default:
 			t.send(conn, Outbound{Kind: FrameError, SessionID: sessionID, Text: "busy: input queue full"})
 		}
 	}
 }
 
-func (t *Transport) subscribe(sessionID string, conn *websocket.Conn) {
+func (t *Transport) subscribe(sessionID string, conn subscriber) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	set := t.subs[sessionID]
 	if set == nil {
-		set = map[*websocket.Conn]struct{}{}
+		set = map[subscriber]struct{}{}
 		t.subs[sessionID] = set
 	}
 	set[conn] = struct{}{}
@@ -315,7 +417,7 @@ func (t *Transport) broadcast(sessionID string, frame Outbound) {
 		return
 	}
 	t.mu.Lock()
-	conns := make([]*websocket.Conn, 0, len(t.subs[sessionID]))
+	conns := make([]subscriber, 0, len(t.subs[sessionID]))
 	for c := range t.subs[sessionID] {
 		conns = append(conns, c)
 	}
@@ -364,21 +466,11 @@ func textOfParts(parts []ContentPart) string {
 	return b.String()
 }
 
-func roleFor(output sdk.Output) string {
-	if len(output.Content) > 0 && output.Content[0].Type != "" {
-		return "model"
-	}
-	return "model"
-}
-
 // agentFor prefers explicit transport metadata (set by the display adapter)
 // and falls back to "main" for model output.
 func agentFor(output sdk.Output) string {
-	if agent := output.Metadata[agentMetadataKey]; agent != "" {
+	if agent := strings.TrimSpace(output.Metadata[agentMetadataKey]); agent != "" {
 		return agent
-	}
-	if output.Trace != nil {
-		return "main"
 	}
 	return "main"
 }

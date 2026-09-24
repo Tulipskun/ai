@@ -784,3 +784,16 @@ Reason: ผู้ใช้ต้องการ single-purpose daemon ที่ 
 Impact: transport/discord/ (ลบ 26 ไฟล์), transport/cli/ (ลบ 11 ไฟล์), cmd/ai/{cli,command,update*,uninstall}.go (ลบ), cmd/ai/main.go (dispatch + wiring เหลือ daemon+tunnel), cmd/ai/attachments.go (Discord attachment wiring ถูกถอด; filestore/tools ยังอยู่), transport/config.go (Config = Mobile), .github/workflows/release.yml (build/test only), scripts/{install.sh,dc-keepalive.sh} (ถูกถอด), index.md, README.md, INSTALL.md, docs/, workflow.md, AGENTS.md (start-here routes), requirements/{functional,constraints,decisions}.md
 Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 3m`, `git diff --check`; ยืนยันว่า `grep -ri discord` ไม่เหลือในโค้ด/เอกสาร และ `ai` รันแล้วตอบผ่าน tunnel ได้จริง
 Status: accepted
+
+CHANGE-060
+
+Date: 2026-09-24
+Type: fix
+Request: "เปิด daemon แล้วเอา url ให้หน่อย ฉันจะลองทดสอบ" — ต้องได้ tunnel ที่ตอบได้จริง
+Conflict: REQ-046(4) (config ต้องถูก hydrate ก่อน turn แรก), REQ-046(5) (turn ต้องถูกเขียนกลับ D1 เรียงลำดับ), CON-012 (local materialization ต้องคงรูปเดิม)
+Previous: runtime โหลด provider ตอนบูตจาก `config/provider.json` ที่อาจยังว่าง แล้วไม่มีการ reload หลัง hydrate; `Transport.Display` อ่านข้อความจาก `output.Content` อย่างเดียว แต่ `sdk.HarnessLoop` (sdk/loop.go) ข้าม final output เมื่อ turn ถูก trace แล้วส่งคำตอบผ่าน `TraceResponseContent`/`TraceResponse` — โทรศัพท์จึงไม่เห็นคำตอบแม้ daemon ทำงานถูก; `config/entry.json` ถูกดึง/เขียนกลับผ่าน D1 ทั้งที่เป็น bootstrap ของ gateway เอง
+New: หลัง hydrate สำเร็จ daemon เรียก `ProviderManager.Reload` (provider adapters/router สร้างใหม่จาก config ที่เพิ่งถูกดึง); `transport/mobile` แปลง trace stream เป็น frame (`TraceResponseContent` → `message`, `TraceResponse` → `done`, stage อื่น → `trace` status, subagent ได้ `agent=sub`) และ `FinalText` เป็นตัวหา text เดียวกับที่โทรศัพท์เห็น; user turn ที่รับเข้าถูก mirror เป็น role `user` ใน D1 (model turn ที่ trace แล้วถูก mirror เป็น role `model`); `DefaultConfigFiles` ตัด `config:entry` ออกจากรายการ sync เพราะ gateway ต้องอ่านไฟล์นี้ก่อนถึง D1 ได้
+Reason: การรันจริงเผยว่าบั๊กทั้งสามอยู่บนเส้นทางเดียวกัน (token → hydrate → provider → frame) และทำให้ daemon "ขึ้น" แต่ใช้งานไม่ได้จริง ทั้งหมดเป็นพฤติกรรมที่ REQ-046 กำหนดไว้อยู่แล้ว จึงเป็นการแก้ให้ตรงสเปก ไม่ใช่การเปลี่ยนสเปก
+Impact: transport/mobile/gateway.go (Display/displayTrace/FinalText, subscriber interface เพื่อทดสอบ, MirrorInput hook), transport/mobile/display_trace_test.go (ใหม่), runtime/d1store/sync.go (ตัด config:entry), cmd/ai/mobile.go (wire reloadProviders + mirrorUserTurn + mirror จาก trace), cmd/ai/main.go (ส่ง listen/tunnel/cloudflared เข้า transport), index.md, requirements/functional.md, requirements/changes.md
+Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 4m`; e2e จริงผ่าน quick tunnel: 401 เมื่อไม่มี header, trace→message→done พร้อม usage, `turn ok` ใน log, D1 มี user+model turn เรียงลำดับ และ `/api/node` ชี้ tunnel ของ daemon ที่ heartbeat สด
+Status: accepted

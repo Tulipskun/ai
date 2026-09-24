@@ -19,14 +19,18 @@ type ConfigFile struct {
 	Path string // local path, e.g. <state>/config/provider.json
 }
 
-// DefaultConfigFiles lists every config file the daemon syncs. The Worker key
-// charset is [A-Za-z0-9:_-] so the slash lives in the prefix, not the key.
+// DefaultConfigFiles lists every config file the daemon syncs with D1. The
+// Worker key charset is [A-Za-z0-9:_-], so the slash lives in the prefix.
+//
+// config/entry.json is deliberately NOT here: it is the gateway bootstrap (where
+// the tunnel points, whether the tunnel runs at all), so it must exist locally
+// before D1 is reachable. Syncing it would let a stale cloud copy disable the
+// gateway that is supposed to fetch the cloud copy (CHANGE-059/CON-012).
 func DefaultConfigFiles(stateRoot string) []ConfigFile {
 	join := func(name string) string { return filepath.Join(stateRoot, "config", name) }
 	return []ConfigFile{
 		{Key: "config:provider", Path: join("provider.json")},
 		{Key: "config:system", Path: join("system.json")},
-		{Key: "config:entry", Path: join("entry.json")},
 		{Key: "config:attachment", Path: join("attachment.json")},
 		{Key: "config:browser", Path: join("browser.json")},
 	}

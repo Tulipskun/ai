@@ -86,6 +86,10 @@ func run(ctx context.Context) error {
 		return err
 	}
 	providerConfigPath := filepath.Join(state, runtime.DefaultProviderConfigPath)
+	providerFile, err := runtime.LoadProviderFile(providerConfigPath)
+	if err != nil {
+		return err
+	}
 	rt, err := runtime.Load(providerConfigPath)
 	if err != nil {
 		return err
@@ -102,6 +106,7 @@ func run(ctx context.Context) error {
 	modelID := strings.TrimSpace(os.Getenv("AI_MODEL"))
 	sessions := runtime.NewSessionManagerWithProviders(sessionDB, sdk.SessionConfig{Provider: sdk.ProviderID(providerID), Model: modelID}, rt.ProviderConfigs)
 	defer sessions.Close()
+	providerManager := runtime.NewProviderManager(providerConfigPath, rt, providerFile)
 	browserConfig, err := runtime.LoadBrowserConfig(filepath.Join(state, runtime.DefaultBrowserConfigPath))
 	if err != nil {
 		return err
@@ -159,17 +164,27 @@ func run(ctx context.Context) error {
 	// on the first verified connection.
 	mobileRT, err := newMobileRuntime(state, mobileSessionDir(state), runtimeMobileConfig{
 		workerBase:   transportConfig.Mobile.WorkerBase,
+		listen:       transportConfig.Mobile.Listen,
+		publicListen: transportConfig.Mobile.PublicListen,
+		tunnel:       transportConfig.Mobile.Tunnel,
+		cloudflared:  transportConfig.Mobile.Cloudflared,
 		syncConfig:   transportConfig.Mobile.SyncConfig,
 		syncSessions: transportConfig.Mobile.SyncSessions,
+	}, func(ctx context.Context) error {
+		configs, err := providerManager.Reload(ctx)
+		if err != nil {
+			return err
+		}
+		for _, config := range configs {
+			sessions.RegisterProvider(config.ID, config.Keys)
+		}
+		log.Printf("providers reloaded after D1 hydrate: %d", len(configs))
+		return nil
 	})
 	if err != nil {
 		return err
 	}
-	listen := transportConfig.Mobile.Listen
-	if listen == "" {
-		listen = "127.0.0.1:18789"
-	}
-	stop, err := mobileRT.transport.StartHTTP(ctx, listen)
+	stop, err := mobileRT.transport.StartHTTP(ctx, transportConfig.Mobile.Listen)
 	if err != nil {
 		return err
 	}
@@ -179,8 +194,8 @@ func run(ctx context.Context) error {
 	}
 	sources = append(sources, mobileRT.transport)
 	displays = append(displays, mobileDisplayAdapter{mobile: mobileRT})
-	log.Printf("ai daemon ready: mobile gateway on %s (tunnel=%v worker=%s)", listen,
-		transportConfig.Mobile.Tunnel, transportConfig.Mobile.WorkerBase)
+	log.Printf("ai daemon ready: mobile gateway on %s (tunnel=%v worker=%s)",
+		transportConfig.Mobile.Listen, transportConfig.Mobile.Tunnel, transportConfig.Mobile.WorkerBase)
 	if len(sources) == 0 {
 		return fmt.Errorf("no transports enabled; configure config/entry.json")
 	}

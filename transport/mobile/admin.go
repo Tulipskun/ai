@@ -45,6 +45,7 @@ type AdminStore interface {
 	UpdateKeys(ctx context.Context, id string, change KeyChange) (ProviderStatus, error)
 	RemoveProvider(ctx context.Context, id string) error
 	RefreshProviders(ctx context.Context) ([]ProviderStatus, error)
+	RefreshProvider(ctx context.Context, id string) (ProviderStatus, error)
 	Settings(ctx context.Context) (SettingsView, error)
 	SaveSettings(ctx context.Context, settings SettingsView) (SettingsView, error)
 }
@@ -167,6 +168,15 @@ func adminProviderItem(w http.ResponseWriter, r *http.Request, store AdminStore,
 			return
 		}
 		view, err := store.UpdateKeys(r.Context(), id, change)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
+	case parts[1] == "refresh" && r.Method == http.MethodPost:
+		// Testing one provider must not wait for the others: a phone that is
+		// fixing a dead key needs that answer now.
+		view, err := store.RefreshProvider(r.Context(), id)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return

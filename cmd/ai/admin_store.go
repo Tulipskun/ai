@@ -326,6 +326,45 @@ func (a *adminStore) RefreshProviders(ctx context.Context) ([]mobiletransport.Pr
 	return a.Providers(ctx)
 }
 
+// RefreshProvider re-runs discovery and the one-token probe for a single provider,
+// so the phone does not have to wait for every other provider to answer.
+func (a *adminStore) RefreshProvider(ctx context.Context, id string) (mobiletransport.ProviderStatus, error) {
+	if a.manager == nil {
+		return mobiletransport.ProviderStatus{}, errors.New("runtime: provider manager is not available")
+	}
+	configs, err := a.manager.Reload(ctx)
+	if err != nil {
+		return mobiletransport.ProviderStatus{}, err
+	}
+	var found *sdk.ProviderConfig
+	for i := range configs {
+		if strings.EqualFold(string(configs[i].ID), id) {
+			found = &configs[i]
+			break
+		}
+	}
+	if found == nil {
+		return mobiletransport.ProviderStatus{}, fmt.Errorf("ไม่พบ provider %q", id)
+	}
+	if err := a.manager.RefreshProvider(ctx, found.ID); err != nil {
+		a.setStatus(string(found.ID), discoveryMessage(err))
+	} else if err := a.probe(ctx, *found); err != nil {
+		a.setStatus(string(found.ID), discoveryMessage(err))
+	} else {
+		a.setStatus(string(found.ID), "")
+	}
+	list, err := a.Providers(ctx)
+	if err != nil {
+		return mobiletransport.ProviderStatus{}, err
+	}
+	for _, p := range list {
+		if strings.EqualFold(p.ID, id) {
+			return p, nil
+		}
+	}
+	return mobiletransport.ProviderStatus{ID: id, Probed: true}, nil
+}
+
 // probe asks for the smallest possible answer, so a dead key, an exhausted quota
 // or a provider that only serves its own client shows up now.
 func (a *adminStore) probe(ctx context.Context, config sdk.ProviderConfig) error {

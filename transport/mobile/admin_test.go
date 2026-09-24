@@ -48,6 +48,16 @@ func (f *fakeAdmin) RefreshProviders(context.Context) ([]ProviderStatus, error) 
 	return f.providers, nil
 }
 
+func (f *fakeAdmin) RefreshProvider(_ context.Context, id string) (ProviderStatus, error) {
+	f.refreshes++
+	for _, p := range f.providers {
+		if p.ID == id {
+			return p, nil
+		}
+	}
+	return ProviderStatus{ID: id}, nil
+}
+
 func (f *fakeAdmin) Settings(context.Context) (SettingsView, error) { return f.settings, nil }
 
 func (f *fakeAdmin) SaveSettings(_ context.Context, settings SettingsView) (SettingsView, error) {

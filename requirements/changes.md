@@ -888,3 +888,16 @@ Reason: REQ-048(1) ต้องการให้มือถือเห็น�
 Impact: transport/mobile/admin.go (Probed), cmd/ai/admin_store.go (probed map, forgetStatus, setDiscovery, statusOf), cmd/ai/admin_store_test.go (เทสต์สามสถานะ), requirements/changes.md; ฝั่งแอป AX-088 แสดงสามสถานะและเชื่อผลของ probe ที่เพิ่งกดในหน้านั้น
 Validation: `go build ./...`, `go vet ./...`, `go test ./cmd/ai/... ./transport/mobile/...` ผ่าน; e2e จริงบนมือถือ: ก่อนกดทดสอบขึ้น "ยังไม่ทดสอบ", หลังกดขึ้น "5 provider ใช้ไม่ได้" พร้อมข้อความจริงจาก provider
 Status: accepted
+
+CHANGE-068
+
+Date: 2026-09-25
+Type: add
+Request: "เข้าใจคำว่า UX UI มั้ย?" — ผู้ใช้ต้องการแก้ปัญหาการใช้งานจริง ไม่ใช่ความสวยงามของสี
+Conflict: REQ-048(1) มีแต่ `POST /api/providers/refresh` ที่ยิงทุก provider พร้อมกัน — ผู้ใช้ที่กำลังแก้ key ของ provider เดียวต้องรอ provider อีก 5 ตัว
+Previous: ทดสอบ provider ได้เฉพาะทั้งชุด (`/api/providers/refresh`) และ UI ฝั่งแอปแสดง key เป็นจำนวนล้วน เพราะ key เป็น write-only
+New: `POST /api/providers/{id}/refresh` → `ProviderStatus` ของ provider นั้น (`adminStore.RefreshProvider` ทำ discovery + probe เฉพาะตัว) เพื่อให้มือถือตอบสนองต่อ provider ที่ผู้ใช้กำลังแก้ทันที
+Reason: การรอคิวคือ UX ที่แย่: ปุ่มเดียวที่ผู้ใช้กดคือปุ่มที่กู้ปัญหาที่เขากำลังเจออยู่
+Impact: transport/mobile/admin.go (AdminStore.RefreshProvider + route `/api/providers/{id}/refresh`), transport/mobile/admin_test.go (fake), cmd/ai/admin_store.go (RefreshProvider), requirements/functional.md (REQ-048(8)), requirements/changes.md; ฝั่งแอป AX-089
+Validation: `go build ./...`, `go vet ./...`, `go test ./cmd/ai/... ./transport/mobile/...` ผ่าน
+Status: accepted

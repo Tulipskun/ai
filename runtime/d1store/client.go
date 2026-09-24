@@ -513,6 +513,24 @@ func (c *Client) RenameSession(ctx context.Context, id, title string) (Session, 
 	return session, found, err
 }
 
+// SetSessionRoute remembers which provider and model a chat runs on, so the
+// phone's choice survives a restart and a second device. The chat is created if
+// the daemon sees it before the phone does.
+func (c *Client) SetSessionRoute(ctx context.Context, sessionID, provider, model string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return errors.New("d1store: session id is required")
+	}
+	if _, err := c.query(ctx,
+		"INSERT OR IGNORE INTO sessions(id, title, created_at, updated_at) VALUES(?, ?, unixepoch(), unixepoch())",
+		[]string{sessionID, sessionID}); err != nil {
+		return err
+	}
+	_, err := c.query(ctx,
+		"UPDATE sessions SET provider = ?, model = ?, updated_at = unixepoch() WHERE id = ?",
+		[]string{provider, model, sessionID})
+	return err
+}
+
 // DeleteSession removes a chat with its turns and its D1 session blob.
 func (c *Client) DeleteSession(ctx context.Context, id string) (bool, error) {
 	if _, err := c.query(ctx, "DELETE FROM turns WHERE session_id = ?", []string{id}); err != nil {

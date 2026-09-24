@@ -297,48 +297,143 @@ func (c *Client) Generate(ctx context.Context, req sdk.Request) (sdk.Response, e
 	}
 	return parseChatResponse(chat), nil
 }
+
+// Stream streams an answer. Two dialects are in play: OpenAI's own Responses
+// API and the chat/completions shape every compatible gateway speaks. Which one
+// is tried first is decided by the endpoint — a custom base URL is a gateway, so
+// it gets chat/completions — and the other one is still tried when the first
+// fails before emitting anything, so nothing reaches the caller half-way.
 func (c *Client) Stream(ctx context.Context, req sdk.Request) (<-chan sdk.Event, error) {
 	req.Stream = true
 	ch := make(chan sdk.Event, 16)
 	go func() {
 		defer close(ch)
-		err := internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/responses", c.headers(), build(req), func(data []byte) error {
-			var e struct {
-				Type  string `json:"type"`
-				Delta string `json:"delta"`
-				Item  struct {
-					CallID    string `json:"call_id"`
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				} `json:"item"`
-			}
-			if json.Unmarshal(data, &e) != nil {
-				return nil
-			}
-			switch e.Type {
-			case "ResponsesResponse.output_text.delta":
-				if e.Delta != "" {
-					ch <- sdk.Event{Type: sdk.EventText, Text: e.Delta}
-				}
-			case "ResponsesResponse.reasoning_summary_text.delta":
-				if e.Delta != "" {
-					ch <- sdk.Event{Type: sdk.EventReasoning, Reasoning: &sdk.ReasoningState{Text: e.Delta}}
-				}
-			case "ResponsesResponse.function_call_arguments.done":
-				if e.Item.CallID != "" {
-					ch <- sdk.Event{Type: sdk.EventToolCall, ToolCall: &sdk.ToolCall{ID: e.Item.CallID, Name: e.Item.Name, Arguments: e.Item.Arguments}}
-				}
-			case "ResponsesResponse.completed":
-				ch <- sdk.Event{Type: sdk.EventDone}
-			}
-			return nil
-		})
-		if err != nil {
+		first, second := c.streamResponses, c.streamChat
+		if c.prefersChatCompletions() {
+			first, second = c.streamChat, c.streamResponses
+		}
+		emitted := 0
+		err := first(ctx, req, ch, &emitted)
+		if err == nil {
+			return
+		}
+		if emitted > 0 || ctx.Err() != nil {
 			ch <- sdk.Event{Type: sdk.EventError, Err: err}
+			return
+		}
+		if fallbackErr := second(ctx, req, ch, &emitted); fallbackErr != nil {
+			ch <- sdk.Event{Type: sdk.EventError, Err: fallbackErr}
 		}
 	}()
 	return ch, nil
 }
+
+// prefersChatCompletions reports whether this endpoint is an OpenAI-compatible
+// gateway rather than OpenAI itself, which is the only place the Responses API
+// streaming dialect is the primary one.
+func (c *Client) prefersChatCompletions() bool {
+	return !strings.Contains(c.BaseURL, "api.openai.com")
+}
+
+func (c *Client) streamResponses(ctx context.Context, req sdk.Request, ch chan<- sdk.Event, emitted *int) error {
+	return internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/responses", c.headers(), build(req), func(data []byte) error {
+		var e struct {
+			Type  string `json:"type"`
+			Delta string `json:"delta"`
+			Item  struct {
+				CallID    string `json:"call_id"`
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			} `json:"item"`
+		}
+		if json.Unmarshal(data, &e) != nil {
+			return nil
+		}
+		switch e.Type {
+		case "ResponsesResponse.output_text.delta":
+			if e.Delta != "" {
+				*emitted++
+				ch <- sdk.Event{Type: sdk.EventText, Text: e.Delta}
+			}
+		case "ResponsesResponse.reasoning_summary_text.delta":
+			if e.Delta != "" {
+				*emitted++
+				ch <- sdk.Event{Type: sdk.EventReasoning, Reasoning: &sdk.ReasoningState{Text: e.Delta}}
+			}
+		case "ResponsesResponse.function_call_arguments.done":
+			if e.Item.CallID != "" {
+				*emitted++
+				ch <- sdk.Event{Type: sdk.EventToolCall, ToolCall: &sdk.ToolCall{ID: e.Item.CallID, Name: e.Item.Name, Arguments: e.Item.Arguments}}
+			}
+		case "ResponsesResponse.completed":
+			*emitted++
+			ch <- sdk.Event{Type: sdk.EventDone}
+		}
+		return nil
+	})
+}
+
+// streamChat reads the classic OpenAI-compatible SSE dialect: text arrives in
+// choices[].delta.content, tool calls in choices[].delta.tool_calls.
+func (c *Client) streamChat(ctx context.Context, req sdk.Request, ch chan<- sdk.Event, emitted *int) error {
+	calls := map[int]*sdk.ToolCall{}
+	var order []int
+	return internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/chat/completions", c.headers(), buildChat(req), func(data []byte) error {
+		var e struct {
+			Choices []struct {
+				Delta struct {
+					Content   string `json:"content"`
+					ToolCalls []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal(data, &e) != nil || len(e.Choices) == 0 {
+			return nil
+		}
+		choice := e.Choices[0]
+		if choice.Delta.Content != "" {
+			*emitted++
+			ch <- sdk.Event{Type: sdk.EventText, Text: choice.Delta.Content}
+		}
+		for _, part := range choice.Delta.ToolCalls {
+			call, ok := calls[part.Index]
+			if !ok {
+				call = &sdk.ToolCall{}
+				calls[part.Index] = call
+				order = append(order, part.Index)
+			}
+			if part.ID != "" {
+				call.ID = part.ID
+			}
+			if part.Function.Name != "" {
+				call.Name = part.Function.Name
+			}
+			call.Arguments += part.Function.Arguments
+		}
+		if choice.FinishReason == "tool_calls" {
+			for _, index := range order {
+				call := *calls[index]
+				*emitted++
+				ch <- sdk.Event{Type: sdk.EventToolCall, ToolCall: &call}
+			}
+			return nil
+		}
+		if choice.FinishReason != "" {
+			*emitted++
+			ch <- sdk.Event{Type: sdk.EventDone}
+		}
+		return nil
+	})
+}
+
 func (c *Client) http() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP

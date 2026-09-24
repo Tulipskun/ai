@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -129,6 +130,20 @@ func isFreeModelID(id string) bool {
 	}
 	return strings.HasSuffix(id, "-free") || strings.HasSuffix(id, ":free") || strings.HasPrefix(id, "free/")
 }
+
+// ProviderIDs lists the registered providers, so a caller can offer the whole
+// catalogue (the phone's provider picker) without tracking it separately.
+func (r *Router) ProviderIDs() []ProviderID {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]ProviderID, 0, len(r.providers))
+	for id := range r.providers {
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
 func (r *Router) Models(provider ProviderID) []Model {
 	r.mu.RLock()
 	models := append([]Model(nil), r.catalogs[provider]...)

@@ -3,6 +3,7 @@ package mobile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -220,5 +221,79 @@ func TestHistoryAdoptsTheVerifiedTokenForTheDaemon(t *testing.T) {
 	}
 	if cache.Get() != "fresh-token" {
 		t.Fatalf("cached token = %q, want the one just verified", cache.Get())
+	}
+}
+
+type fakeModels struct {
+	providers []ProviderView
+	choices   map[string]ModelChoice
+}
+
+func (f *fakeModels) Providers(context.Context) ([]ProviderView, error) { return f.providers, nil }
+
+func (f *fakeModels) SetSessionModel(_ context.Context, sessionID string, choice ModelChoice) (SessionRow, error) {
+	if choice.Provider == "nope" {
+		return SessionRow{}, errors.New("provider \"nope\" is not available")
+	}
+	if f.choices == nil {
+		f.choices = map[string]ModelChoice{}
+	}
+	f.choices[sessionID] = choice
+	return SessionRow{ID: sessionID, Title: "แชท", Provider: choice.Provider, Model: choice.Model}, nil
+}
+
+func (f *fakeModels) SessionModel(_ context.Context, sessionID string) (ModelChoice, bool, error) {
+	choice, ok := f.choices[sessionID]
+	return choice, ok, nil
+}
+
+func TestModelsEndpointListsTheCatalogue(t *testing.T) {
+	store := newFakeHistory()
+	models := &fakeModels{providers: []ProviderView{{
+		ID: "NousResearch", DefaultModel: "meituan/longcat-2.0:free",
+		Models: []ModelView{{ID: "meituan/longcat-2.0:free", SupportsStreaming: true}},
+	}}}
+	cache := &ramCache{}
+	cache.Adopt("cf-token")
+	handler := NewHistoryHandler(store, NewGate(GateConfig{Verify: allowVerifier{}, Cache: cache}), models)
+
+	rec := historyRequest(t, handler, http.MethodGet, "/api/models", "cf-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/models = %d: %s", rec.Code, rec.Body)
+	}
+	var page struct {
+		Providers []ProviderView `json:"providers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode models: %v", err)
+	}
+	if len(page.Providers) != 1 || page.Providers[0].DefaultModel != "meituan/longcat-2.0:free" {
+		t.Fatalf("providers = %+v", page.Providers)
+	}
+}
+
+func TestPatchingASessionSetsTheProviderAndModel(t *testing.T) {
+	store := newFakeHistory()
+	store.sessions["work-1"] = SessionRow{ID: "work-1", Title: "เดิม"}
+	models := &fakeModels{}
+	cache := &ramCache{}
+	cache.Adopt("cf-token")
+	handler := NewHistoryHandler(store, NewGate(GateConfig{Verify: allowVerifier{}, Cache: cache}), models)
+
+	rec := historyRequest(t, handler, http.MethodPatch, "/api/sessions/work-1", "cf-token",
+		`{"provider":"NousResearch","model":"meituan/longcat-2.0:free"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH model = %d: %s", rec.Code, rec.Body)
+	}
+	if got := models.choices["work-1"]; got.Provider != "NousResearch" || got.Model != "meituan/longcat-2.0:free" {
+		t.Fatalf("stored choice = %+v", got)
+	}
+	if rec := historyRequest(t, handler, http.MethodPatch, "/api/sessions/work-1", "cf-token",
+		`{"provider":"nope","model":"x"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH unknown provider = %d, want 400", rec.Code)
+	}
+	if rec := historyRequest(t, handler, http.MethodPatch, "/api/sessions/work-1", "cf-token",
+		`{"title":"เปลี่ยนชื่อ"}`); rec.Code != http.StatusOK || store.sessions["work-1"].Title != "เปลี่ยนชื่อ" {
+		t.Fatalf("PATCH title = %d, title = %q", rec.Code, store.sessions["work-1"].Title)
 	}
 }

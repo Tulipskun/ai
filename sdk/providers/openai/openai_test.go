@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Tulipskun/ai/sdk"
@@ -181,5 +182,114 @@ func TestGenerateSurfacesChatErrorWhenBoth404(t *testing.T) {
 	c := &Client{BaseURL: server.URL, APIKey: "k"}
 	if _, err := c.Generate(context.Background(), sdk.Request{Model: "m"}); err == nil {
 		t.Fatal("expected error when both endpoints 404")
+	}
+}
+
+// A compatible gateway is reached by a custom base URL, so chat/completions is
+// the primary dialect and its deltas must arrive in order.
+func TestStreamUsesChatCompletionsForAGateway(t *testing.T) {
+	var seen []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"สวัส\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ดี\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+	client := New("test-key").WithBaseURL(server.URL).(*Client)
+
+	events, err := client.Stream(context.Background(), sdk.Request{Model: "m", Messages: []sdk.Turn{{Role: sdk.RoleUser, Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "hi"}}}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var text strings.Builder
+	done := 0
+	for event := range events {
+		switch event.Type {
+		case sdk.EventText:
+			text.WriteString(event.Text)
+		case sdk.EventDone:
+			done++
+		case sdk.EventError:
+			t.Fatalf("stream error: %v", event.Err)
+		}
+	}
+	if text.String() != "สวัสดี" {
+		t.Fatalf("streamed text = %q, want the chat deltas in order", text.String())
+	}
+	if done != 1 {
+		t.Fatalf("done events = %d, want 1", done)
+	}
+	if len(seen) != 1 || seen[0] != "/chat/completions" {
+		t.Fatalf("requested paths = %v, want the gateway dialect only", seen)
+	}
+}
+
+// A gateway that only implements the Responses API still has to stream, by way
+// of the fallback, rather than answering with one opaque completion.
+func TestStreamFallsBackToTheResponsesDialect(t *testing.T) {
+	var seen []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path)
+		if r.URL.Path == "/chat/completions" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"ResponsesResponse.output_text.delta\",\"delta\":\"หวัด\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"ResponsesResponse.completed\"}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+	client := New("test-key").WithBaseURL(server.URL).(*Client)
+
+	events, err := client.Stream(context.Background(), sdk.Request{Model: "m", Messages: []sdk.Turn{{Role: sdk.RoleUser, Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "hi"}}}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var text strings.Builder
+	for event := range events {
+		if event.Type == sdk.EventText {
+			text.WriteString(event.Text)
+		}
+		if event.Type == sdk.EventError {
+			t.Fatalf("stream error: %v", event.Err)
+		}
+	}
+	if text.String() != "หวัด" {
+		t.Fatalf("streamed text = %q, want the fallback deltas", text.String())
+	}
+	if len(seen) != 2 || seen[0] != "/chat/completions" || seen[1] != "/responses" {
+		t.Fatalf("requested paths = %v, want the fallback order", seen)
+	}
+}
+
+func TestStreamChatCollectsToolCallDeltas(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read_files","arguments":"{\"pa"}}]}}]}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":\"a\"}"}}]},"finish_reason":"tool_calls"}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := New("test-key").WithBaseURL(server.URL).(*Client)
+	events, err := client.Stream(context.Background(), sdk.Request{Model: "m", Messages: []sdk.Turn{{Role: sdk.RoleUser, Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "hi"}}}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var call *sdk.ToolCall
+	for event := range events {
+		if event.Type == sdk.EventToolCall {
+			call = event.ToolCall
+		}
+		if event.Type == sdk.EventError {
+			t.Fatalf("stream error: %v", event.Err)
+		}
+	}
+	if call == nil || call.Name != "read_files" || call.Arguments != `{"path":"a"}` {
+		t.Fatalf("tool call = %+v, want the arguments assembled from the deltas", call)
 	}
 }

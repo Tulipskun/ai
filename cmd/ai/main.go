@@ -183,6 +183,16 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	models := modelStore{router: rt.Router, client: mobileRT.client, sessions: sessions}
+	mobileRT.sessions = sessions
+	mobileRT.transport.SetModelStore(models)
+	sessions.SetSessionDefaults(func(ctx context.Context, sessionID string) (sdk.ProviderID, string, bool) {
+		choice, ok, err := models.SessionModel(ctx, sessionID)
+		if err != nil || !ok {
+			return "", "", false
+		}
+		return sdk.ProviderID(choice.Provider), choice.Model, true
+	})
 	stop, err := mobileRT.transport.StartHTTP(ctx, transportConfig.Mobile.Listen)
 	if err != nil {
 		return err
@@ -203,7 +213,9 @@ func run(ctx context.Context) error {
 		return err
 	}
 	loop := &sdk.HarnessLoop{Agent: agent, Source: sdk.ChannelInputSource{Inputs: inputs}, ResolveSession: sessions.Resolve, BuildRequest: func(context.Context, sdk.Input, *sdk.Session) (sdk.Request, error) {
-		return sdk.Request{SystemPrompt: systemPrompt(agent), MaxOutputTokens: maxOutputTokens}, nil
+		// Stream every turn: the phone renders deltas as they arrive, and a
+		// provider that cannot stream still answers through the same path.
+		return sdk.Request{SystemPrompt: systemPrompt(agent), MaxOutputTokens: maxOutputTokens, Stream: true}, nil
 	}, Displays: displays, DisplayTimeout: 10 * time.Second, OnTurnError: func(input sdk.Input, err error) {
 		log.Printf("turn failed source=%s session=%s: %v", input.Source, input.SessionID, err)
 	}}

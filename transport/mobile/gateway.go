@@ -20,6 +20,7 @@ const (
 	FrameMessage = "message"
 	FrameAck     = "ack"
 	FrameTrace   = "trace"
+	FrameDelta   = "delta"
 	FrameDone    = "done"
 	FrameError   = "error"
 )
@@ -48,22 +49,31 @@ type ToolCall struct {
 	Arguments string `json:"arguments,omitempty"`
 }
 
+// ToolResultView is the short result line the phone shows next to a tool call;
+// the full result stays in the session, not in every frame.
+type ToolResultView struct {
+	ToolCall
+	Text    string `json:"text,omitempty"`
+	IsError bool   `json:"is_error,omitempty"`
+}
+
 // Outbound is what the phone renders. Text, agent attribution and job id let
 // the app show main vs sub agent activity both live and after a restart.
 type Outbound struct {
-	Kind         string        `json:"kind"`
-	SessionID    string        `json:"session_id"`
-	Role         string        `json:"role"`
-	Agent        string        `json:"agent,omitempty"`
-	JobID        string        `json:"job_id,omitempty"`
-	Stage        string        `json:"stage,omitempty"`
-	Seq          int64         `json:"seq,omitempty"`
-	Text         string        `json:"text,omitempty"`
-	Content      []ContentPart `json:"content,omitempty"`
-	ToolCall     *ToolCall     `json:"tool_call,omitempty"`
-	ClientMsgID  string        `json:"client_msg_id,omitempty"`
-	InputTokens  int           `json:"input_tokens,omitempty"`
-	OutputTokens int           `json:"output_tokens,omitempty"`
+	Kind         string          `json:"kind"`
+	SessionID    string          `json:"session_id"`
+	Role         string          `json:"role"`
+	Agent        string          `json:"agent,omitempty"`
+	JobID        string          `json:"job_id,omitempty"`
+	Stage        string          `json:"stage,omitempty"`
+	Seq          int64           `json:"seq,omitempty"`
+	Text         string          `json:"text,omitempty"`
+	Content      []ContentPart   `json:"content,omitempty"`
+	ToolCall     *ToolCall       `json:"tool_call,omitempty"`
+	ToolResult   *ToolResultView `json:"tool_result,omitempty"`
+	ClientMsgID  string          `json:"client_msg_id,omitempty"`
+	InputTokens  int             `json:"input_tokens,omitempty"`
+	OutputTokens int             `json:"output_tokens,omitempty"`
 }
 
 // TokenStore is the daemon's volatile credential (d1store.MemoryToken in
@@ -92,6 +102,7 @@ type Config struct {
 	Verifier     Verifier
 	Hydrate      Hydrator
 	History      HistoryStore                        // serves the phone's history from D1
+	Models       ModelStore                          // provider/model catalogue and per-chat choice
 	Announce     func(context.Context, string) error // publishes the tunnel URL (D1 `nodes`)
 	InputBuffer  int
 }
@@ -103,6 +114,15 @@ const defaultInputBuffer = 64
 type subscriber interface {
 	WriteMessage(int, []byte) error
 	Close() error
+}
+
+// SetModelStore attaches the provider/model catalogue after construction. It
+// must run before StartHTTP, while the daemon is still single-threaded.
+func (t *Transport) SetModelStore(store ModelStore) {
+	if t == nil {
+		return
+	}
+	t.cfg.Models = store
 }
 
 // Version reports the label this build announces with, so the daemon can write
@@ -128,6 +148,9 @@ type Transport struct {
 
 	hydrateOnce sync.Once
 	hydratedErr error
+
+	streamMu sync.Mutex
+	turns    map[string]*turnProgress // what each in-flight turn already sent
 }
 
 func New(cfg Config) *Transport {
@@ -164,6 +187,18 @@ func (t *Transport) Receive(ctx context.Context) (<-chan sdk.Input, error) {
 // every phone watching that session. A traced turn arrives as a trace stream
 // (sdk.HarnessLoop skips its final output once a trace ran), so the answer is
 // read from TraceResponseContent and TraceResponse closes the turn.
+// Display implements sdk.Display. One canonical sdk.Output becomes frames for
+// every phone watching that session.
+//
+// A traced turn arrives as a stream (sdk emits one trace per provider event), so
+// the mapping has to be exact or the phone shows a half answer:
+//
+//   - TraceResponseContent with Text and no Response is one streamed chunk -> delta
+//   - TraceResponseContent with Response is a provider that did not stream -> message
+//   - TraceResponse carries the authoritative text of a streamed turn -> message
+//     (only when no deltas were sent) and then done
+//   - TraceResponseText is reasoning, not the answer -> a thinking status line
+//   - tool stages carry the call and a short result so the app can draw steps
 func (t *Transport) Display(ctx context.Context, output sdk.Output) error {
 	if output.Source != "" && output.Source != SourceName {
 		return nil
@@ -194,81 +229,229 @@ func (t *Transport) Display(ctx context.Context, output sdk.Output) error {
 func (t *Transport) displayTrace(output sdk.Output) error {
 	trace := *output.Trace
 	agent := traceAgent(output)
-	jobID := output.Metadata[jobMetadataKey]
-	if sub := strings.TrimSpace(output.Metadata["trace_job_id"]); sub != "" {
-		jobID = sub
-	}
+	jobID := traceJobID(output)
 	switch trace.Stage {
 	case sdk.TraceResponseText:
-		return nil
-	case sdk.TraceResponseContent:
-		text := strings.TrimSpace(trace.Text)
-		if text == "" && trace.Response != nil {
-			text = textOfParts(toContent(trace.Response.Content))
+		// Reasoning deltas are progress, not the answer: the phone shows them as
+		// a "thinking" line and never stores them as a message.
+		if text := strings.TrimSpace(trace.Text); text != "" {
+			t.broadcast(output.SessionID, Outbound{
+				Kind: FrameTrace, SessionID: output.SessionID, Role: "system", Agent: agent,
+				JobID: jobID, Stage: string(sdk.TraceResponseText), Text: "thinking",
+			})
 		}
+		return nil
+
+	case sdk.TraceResponseContent:
+		if trace.Response != nil {
+			// A provider that answered in one shot: this is the whole message.
+			// The sdk follows it with TraceResponse carrying the same response,
+			// so mark the turn answered and let the terminal event only close it.
+			return t.sendAnswer(output, agent, jobID, responseText(trace.Response), false)
+		}
+		if text := trace.Text; text != "" {
+			t.broadcast(output.SessionID, Outbound{
+				Kind: FrameDelta, SessionID: output.SessionID, Role: "model", Agent: agent,
+				JobID: jobID, Text: text, Content: []ContentPart{{Type: "text", Text: text}},
+			})
+			t.noteDelta(output.SessionID, agent, jobID)
+		}
+		return nil
+
+	case sdk.TraceResponse:
+		text := responseText(trace.Response)
 		if text == "" {
+			t.broadcast(output.SessionID, Outbound{Kind: FrameDone, SessionID: output.SessionID, JobID: jobID})
 			return nil
 		}
-		var in, out int
-		if trace.Response != nil {
-			in, out = trace.Response.Usage.InputTokens, trace.Response.Usage.OutputTokens
+		// Deltas, or a whole message a moment ago, already reached the phone:
+		// the terminal event only closes the turn. Otherwise the answer arrives
+		// here for the first time and goes out now.
+		if t.answered(output.SessionID, agent, jobID) {
+			t.clearTurn(output.SessionID, agent, jobID)
+			t.broadcast(output.SessionID, Outbound{Kind: FrameDone, SessionID: output.SessionID, JobID: jobID})
+			return nil
+		}
+		t.sendAnswer(output, agent, jobID, text, true)
+		t.clearTurn(output.SessionID, agent, jobID)
+		return nil
+
+	case sdk.TraceError:
+		text := strings.TrimSpace(trace.Message)
+		if text == "" && trace.Err != nil {
+			text = trace.Err.Error()
+		}
+		if text == "" {
+			text = sdk.TraceMessage(trace)
+		}
+		t.broadcast(output.SessionID, Outbound{Kind: FrameError, SessionID: output.SessionID, Text: text})
+		return nil
+
+	case sdk.TraceToolCall, sdk.TraceToolRunning:
+		call := toolCallView(trace.ToolCall)
+		if call == nil {
+			return nil
+		}
+		stage := string(sdk.TraceToolRunning)
+		if trace.Stage == sdk.TraceToolCall {
+			stage = string(sdk.TraceToolCall)
 		}
 		t.broadcast(output.SessionID, Outbound{
-			Kind:         FrameMessage,
-			SessionID:    output.SessionID,
-			Role:         "model",
-			Agent:        agent,
-			JobID:        jobID,
-			Text:         text,
-			Content:      []ContentPart{{Type: "text", Text: text}},
-			InputTokens:  in,
-			OutputTokens: out,
+			Kind: FrameTrace, SessionID: output.SessionID, Role: "system", Agent: agent,
+			JobID: jobID, Stage: stage, Text: call.Name, ToolCall: call,
 		})
 		return nil
-	case sdk.TraceResponse:
-		t.broadcast(output.SessionID, Outbound{Kind: FrameDone, SessionID: output.SessionID, JobID: jobID})
+
+	case sdk.TraceToolResult:
+		call := toolCallView(trace.ToolCall)
+		if call == nil {
+			return nil
+		}
+		view := &ToolResultView{ToolCall: *call}
+		if trace.ToolResult != nil {
+			view.Text = strings.TrimSpace(trace.ToolResult.Content)
+			view.IsError = trace.ToolResult.IsError
+		}
+		t.broadcast(output.SessionID, Outbound{
+			Kind: FrameTrace, SessionID: output.SessionID, Role: "system", Agent: agent,
+			JobID: jobID, Stage: string(sdk.TraceToolResult), Text: view.Text, ToolCall: call, ToolResult: view,
+		})
 		return nil
+
 	default:
-		text := strings.TrimSpace(sdk.TraceMessage(trace))
+		text := strings.TrimSpace(trace.Message)
+		if text == "" {
+			text = strings.TrimSpace(sdk.TraceMessage(trace))
+		}
 		if text == "" {
 			return nil
 		}
 		t.broadcast(output.SessionID, Outbound{
-			Kind:      FrameTrace,
-			SessionID: output.SessionID,
-			Role:      "system",
-			Agent:     agent,
-			JobID:     jobID,
-			Stage:     string(trace.Stage),
-			Text:      text,
+			Kind: FrameTrace, SessionID: output.SessionID, Role: "system", Agent: agent,
+			JobID: jobID, Stage: string(trace.Stage), Text: text,
 		})
 		return nil
 	}
 }
 
-func traceAgent(output sdk.Output) string {
-	if strings.EqualFold(strings.TrimSpace(output.Metadata["trace_actor"]), "subagent") {
-		return "sub"
+// sendAnswer puts one authoritative message on the wire. closeTurn is false when
+// a traced turn is still running and its terminal event will close it.
+func (t *Transport) sendAnswer(output sdk.Output, agent, jobID, text string, closeTurn bool) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		if closeTurn {
+			t.broadcast(output.SessionID, Outbound{Kind: FrameDone, SessionID: output.SessionID, JobID: jobID})
+		}
+		return nil
 	}
-	return "main"
+	frame := Outbound{
+		Kind: FrameMessage, SessionID: output.SessionID, Role: "model", Agent: agent,
+		JobID: jobID, Text: text, Content: []ContentPart{{Type: "text", Text: text}},
+	}
+	if output.Trace != nil && output.Trace.Response != nil {
+		frame.InputTokens = output.Trace.Response.Usage.InputTokens
+		frame.OutputTokens = output.Trace.Response.Usage.OutputTokens
+	}
+	t.broadcast(output.SessionID, frame)
+	t.markAnswered(output.SessionID, agent, jobID)
+	if closeTurn {
+		t.broadcast(output.SessionID, Outbound{Kind: FrameDone, SessionID: output.SessionID, JobID: jobID})
+	}
+	return nil
+}
+
+func responseText(resp *sdk.Response) string {
+	if resp == nil {
+		return ""
+	}
+	return strings.TrimSpace(textOfParts(toContent(resp.Content)))
 }
 
 // FinalText is the answer text a phone should keep for this output, whichever
-// shape the harness delivered it in: a traced turn carries it on the trace.
+// shape the harness delivered it in. Only terminal events count: a delta or a
+// tool step is progress, and mirroring those would duplicate the turn in D1.
 func FinalText(output sdk.Output) string {
-	if output.Trace != nil {
-		if output.Trace.Stage == sdk.TraceResponseContent {
-			if text := strings.TrimSpace(output.Trace.Text); text != "" {
-				return text
-			}
-			if output.Trace.Response != nil {
-				return strings.TrimSpace(textOfParts(toContent(output.Trace.Response.Content)))
-			}
-			return ""
+	if output.Trace == nil {
+		return textOf(output)
+	}
+	switch output.Trace.Stage {
+	case sdk.TraceResponseContent:
+		if output.Trace.Response != nil {
+			return responseText(output.Trace.Response)
 		}
 		return ""
+	case sdk.TraceResponse:
+		return responseText(output.Trace.Response)
 	}
-	return textOf(output)
+	return ""
+}
+
+func toolCallView(call *sdk.ToolCall) *ToolCall {
+	if call == nil || call.Name == "" {
+		return nil
+	}
+	return &ToolCall{ID: call.ID, Name: call.Name, Arguments: call.Arguments}
+}
+
+func traceJobID(output sdk.Output) string {
+	if id := strings.TrimSpace(output.Metadata[jobMetadataKey]); id != "" {
+		return id
+	}
+	return strings.TrimSpace(output.Metadata["trace_job_id"])
+}
+
+// turnProgress remembers what a phone already received for one turn, so the
+// terminal event never repeats the answer: deltas count as delivered, and a
+// whole message marks the turn answered.
+type turnProgress struct {
+	streamed bool
+	answered bool
+}
+
+func (t *Transport) turn(sessionID, agent, jobID string) *turnProgress {
+	key := sessionKey(sessionID, agent, jobID)
+	t.streamMu.Lock()
+	defer t.streamMu.Unlock()
+	if t.turns == nil {
+		t.turns = map[string]*turnProgress{}
+	}
+	state, ok := t.turns[key]
+	if !ok {
+		state = &turnProgress{}
+		t.turns[key] = state
+	}
+	return state
+}
+
+func (t *Transport) noteDelta(sessionID, agent, jobID string) {
+	state := t.turn(sessionID, agent, jobID)
+	t.streamMu.Lock()
+	state.streamed = true
+	t.streamMu.Unlock()
+}
+
+func (t *Transport) markAnswered(sessionID, agent, jobID string) {
+	state := t.turn(sessionID, agent, jobID)
+	t.streamMu.Lock()
+	state.answered = true
+	t.streamMu.Unlock()
+}
+
+func (t *Transport) answered(sessionID, agent, jobID string) bool {
+	state := t.turn(sessionID, agent, jobID)
+	t.streamMu.Lock()
+	defer t.streamMu.Unlock()
+	return state.answered || state.streamed
+}
+
+func (t *Transport) clearTurn(sessionID, agent, jobID string) {
+	t.streamMu.Lock()
+	defer t.streamMu.Unlock()
+	delete(t.turns, sessionKey(sessionID, agent, jobID))
+}
+
+func sessionKey(sessionID, agent, jobID string) string {
+	return sessionID + "\x00" + agent + "\x00" + jobID
 }
 
 const (
@@ -477,6 +660,13 @@ func textOfParts(parts []ContentPart) string {
 
 // agentFor prefers explicit transport metadata (set by the display adapter)
 // and falls back to "main" for model output.
+func traceAgent(output sdk.Output) string {
+	if strings.EqualFold(strings.TrimSpace(output.Metadata["trace_actor"]), "subagent") {
+		return "sub"
+	}
+	return "main"
+}
+
 func agentFor(output sdk.Output) string {
 	if agent := strings.TrimSpace(output.Metadata[agentMetadataKey]); agent != "" {
 		return agent
@@ -493,10 +683,11 @@ func (t *Transport) StartHTTP(ctx context.Context, listen string) (func(), error
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", t.serveWS)
 	if t.cfg.History != nil {
-		// One address for the phone: history comes through the tunnel and is
-		// answered from D1 with the token the daemon already holds, so the app
-		// only ever needs the tunnel URL plus its Cloudflare token (REQ-046(3)).
-		mux.Handle("/api/", NewHistoryHandler(t.cfg.History, t.gate))
+		// One address for the phone: history and the model catalogue come
+		// through the tunnel and are answered from D1 plus the live router with
+		// the token the daemon already holds, so the app only ever needs the
+		// tunnel URL plus its Cloudflare token (REQ-046(3)).
+		mux.Handle("/api/", NewHistoryHandler(t.cfg.History, t.gate, t.cfg.Models))
 	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")

@@ -836,3 +836,16 @@ Reason: ผู้ใช้ระบุชัดว่า credential คือ Cl
 Impact: runtime/d1store/{client.go,client_test ใหม่: fakecloudflare_test.go, d1store_test.go}, transport/mobile/{history.go ใหม่, history_test.go ใหม่, proxy.go+proxy_test.go ลบ, gateway.go, auth.go, tunnel.go}, transport/config.go + config_test.go, cmd/ai/{mobile.go, main.go}, requirements/{functional,constraints,changes}.md, index.md
 Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 4m`; e2e จริงผ่าน quick tunnel ด้วย Cloudflare token: 401 เมื่อไม่มี header, 401 เมื่อ token ผิดรูปแบบถูกแต่ใช้ไม่ได้, 503 เมื่อ Cloudflare ตอบผิดรูป, `/api/sessions` = 200 พร้อมแชทจริง 4 รายการ, handshake → hydrate `config:provider` → reload 6 provider → `turn ok`, turn ถูกเขียนกลับ D1 เรียง `seq`, `/api/node` คืน tunnel URL ปัจจุบัน
 Status: accepted
+
+CHANGE-064
+
+Date: 2026-09-25
+Type: add
+Request: "เพิ่มให้ตั้งค่า provider/model ได้ ปรับการแสดงผลให้ถูกต้อง ปรับเป็นระบบ stream ทั้งหมดเท่าที่เป็นไปได้"
+Conflict: REQ-046(5) (turn เขียน D1 ตามลำดับ), REQ-046(6) (credential เดียว), ข้อสัญญาเฟรมเดิมที่ไม่มี `delta` และไม่มี model catalogue
+Previous: คำตอบของโมเดลถูกส่งเป็น `TraceResponseContent` ทั้งก้อน (หรือทีละ chunk ที่ transport มองเป็นข้อความใหม่ทุกครั้ง) และข้อความ authoritative ที่ `TraceResponse` ถูกทิ้ง; harness ไม่เคยสั่ง `Stream`; adapter `openai` stream ผ่าน `/responses` อย่างเดียวจึงไม่มี delta จาก gateway; ไม่มีทางเลือก provider/model; mirror เขียน turn ซ้ำเมื่อ provider รายงานคำตอบสองครั้ง
+New: mapping trace → frame แบบ streaming (delta/trace/message/done + per-turn bookkeeping กันข้อความซ้ำ), `Request.Stream: true` ทุก turn, adapter เลือก dialect ตาม endpoint พร้อม fallback ก่อนมี event แรก, `GET /api/models` + `PATCH /api/sessions/:id {provider, model}` (ตรวจกับ router → ใส่ session ที่เปิด → เก็บ D1), `SessionManager.SetSessionDefaults` ให้ค่าที่บันทึกไว้มี precedence เหนือค่า boot, `turnMirror` กัน D1 มี turn ซ้ำ; แอปได้ bubble สด + tool steps + ตัวเลือก provider/model ในหน้าตั้งค่า
+Reason: ผู้ใช้ต้องการเห็นคำตอบทีละส่วนและเลือกโมเดลเองจากเครื่อง โดยไม่ต้องแก้ไฟล์บน daemon — สิ่งที่เป็นอยู่ทำให้ข้อความถูกตัดและเขียน D1 ซ้ำ
+Impact: transport/mobile/{gateway.go, history.go, display_test.go, history_test.go}, sdk/providers/openai/{openai.go, openai_test.go}, sdk/routing.go (ProviderIDs), runtime/{session_manager.go, session_manager_test.go}, runtime/d1store/client.go (SetSessionRoute), cmd/ai/{main.go, mobile.go, mobile_turn_mirror_test.go}, requirements/{functional,changes}.md; ฝั่งแอป: data/model/ChatModels.kt, data/remote/HistoryApi.kt, data/repo/ChatRepository.kt, ui/chat/{ChatViewModel,ChatScreen}.kt, ui/settings/SettingsScreen.kt + AX-080..082/AXCH-012
+Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 4m`; e2e จริงผ่าน quick tunnel: 32 `delta` → `done` จาก provider จริง, D1 มี user 1 + model 1 turn (ไม่ซ้ำ), `/api/models` คืน 6 provider พร้อม catalogue, `PATCH /api/sessions/:id` ตอบค่าที่เลือก; โค้ดฝั่งแอปยังไม่ได้ compile เพราะเครื่องนี้ไม่มี JDK
+Status: accepted

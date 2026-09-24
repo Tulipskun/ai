@@ -35,6 +35,37 @@ type NodeRow struct {
 	Heartbeat int64  `json:"heartbeat"`
 }
 
+// ModelView and ProviderView are the model catalogue the phone offers, so the
+// operator can pick a provider and model instead of editing entry.json.
+type ModelView struct {
+	ID                  string `json:"id"`
+	Name                string `json:"name,omitempty"`
+	SupportsTools       bool   `json:"supports_tools"`
+	SupportsTemperature bool   `json:"supports_temperature"`
+	SupportsStreaming   bool   `json:"supports_streaming"`
+}
+
+type ProviderView struct {
+	ID           string      `json:"id"`
+	Name         string      `json:"name,omitempty"`
+	DefaultModel string      `json:"default_model,omitempty"`
+	Models       []ModelView `json:"models"`
+}
+
+// ModelChoice is the provider and model a chat runs on.
+type ModelChoice struct {
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+}
+
+// ModelStore is the live half of provider configuration: what the runtime can
+// actually route to, and how a chat's choice is validated and remembered.
+type ModelStore interface {
+	Providers(ctx context.Context) ([]ProviderView, error)
+	SetSessionModel(ctx context.Context, sessionID string, choice ModelChoice) (SessionRow, error)
+	SessionModel(ctx context.Context, sessionID string) (ModelChoice, bool, error)
+}
+
 // HistoryStore is the D1 side of the chat list: exactly what the phone needs to
 // render and manage chats, and nothing else. The raw state table stays out of
 // reach, so a tunnel URL can never become a reader for provider API keys.
@@ -60,7 +91,11 @@ type nodeView struct {
 // tunnel, so the app needs exactly one address. Every request goes through the
 // same gate as the WebSocket handshake: the phone presents the Cloudflare token
 // it already stores, and the daemon uses the copy it holds in RAM.
-func NewHistoryHandler(store HistoryStore, gate *Gate) http.Handler {
+func NewHistoryHandler(store HistoryStore, gate *Gate, models ...ModelStore) http.Handler {
+	var modelStore ModelStore
+	if len(models) > 0 {
+		modelStore = models[0]
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if store == nil {
 			writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "history is not configured"})
@@ -83,9 +118,11 @@ func NewHistoryHandler(store HistoryStore, gate *Gate) http.Handler {
 		case path == "/api/sessions" && r.Method == http.MethodGet:
 			serveSessionList(w, r, store)
 		case path == "/api/sessions" && r.Method == http.MethodPost:
-			serveSessionCreate(w, r, store)
+			serveSessionCreate(w, r, store, modelStore)
+		case path == "/api/models" && r.Method == http.MethodGet:
+			serveModels(w, r, modelStore)
 		case strings.HasPrefix(path, "/api/sessions/"):
-			serveSessionItem(w, r, store, strings.TrimPrefix(path, "/api/sessions/"))
+			serveSessionItem(w, r, store, modelStore, strings.TrimPrefix(path, "/api/sessions/"))
 		default:
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
 		}
@@ -120,11 +157,28 @@ func serveSessionList(w http.ResponseWriter, r *http.Request, store HistoryStore
 	writeJSON(w, http.StatusOK, rows)
 }
 
-func serveSessionCreate(w http.ResponseWriter, r *http.Request, store HistoryStore) {
+func serveModels(w http.ResponseWriter, r *http.Request, store ModelStore) {
+	if store == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "model catalogue is not configured"})
+		return
+	}
+	providers, err := store.Providers(r.Context())
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if providers == nil {
+		providers = []ProviderView{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"providers": providers})
+}
+
+func serveSessionCreate(w http.ResponseWriter, r *http.Request, store HistoryStore, models ModelStore) {
 	var body struct {
-		ID    string `json:"id"`
-		Title string `json:"title"`
-		Model string `json:"model"`
+		ID       string `json:"id"`
+		Title    string `json:"title"`
+		Model    string `json:"model"`
+		Provider string `json:"provider"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
@@ -140,11 +194,19 @@ func serveSessionCreate(w http.ResponseWriter, r *http.Request, store HistorySto
 		writeStoreError(w, err)
 		return
 	}
+	choice := ModelChoice{Provider: strings.TrimSpace(body.Provider), Model: strings.TrimSpace(body.Model)}
+	if models != nil && (choice.Provider != "" || choice.Model != "") {
+		row, err = models.SetSessionModel(r.Context(), id, choice)
+		if err != nil {
+			writeModelError(w, err)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, row)
 }
 
 // serveSessionItem handles /api/sessions/<id> and /api/sessions/<id>/turns.
-func serveSessionItem(w http.ResponseWriter, r *http.Request, store HistoryStore, rest string) {
+func serveSessionItem(w http.ResponseWriter, r *http.Request, store HistoryStore, models ModelStore, rest string) {
 	parts := strings.Split(rest, "/")
 	if len(parts) == 2 && parts[0] != "" && parts[1] == "turns" {
 		serveTurns(w, r, store, parts[0])
@@ -158,11 +220,25 @@ func serveSessionItem(w http.ResponseWriter, r *http.Request, store HistoryStore
 	switch r.Method {
 	case http.MethodPatch:
 		var body struct {
-			Title string `json:"title"`
+			Title    string `json:"title"`
+			Model    string `json:"model"`
+			Provider string `json:"provider"`
 		}
 		if err := decodeBody(r, &body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
 			return
+		}
+		choice := ModelChoice{Provider: strings.TrimSpace(body.Provider), Model: strings.TrimSpace(body.Model)}
+		if models != nil && (choice.Provider != "" || choice.Model != "") {
+			row, err := models.SetSessionModel(r.Context(), id, choice)
+			if err != nil {
+				writeModelError(w, err)
+				return
+			}
+			if strings.TrimSpace(body.Title) == "" {
+				writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": row.ID, "model": row.Model, "provider": row.Provider})
+				return
+			}
 		}
 		title := strings.TrimSpace(body.Title)
 		if title == "" {
@@ -249,6 +325,12 @@ func decodeBody(r *http.Request, out any) error {
 
 func writeStoreError(w http.ResponseWriter, err error) {
 	writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+}
+
+// writeModelError answers a rejected provider/model choice with 400, so the
+// phone can say which option is wrong instead of showing a server fault.
+func writeModelError(w http.ResponseWriter, err error) {
+	writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

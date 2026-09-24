@@ -17,11 +17,16 @@ type sessionCacheEntry struct {
 	session *sdk.Session
 }
 type SessionManager struct {
+	// defaults supplies the provider and model a phone chose for a chat; it may
+	// do I/O, so it is guarded separately from the session table.
+	defaultsMu sync.RWMutex
+	defaults   func(context.Context, string) (sdk.ProviderID, string, bool)
+
 	dir          string
 	base         sdk.SessionConfig
 	keys         *sdk.KeyPool
 	providerKeys map[sdk.ProviderID]*sdk.KeyPool
-	mu           sync.Mutex
+	mu           sync.RWMutex
 	sessions     map[string]*list.Element
 	lru          *list.List
 	maxCached    int
@@ -112,6 +117,30 @@ func (m *SessionManager) RegisterProvider(provider sdk.ProviderID, keys *sdk.Key
 	m.providerKeys[provider] = keys
 	m.mu.Unlock()
 }
+
+// SetSessionDefaults installs the lookup that supplies the provider and model a
+// chat was last saved with. It runs outside the manager's lock, so it may do
+// network work (the daemon reads the row from D1), and it is only consulted for
+// a session the manager has to open.
+func (m *SessionManager) SetSessionDefaults(lookup func(context.Context, string) (sdk.ProviderID, string, bool)) {
+	if m == nil {
+		return
+	}
+	m.defaultsMu.Lock()
+	m.defaults = lookup
+	m.defaultsMu.Unlock()
+}
+
+func (m *SessionManager) sessionDefaults(ctx context.Context, sessionID string) (sdk.ProviderID, string, bool) {
+	m.defaultsMu.RLock()
+	lookup := m.defaults
+	m.defaultsMu.RUnlock()
+	if lookup == nil {
+		return "", "", false
+	}
+	return lookup(ctx, sessionID)
+}
+
 func (m *SessionManager) Resolve(ctx context.Context, input sdk.Input) (*sdk.Session, error) {
 	if m == nil {
 		return nil, errors.New("runtime: session manager is nil")
@@ -123,10 +152,11 @@ func (m *SessionManager) Resolve(ctx context.Context, input sdk.Input) (*sdk.Ses
 		return nil, errors.New("runtime: input SessionID is required")
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if elem, ok := m.sessions[input.SessionID]; ok {
 		m.lru.MoveToFront(elem)
-		return elem.Value.(*sessionCacheEntry).session, nil
+		session := elem.Value.(*sessionCacheEntry).session
+		m.mu.Unlock()
+		return session, nil
 	}
 	config := m.base
 	config.ID = input.SessionID
@@ -134,25 +164,56 @@ func (m *SessionManager) Resolve(ctx context.Context, input sdk.Input) (*sdk.Ses
 	if providerKeys := m.providerKeys[config.Provider]; providerKeys != nil {
 		keys = providerKeys
 	}
+	m.mu.Unlock()
+
 	path := sdk.SessionDBPath(m.dir, input.SessionID)
 	session, err := sdk.OpenSession(path, config, keys)
 	if err != nil {
 		return nil, err
 	}
+	// What the phone picked last time wins over the boot default, and only when
+	// the daemon can still route to it.
+	applied := false
+	if provider, model, ok := m.sessionDefaults(ctx, input.SessionID); ok && provider != "" && model != "" {
+		m.mu.RLock()
+		providerKeys := m.providerKeys[provider]
+		m.mu.RUnlock()
+		if providerKeys != nil {
+			if err := session.SetProvider(provider, providerKeys); err == nil {
+				if err := session.SetModel(model); err == nil {
+					applied = true
+				}
+			}
+		}
+	}
+	m.mu.Lock()
 	loadedProvider := session.Config().Provider
 	if providerKeys := m.providerKeys[loadedProvider]; providerKeys != nil {
 		if err := session.SetKeyPool(providerKeys); err != nil {
+			m.mu.Unlock()
 			_ = session.Close()
 			return nil, err
 		}
 	}
-	if err := m.repointUnknownProviderLocked(session); err != nil {
+	if !applied {
+		if err := m.repointUnknownProviderLocked(session); err != nil {
+			m.mu.Unlock()
+			_ = session.Close()
+			return nil, err
+		}
+	}
+	// Another goroutine may have opened the same chat while this one waited
+	// outside the lock: keep one session object per id.
+	if elem, ok := m.sessions[input.SessionID]; ok {
+		existing := elem.Value.(*sessionCacheEntry).session
+		m.mu.Unlock()
 		_ = session.Close()
-		return nil, err
+		return existing, nil
 	}
 	elem := m.lru.PushFront(&sessionCacheEntry{id: input.SessionID, session: session})
 	m.sessions[input.SessionID] = elem
 	m.evictLocked()
+	m.mu.Unlock()
 	return session, nil
 }
 func (m *SessionManager) evictLocked() {

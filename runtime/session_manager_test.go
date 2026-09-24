@@ -62,3 +62,50 @@ func TestSessionManagerAdoptsProvidersAndRepointsStaleSessions(t *testing.T) {
 		t.Fatalf("session opened after adopt = %q, want NousResearch", got)
 	}
 }
+
+func TestSessionManagerPrefersTheStoredProviderAndModel(t *testing.T) {
+	dir := t.TempDir()
+	keys := sdk.NewKeyPool("key")
+	manager := NewSessionManagerWithProviders(dir+"/sessions.db", sdk.SessionConfig{Provider: "boot", Model: "boot-model"},
+		[]sdk.ProviderConfig{{ID: "boot", Keys: keys}, {ID: "picked", Keys: sdk.NewKeyPool("other")}})
+	manager.SetSessionDefaults(func(_ context.Context, sessionID string) (sdk.ProviderID, string, bool) {
+		if sessionID != "work-7" {
+			return "", "", false
+		}
+		return "picked", "chosen-model", true
+	})
+
+	session, err := manager.Resolve(context.Background(), sdk.Input{SessionID: "work-7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := session.Config().Provider; got != "picked" {
+		t.Fatalf("provider = %q, want the phone's choice", got)
+	}
+	if got := session.Config().Model; got != "chosen-model" {
+		t.Fatalf("model = %q, want the phone's choice", got)
+	}
+
+	// A session the phone never configured keeps the boot default.
+	other, err := manager.Resolve(context.Background(), sdk.Input{SessionID: "work-8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := other.Config().Provider; got != "boot" {
+		t.Fatalf("provider = %q, want the boot default", got)
+	}
+}
+
+func TestSessionManagerIgnoresAStoredProviderItCannotRouteTo(t *testing.T) {
+	manager := NewSessionManager(t.TempDir()+"/sessions.db", sdk.SessionConfig{Provider: "boot", Model: "m"}, sdk.NewKeyPool("boot-key"))
+	manager.SetSessionDefaults(func(context.Context, string) (sdk.ProviderID, string, bool) {
+		return "deleted-provider", "gone", true
+	})
+	session, err := manager.Resolve(context.Background(), sdk.Input{SessionID: "work-9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := session.Config().Provider; got != "boot" {
+		t.Fatalf("provider = %q, want the boot default for an unknown provider", got)
+	}
+}

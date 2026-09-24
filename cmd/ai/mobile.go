@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/Tulipskun/ai/runtime"
 	"github.com/Tulipskun/ai/runtime/d1store"
 	"github.com/Tulipskun/ai/sdk"
 	mobiletransport "github.com/Tulipskun/ai/transport/mobile"
@@ -30,6 +32,11 @@ type mobileRuntime struct {
 	// loaded providers at boot, before any phone connected, so without this
 	// the daemon would know zero providers for its whole lifetime (REQ-046(4)).
 	reloadProviders func(context.Context) error
+
+	// sessions applies a phone's provider/model choice to a live chat.
+	sessions *runtime.SessionManager
+
+	turns turnMirror
 }
 
 type runtimeMobileConfig struct {
@@ -76,6 +83,134 @@ func newMobileRuntime(stateRoot, sessionDir string, cfg runtimeMobileConfig, rel
 		},
 	})
 	return rt, nil
+}
+
+// modelStore answers the phone's provider/model questions from the live router
+// and keeps the choice on the chat, so a restart does not lose it.
+type modelStore struct {
+	router   *sdk.Router
+	client   *d1store.Client
+	sessions *runtime.SessionManager
+}
+
+func (m modelStore) Providers(context.Context) ([]mobiletransport.ProviderView, error) {
+	if m.router == nil {
+		return nil, errors.New("runtime: router is not available")
+	}
+	out := make([]mobiletransport.ProviderView, 0, len(m.router.ProviderIDs()))
+	for _, id := range m.router.ProviderIDs() {
+		view := mobiletransport.ProviderView{ID: string(id), Name: string(id), Models: []mobiletransport.ModelView{}}
+		for _, model := range m.router.Models(id) {
+			view.Models = append(view.Models, mobiletransport.ModelView{
+				ID: model.ID, Name: model.Name,
+				SupportsTools: model.SupportsTools, SupportsTemperature: model.SupportsTemperature,
+				SupportsStreaming: model.SupportsStreaming,
+			})
+		}
+		if len(view.Models) > 0 {
+			view.DefaultModel = view.Models[0].ID
+		}
+		out = append(out, view)
+	}
+	return out, nil
+}
+
+func (m modelStore) SetSessionModel(ctx context.Context, sessionID string, choice mobiletransport.ModelChoice) (mobiletransport.SessionRow, error) {
+	if m.router == nil || m.client == nil {
+		return mobiletransport.SessionRow{}, errors.New("runtime: model routing is not available")
+	}
+	provider := sdk.ProviderID(choice.Provider)
+	model := choice.Model
+	if model == "" && provider == "" {
+		return m.sessionRow(ctx, sessionID)
+	}
+	if provider == "" || model == "" {
+		// One side only: fill the other from the router so a phone can send just
+		// the model, or just the provider, without guessing.
+		if provider == "" {
+			for _, id := range m.router.ProviderIDs() {
+				if hasModel(m.router, id, model) {
+					provider = id
+					break
+				}
+			}
+		} else if models := m.router.Models(provider); len(models) > 0 {
+			model = models[0].ID
+		}
+	}
+	if provider == "" || model == "" {
+		return mobiletransport.SessionRow{}, fmt.Errorf("provider %q has no model %q", choice.Provider, choice.Model)
+	}
+	if _, err := m.router.Resolve(provider, model); err != nil {
+		return mobiletransport.SessionRow{}, fmt.Errorf("%s/%s is not available: %w", provider, model, err)
+	}
+	if err := m.client.SetSessionRoute(ctx, sessionID, string(provider), model); err != nil {
+		return mobiletransport.SessionRow{}, err
+	}
+	row, err := m.sessionRow(ctx, sessionID)
+	if err != nil {
+		return mobiletransport.SessionRow{}, err
+	}
+	if m.sessions != nil {
+		session, err := m.sessions.Resolve(ctx, sdk.Input{SessionID: sessionID})
+		if err != nil {
+			log.Printf("mobile: apply model choice to open session %s: %v", sessionID, err)
+		} else {
+			applySessionModel(session, provider, model, m.keysFor(provider))
+		}
+	}
+	return row, nil
+}
+
+func (m modelStore) SessionModel(ctx context.Context, sessionID string) (mobiletransport.ModelChoice, bool, error) {
+	row, found, err := m.client.GetSession(ctx, sessionID)
+	if err != nil || !found || row.Provider == "" {
+		return mobiletransport.ModelChoice{}, false, err
+	}
+	return mobiletransport.ModelChoice{Provider: row.Provider, Model: row.Model}, true, nil
+}
+
+func (m modelStore) sessionRow(ctx context.Context, sessionID string) (mobiletransport.SessionRow, error) {
+	row, found, err := m.client.GetSession(ctx, sessionID)
+	if err != nil {
+		return mobiletransport.SessionRow{}, err
+	}
+	if !found {
+		return mobiletransport.SessionRow{ID: sessionID}, nil
+	}
+	return mobiletransport.SessionRow{
+		ID: row.ID, Title: row.Title, Provider: row.Provider, Model: row.Model,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+	}, nil
+}
+
+// keysFor is the key pool the runtime holds for a provider, so a live session
+// can be switched to the phone's choice with a usable key.
+func (m modelStore) keysFor(provider sdk.ProviderID) *sdk.KeyPool {
+	config, err := m.router.Provider(provider)
+	if err != nil {
+		return nil
+	}
+	return config.Keys
+}
+
+func hasModel(router *sdk.Router, provider sdk.ProviderID, model string) bool {
+	for _, candidate := range router.Models(provider) {
+		if candidate.ID == model {
+			return true
+		}
+	}
+	return false
+}
+
+func applySessionModel(session *sdk.Session, provider sdk.ProviderID, model string, keys *sdk.KeyPool) {
+	if err := session.SetProvider(provider, keys); err != nil {
+		log.Printf("mobile: set provider %s on %s: %v", provider, session.ID(), err)
+		return
+	}
+	if err := session.SetModel(model); err != nil {
+		log.Printf("mobile: set model %s on %s: %v", model, session.ID(), err)
+	}
 }
 
 // historyStore narrows the D1 client to what the phone's history endpoints
@@ -235,10 +370,53 @@ func (m *mobileRuntime) PublishOutput(ctx context.Context, output sdk.Output) {
 	if output.SessionID == "" || text == "" {
 		return
 	}
+	// One turn in D1 per turn on the wire. The same answer is reported twice for
+	// some providers: once as the content event and again on the terminal one,
+	// so the second report only clears the bookkeeping.
+	terminal := output.Trace != nil && output.Trace.Stage == sdk.TraceResponse
+	key := output.SessionID + "\x00" + text
+	if !m.turns.take(key, terminal) {
+		return
+	}
 	jobID := output.Metadata["mobile_job_id"]
 	if err := m.client.AppendTurn(ctx, output.SessionID, "model", "main", jobID, text); err != nil {
 		log.Printf("mobile: mirror turn to D1 session=%s: %v", output.SessionID, err)
+		m.turns.forget(key)
 	}
+}
+
+// turnMirror keeps one D1 row per finished turn. The sdk reports the same answer
+// twice for some providers (a content event, then the terminal one), and a later
+// turn may legitimately repeat the same text, so the key is cleared as soon as
+// the terminal event has had its say.
+type turnMirror struct {
+	mu   sync.Mutex
+	seen map[string]bool
+}
+
+func (m *turnMirror) take(key string, terminal bool) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.seen == nil {
+		m.seen = map[string]bool{}
+	}
+	if m.seen[key] {
+		if terminal {
+			delete(m.seen, key)
+		}
+		return false
+	}
+	m.seen[key] = true
+	if terminal {
+		delete(m.seen, key)
+	}
+	return true
+}
+
+func (m *turnMirror) forget(key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.seen, key)
 }
 
 func (m *mobileRuntime) mirrorUserTurn(input sdk.Input) func(context.Context) error {

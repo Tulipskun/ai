@@ -209,3 +209,77 @@ func fakeRequest(ip, auth string) *http.Request {
 	r.Header.Set("CF-Connecting-IP", ip)
 	return r
 }
+
+type ramCache struct{ token string }
+
+func (c *ramCache) Get() string        { return c.token }
+func (c *ramCache) Adopt(token string) { c.token = token }
+
+type countingVerifier struct {
+	calls  int
+	reject bool
+}
+
+func (v *countingVerifier) VerifyToken(context.Context, string) error {
+	v.calls++
+	if v.reject {
+		return ErrTokenRejected
+	}
+	return nil
+}
+
+func TestGateReusesCachedTokenWithoutAskingTheWorkerAgain(t *testing.T) {
+	verifier := &countingVerifier{}
+	cache := &ramCache{}
+	gate := NewGate(GateConfig{Verify: verifier, Cache: cache})
+
+	first := gate.Check(integrationRequest("good-token"))
+	if !first.Allowed {
+		t.Fatalf("first handshake = %+v, want allowed", first)
+	}
+	if verifier.calls != 1 {
+		t.Fatalf("verifier calls after first handshake = %d, want 1", verifier.calls)
+	}
+	cache.Adopt("good-token")
+	second := gate.Check(integrationRequest("good-token"))
+	if !second.Allowed || second.Reason != "cached token" {
+		t.Fatalf("second handshake = %+v, want allowed from cache", second)
+	}
+	if verifier.calls != 1 {
+		t.Fatalf("verifier calls = %d, want the cached token to skip the Worker", verifier.calls)
+	}
+}
+
+func TestGateStillRejectsOtherTokensWhenOneIsCached(t *testing.T) {
+	verifier := &countingVerifier{reject: true}
+	cache := &ramCache{token: "good-token"}
+	gate := NewGate(GateConfig{Verify: verifier, Cache: cache})
+
+	decision := gate.Check(integrationRequest("wrong-token"))
+	if decision.Allowed || decision.Status != http.StatusUnauthorized {
+		t.Fatalf("wrong token decision = %+v, want 401", decision)
+	}
+	if verifier.calls != 1 {
+		t.Fatalf("verifier calls = %d, want the wrong token checked", verifier.calls)
+	}
+	for i := 0; i < defaultMaxFails-1; i++ {
+		gate.Check(integrationRequest("wrong-token"))
+	}
+	locked := gate.Check(integrationRequest("wrong-token"))
+	if locked.Status != http.StatusTooManyRequests {
+		t.Fatalf("after %d failures status = %d, want 429", defaultMaxFails, locked.Status)
+	}
+}
+
+func TestGateDoesNotCacheAnUnverifiedToken(t *testing.T) {
+	verifier := &countingVerifier{reject: true}
+	cache := &ramCache{}
+	gate := NewGate(GateConfig{Verify: verifier, Cache: cache})
+
+	if gate.Check(integrationRequest("guess")).Allowed {
+		t.Fatal("rejected token was allowed")
+	}
+	if got := cache.Get(); got != "" {
+		t.Fatalf("cache = %q, want it to stay empty", got)
+	}
+}

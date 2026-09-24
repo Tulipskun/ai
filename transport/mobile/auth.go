@@ -21,8 +21,10 @@ package mobile
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -33,6 +35,15 @@ import (
 // Verifier answers "is this D1 token good?".
 type Verifier interface {
 	VerifyToken(ctx context.Context, token string) error
+}
+
+// TokenCache is the RAM copy of the one token a phone has already handed over.
+// A token that matches it is trusted without another Worker round trip, so a
+// verified phone keeps working while the Worker is briefly unreachable and the
+// daemon still owns nothing on disk (REQ-046(3), CON-012).
+type TokenCache interface {
+	Get() string
+	Adopt(string)
 }
 
 // ErrTokenRejected marks a wrong credential, which is the only case that counts
@@ -48,6 +59,7 @@ const (
 // GateConfig tunes the handshake check and the lockout schedule.
 type GateConfig struct {
 	Verify       Verifier
+	Cache        TokenCache
 	MaxFails     int
 	BasePenalty  time.Duration
 	MaxPenalty   time.Duration
@@ -123,6 +135,10 @@ func (g *Gate) Check(r *http.Request) Decision {
 	if wait := g.lockedUntil(key); wait > 0 {
 		return Decision{Status: http.StatusTooManyRequests, RetryAfter: wait, Reason: "too many failed token attempts"}
 	}
+	if cached := g.cfg.Cache.Get(); cached != "" && subtle.ConstantTimeCompare([]byte(cached), []byte(token)) == 1 {
+		g.succeed(key)
+		return Decision{Allowed: true, Status: http.StatusOK, Token: token, Reason: "cached token"}
+	}
 
 	err := g.cfg.Verify.VerifyToken(r.Context(), token)
 	switch {
@@ -131,14 +147,24 @@ func (g *Gate) Check(r *http.Request) Decision {
 		return Decision{Allowed: true, Status: http.StatusOK, Token: token, Reason: "ok"}
 	case errors.Is(err, ErrTokenRejected):
 		fails := g.fail(key)
+		logRejected(key, token, fails, "token ไม่ผ่าน")
 		if fails >= g.cfg.MaxFails {
 			return Decision{Status: http.StatusTooManyRequests, RetryAfter: g.PenaltyFor(fails), Fails: fails,
 				Reason: "token ผิดเกินลิมิต — ลองอีกครั้งหลังหมดเวลาล็อก"}
 		}
 		return Decision{Status: http.StatusUnauthorized, Fails: fails, Reason: "token ไม่ผ่าน"}
 	default:
+		logRejected(key, token, 0, "ตรวจ token ไม่ได้: "+err.Error())
 		return Decision{Status: http.StatusServiceUnavailable, Reason: "ตรวจ token ไม่ได้ (ข้อมูลชั่วคราว)"}
 	}
+}
+
+// logRejected records who was turned away and why, so an operator can see a
+// 401/503 loop in the daemon log. Only a digest of the token is ever written.
+func logRejected(key, token string, fails int, reason string) {
+	sum := sha256.Sum256([]byte(token))
+	log.Printf("mobile: handshake rejected addr=%s token=%s… fails=%d: %s",
+		key, hex.EncodeToString(sum[:4]), fails, reason)
 }
 
 // Write renders a rejection with Retry-After. The body never echoes the token.

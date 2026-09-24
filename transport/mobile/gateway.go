@@ -130,7 +130,7 @@ func New(cfg Config) *Transport {
 	}
 	t := &Transport{
 		cfg:    cfg,
-		gate:   NewGate(GateConfig{Verify: cfg.Verifier}),
+		gate:   NewGate(GateConfig{Verify: cfg.Verifier, Cache: cfg.Tokens}),
 		subs:   map[string]map[subscriber]struct{}{},
 		inputs: make(chan sdk.Input, cfg.InputBuffer),
 		upgrader: websocket.Upgrader{

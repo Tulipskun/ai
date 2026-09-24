@@ -810,3 +810,16 @@ Reason: REQ-046 กำหนดให้ daemon ทำงานต่อได�
 Impact: runtime/session_manager.go (AdoptProviders + repoint ใน Resolve), runtime/session_manager_test.go (เทสต์ใหม่), cmd/ai/main.go (reload callback เรียก AdoptProviders), requirements/functional.md (REQ-046(4)), requirements/changes.md
 Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 4m`; e2e จริง: ส่งข้อความจากมือถือจริงในแชท `work-1` (turn ที่เคยล้ม) แล้วได้คำตอบจริงจาก provider พร้อม user+model turn ใน D1
 Status: accepted
+
+CHANGE-062
+
+Date: 2026-09-24
+Type: revise
+Request: "AI ต้องไม่มี state ได้ token จาก AIxodia แล้วเอาไปยิงที่ D1 ถ้าได้ก็คือผ่าน แล้วก็เก็บ token ไว้ใน cache/ram เพื่อใช้ในครั้งต่อไป" + ผู้ใช้ยังเจอ 401 และไม่มีทางวินิจฉัยจาก log
+Conflict: REQ-046(2) เดิมบังคับให้ทุก handshake ต้องผ่าน Worker ก่อน upgrade
+Previous: `Gate.Check` ยิง `GET /api/ping` ทุกครั้งที่มี handshake (Worker ช้า/ล่ม = 503 ทั้งที่เคยผ่านแล้ว) และไม่ log การปฏิเสธเลย จึงไม่มีหลักฐานว่า 401 มาจาก header ขาด/ผิดรูป/ผิด token/ถูกล็อก
+New: `GateConfig.Cache` (TokenCache = RAM ที่ `d1store.MemoryToken` เป็นเจ้าของ) ให้ fast path: token ที่ตรงกับที่แคชไว้ผ่านทันทีด้วย constant-time compare โดยไม่ยิง Worker; token อื่นยังต้องผ่าน Worker และถูก adopt เมื่อผ่าน; token ที่ไม่ผ่านถูก log เป็น `addr + sha256(token)[:4] + fails + เหตุผล` (ไม่มี token เต็มใน log) — daemon ยังไม่มี credential บนดิสก์และ restart ต้องรอมือถือ�่ง token ใหม่เหมือนเดิม
+Reason: เป็นการทำตามเจตนาของสเปก (stateless, verify-then-cache) และแก้อาการ 401 ที่วินิจฉัยไม่ได้ โดยไม่ผ่อน security: token อื่นยังต้องผ่าน Worker และ lockout เดิมยังอยู่
+Impact: transport/mobile/auth.go (TokenCache, fast path, logRejected), transport/mobile/gateway.go (ส่ง Tokens เป็น Cache), transport/mobile/auth_test.go (เทสต์ cache hit ไม่ยิง Worker / token อื่นยัง 401+429 / token ที่ไม่ผ่านไม่ถูกแคช), requirements/functional.md (REQ-046(2)), requirements/changes.md
+Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 4m`; e2e: handshake แรกผ่าน Worker แล้ว hydrate, handshake ที่สองในทันทีตอบผ่าน cache (turn สำเร็จทั้งสองครั้ง), มือถือจริง+emulator ขึ้น `● ออนไลน์`
+Status: accepted

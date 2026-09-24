@@ -11,22 +11,32 @@ func TestRouterResolvesLogicalProviderAndModelToAdapter(t *testing.T) {
 	r.Register(ModelRoute{Provider: ProviderOpenRouter, Model: "gemini-3.5", Adapter: AdapterGemini})
 	r.Register(ModelRoute{Provider: ProviderOpenCode, Model: "opus", Adapter: AdapterAnthropic})
 
-	cases := []struct { provider ProviderID; model string; adapter AdapterID }{
+	cases := []struct {
+		provider ProviderID
+		model    string
+		adapter  AdapterID
+	}{
 		{ProviderOpenRouter, "gpt-5", AdapterOpenAI},
 		{ProviderOpenRouter, "gemini-3.5", AdapterGemini},
 		{ProviderOpenCode, "opus", AdapterAnthropic},
 	}
 	for _, tc := range cases {
 		route, err := r.Resolve(tc.provider, tc.model)
-		if err != nil { t.Fatalf("Resolve() error = %v", err) }
-		if route.Adapter != tc.adapter { t.Fatalf("adapter = %q, want %q", route.Adapter, tc.adapter) }
+		if err != nil {
+			t.Fatalf("Resolve() error = %v", err)
+		}
+		if route.Adapter != tc.adapter {
+			t.Fatalf("adapter = %q, want %q", route.Adapter, tc.adapter)
+		}
 	}
 }
 
 func TestRouterRequiresExplicitProvider(t *testing.T) {
 	r := NewRouter()
 	r.Register(ModelRoute{Provider: ProviderOpenRouter, Model: "gpt-5", Adapter: AdapterOpenAI})
-	if _, err := r.Resolve("", "gpt-5"); err == nil { t.Fatal("Resolve() expected an error for empty provider") }
+	if _, err := r.Resolve("", "gpt-5"); err == nil {
+		t.Fatal("Resolve() expected an error for empty provider")
+	}
 }
 
 func TestSessionPinsKeyIndex(t *testing.T) {
@@ -34,11 +44,17 @@ func TestSessionPinsKeyIndex(t *testing.T) {
 	s1 := NewSession(SessionConfig{ID: "s1", Provider: ProviderOpenRouter, Model: "gpt-5", KeyIndex: 0}, pool)
 	s2 := NewSession(SessionConfig{ID: "s2", Provider: ProviderOpenRouter, Model: "gemini-3.5", KeyIndex: 1}, pool)
 	k1, err := s1.APIKey()
-	if err != nil || k1 != "key-1" { t.Fatalf("session 1 key = %q, err=%v", k1, err) }
+	if err != nil || k1 != "key-1" {
+		t.Fatalf("session 1 key = %q, err=%v", k1, err)
+	}
 	k2, err := s2.APIKey()
-	if err != nil || k2 != "key-2" { t.Fatalf("session 2 key = %q, err=%v", k2, err) }
+	if err != nil || k2 != "key-2" {
+		t.Fatalf("session 2 key = %q, err=%v", k2, err)
+	}
 	current, err := pool.Current()
-	if err != nil || current != "key-1" { t.Fatalf("pool current = %q, err=%v", current, err) }
+	if err != nil || current != "key-1" {
+		t.Fatalf("pool current = %q, err=%v", current, err)
+	}
 }
 
 func TestFilterFreeModels(t *testing.T) {
@@ -63,11 +79,11 @@ func TestFilterFreeModels(t *testing.T) {
 }
 
 type headerCaptureLister struct {
-	got map[string]string
+	got    map[string]string
 	models []Model
 }
 
-func (f *headerCaptureLister) Name() string { return "capture" }
+func (f *headerCaptureLister) Name() string               { return "capture" }
 func (f *headerCaptureLister) WithAPIKey(string) Provider { return f }
 func (f *headerCaptureLister) WithHeaders(h map[string]string) Provider {
 	got := make(map[string]string, len(h))
@@ -85,13 +101,17 @@ func (f *headerCaptureLister) Stream(context.Context, Request) (<-chan Event, er
 	close(ch)
 	return ch, nil
 }
-func (f *headerCaptureLister) ListModels(context.Context, string) ([]Model, error) { return f.models, nil }
+func (f *headerCaptureLister) ListModels(context.Context, string) ([]Model, error) {
+	return f.models, nil
+}
 
 func TestRefreshModelsAppliesCustomHeaders(t *testing.T) {
 	r := NewRouter()
 	r.RegisterProvider(ProviderConfig{ID: "p1", Adapter: AdapterOpenAI, Keys: NewKeyPool("k"), Headers: map[string]string{"X-Title": "ai"}})
 	adapter := &headerCaptureLister{models: []Model{{ID: "m"}}}
-	if err := r.RefreshModels(context.Background(), "p1", adapter); err != nil { t.Fatal(err) }
+	if err := r.RefreshModels(context.Background(), "p1", adapter); err != nil {
+		t.Fatal(err)
+	}
 	if adapter.got["X-Title"] != "ai" {
 		t.Fatalf("custom headers not applied: %v", adapter.got)
 	}

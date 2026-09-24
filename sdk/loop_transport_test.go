@@ -34,7 +34,7 @@ func TestLoopRoutesOutputOnlyToMatchingSource(t *testing.T) {
 	discord := &routedTestDisplay{source: "discord"}
 	telegram := &routedTestDisplay{source: "telegram"}
 	loop := &HarnessLoop{
-		Client: newLoopTestClient(),
+		Client:         newLoopTestClient(),
 		ResolveSession: func(context.Context, Input) (*Session, error) { return session, nil },
 		Displays:       []Display{discord, telegram},
 		DisplayTimeout: time.Second,
@@ -66,7 +66,7 @@ func TestLoopSerializesConcurrentTurnsForSameSession(t *testing.T) {
 	keys := NewKeyPool("test-key")
 	session := NewSession(SessionConfig{ID: "web:conversation:1", Provider: ProviderOpenRouter, Model: "model", KeyIndex: 0}, keys)
 	loop := &HarnessLoop{
-		Client: newLoopTestClient(),
+		Client:         newLoopTestClient(),
 		ResolveSession: func(context.Context, Input) (*Session, error) { return session, nil },
 	}
 

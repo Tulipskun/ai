@@ -771,3 +771,16 @@ Reason: ผู้ใช้ต้องการ daemon ที่รีสตา�
 Impact: transport/mobile/ (ใหม่: auth.go, gateway.go, tunnel.go + tests), runtime/d1store/ (ใหม่: client.go, sync.go + tests), transport/config.go (mobile block ใน entry.json), runtime/provider_manager.go (Reload หลัง hydrate), cmd/ai/main.go (wire mobile + hydrate callback), index.md (module map), requirements/functional.md (REQ-046), requirements/constraints.md (CON-012)
 Validation: unit (`go test ./... -timeout 3m` ครอบคลุม handshake/lockout/hydrate/push/ขนาดเกิน limit/ไม่มี token), `go vet ./...`, `git diff --check`; integration ต้องเช็คกับ Worker จริงว่า 401 เมื่อไม่มี header, 429 เมื่อผิดครบ 5 ครั้ง, และ turn เขียนลง D1 ตามลำดับ
 Status: accepted
+
+CHANGE-059
+
+Date: 2026-09-24
+Type: revise (remove product surface)
+Request: "ส่วนของ daemon ไม่ต้องทำ CLI หรือ Discord แล้ว พวกคำสั่ง ai update อะไรก็ไม่ต้องทำแล้ว ให้ gateway มีแค่ผ่าน url tunnel อย่างเดียว"
+Conflict: REQ-011 (entry.json เดินมี transport หลายแบบ), REQ-025/026 (attachment boundary ผ่าน Discord), REQ-031/035/036/039/040/041/044 (พฤติกรรม Discord ทั้งหมด), REQ-043 (`ai update` blue-green), REQ-045 (ส่วนที่อ้าง Discord display), CON-001 (`config/entry.json` เป็นแหล่ง transport config) — ทั้งหมดนี้ถูกยกเลิก/แทนที่ ไม่ใช่การเปลี่ยนแค่ implementation
+Previous: `ai` เป็น harness สายตัว: `ai start` (daemon + PID/log/green handover), `ai daemon [--standby]`, `ai cli` (interactive TUI), `ai discord`, `ai browser`, `ai system`, `ai update`, `ai stop`, `ai uninstall`; transports = CLI + Discord; Discord gateway มี slash commands, actor panels, attachments, liveness/heartbeat, session mapping; release pipeline ผลิต Linux arm64 binary + checksums เพื่อ self-update
+New: REQ-047 — process เดียวคือ daemon ที่ serve `transport/mobile` ผ่าน Cloudflare quick tunnel และมี handshake 2 ขั้นตาม REQ-046; runtime state (config + session) อยู่ D1 ตาม REQ-046/CON-012; CON-013 ห้ามคืน transport/คำสั่งที่ถอดโดยไม่มี spec change ใหม่; โค้ด `transport/cli/`, `transport/discord/`, `cmd/ai/cli.go`, `cmd/ai/command.go`, `cmd/ai/update*.go`, `cmd/ai/uninstall.go` ถูกลบ; `config/entry.json` เหลือบล็อก `mobile` เดียว; workflow release เปลี่ยนเป็น build+test เท่านั้น (ไม่ publish สำหรับ self-update)
+Reason: ผู้ใช้ต้องการ single-purpose daemon ที่ AIxodia เป็น client เดียว — CLI/Discord เป็น surface ที่ไม่ได้ใช้และเป็นภาระดูแล (slash commands, actor display, attachments, liveness); self-update ซับซ้อนและผูก state/pid/handoff ที่ไม่จำเป็นกับ daemon ที่ stateless แล้ว
+Impact: transport/discord/ (ลบ 26 ไฟล์), transport/cli/ (ลบ 11 ไฟล์), cmd/ai/{cli,command,update*,uninstall}.go (ลบ), cmd/ai/main.go (dispatch + wiring เหลือ daemon+tunnel), cmd/ai/attachments.go (Discord attachment wiring ถูกถอด; filestore/tools ยังอยู่), transport/config.go (Config = Mobile), .github/workflows/release.yml (build/test only), scripts/{install.sh,dc-keepalive.sh} (ถูกถอด), index.md, README.md, INSTALL.md, docs/, workflow.md, AGENTS.md (start-here routes), requirements/{functional,constraints,decisions}.md
+Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 3m`, `git diff --check`; ยืนยันว่า `grep -ri discord` ไม่เหลือในโค้ด/เอกสาร และ `ai` รันแล้วตอบผ่าน tunnel ได้จริง
+Status: accepted

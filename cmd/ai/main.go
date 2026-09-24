@@ -1,13 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -19,428 +17,39 @@ import (
 	"github.com/Tulipskun/ai/sdk"
 	"github.com/Tulipskun/ai/tools"
 	"github.com/Tulipskun/ai/transport"
-	clitransport "github.com/Tulipskun/ai/transport/cli"
-	discordtransport "github.com/Tulipskun/ai/transport/discord"
 )
 
 var version = "dev"
 
+// main runs the daemon and nothing else (REQ-047, CHANGE-059): the CLI, the
+// Discord bot and every maintenance command (update/stop/uninstall/system/
+// browser/discord) were removed with their transport. Runtime configuration and
+// session state live in Cloudflare D1, so there is nothing left to configure
+// from a local command.
 func main() {
-	command, err := parseCommand(os.Args[1:])
-	if errors.Is(err, errHelp) {
-		printUsage(os.Stdout)
-		return
+	args := os.Args[1:]
+	if len(args) > 0 {
+		switch args[0] {
+		case "daemon":
+			args = args[1:]
+		case "version", "-version", "--version":
+			fmt.Printf("ai %s\n", version)
+			return
+		default:
+			log.Fatalf("ai: unknown command %q — this binary only runs the daemon (try `ai` or `ai daemon`)", args[0])
+		}
 	}
-	if err != nil {
-		printUsage(os.Stderr)
+	if len(args) > 0 {
+		log.Fatalf("ai: daemon takes no arguments (got %q)", args[0])
+	}
+	if err := runDaemon(); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatal(err)
 	}
-	switch command {
-	case commandStart:
-		if err := runBackground(); err != nil {
-			log.Fatal(err)
-		}
-	case commandCLI:
-		if err := runCLI(); err != nil && !errors.Is(err, context.Canceled) {
-			log.Fatal(err)
-		}
-	case commandDiscord:
-		if err := runDiscordConfig(os.Args[2:]); err != nil {
-			log.Fatal(err)
-		}
-	case commandBrowser:
-		if err := runBrowserConfig(os.Args[2:]); err != nil {
-			log.Fatal(err)
-		}
-	case commandSystem:
-		if err := runSystemConfig(os.Args[2:]); err != nil {
-			log.Fatal(err)
-		}
-	case commandUpdate:
-		if err := runUpdate(os.Args[2:]); err != nil {
-			log.Fatal(err)
-		}
-	case commandDaemon:
-		if isStandbyDaemonArgs(os.Args[1:]) {
-			if err := runDaemonStandby(); err != nil && !errors.Is(err, context.Canceled) {
-				log.Fatal(err)
-			}
-			return
-		}
-		if err := runDaemon(); err != nil && !errors.Is(err, context.Canceled) {
-			log.Fatal(err)
-		}
-	case commandStop:
-		if err := runStop(); err != nil {
-			log.Fatal(err)
-		}
-	case commandUninstall:
-		if err := runUninstall(); err != nil {
-			log.Fatal(err)
-		}
-	}
 }
 
-func runDiscordConfig(args []string) error {
-	state, err := stateRoot()
-	if err != nil {
-		return err
-	}
-	path := filepath.Join(state, transport.DefaultConfigPath)
-	current, err := transport.LoadConfig(path)
-	if err != nil {
-		return err
-	}
-	if len(args) == 1 && args[0] == "disable" {
-		current.Discord.Enabled = false
-		if err := transport.SaveConfig(path, current); err != nil {
-			return err
-		}
-		fmt.Printf("Discord disabled. Config: %s\n", path)
-		return nil
-	}
-	if len(args) != 0 {
-		return errors.New("discord: usage is 'ai discord' or 'ai discord disable'")
-	}
-	reader := bufio.NewReader(os.Stdin)
-	token, err := prompt(reader, "Discord token: ")
-	if err != nil {
-		return err
-	}
-	ownerID, err := prompt(reader, "Discord owner ID: ")
-	if err != nil {
-		return err
-	}
-	if token == "" {
-		return errors.New("discord: token cannot be empty")
-	}
-	if ownerID == "" {
-		return errors.New("discord: owner ID cannot be empty")
-	}
-	current.Discord.Token = token
-	current.Discord.OwnerID = ownerID
-	current.Discord.Enabled = true
-	if err := transport.SaveConfig(path, current); err != nil {
-		return err
-	}
-	fmt.Printf("Discord config saved to %s\n", path)
-	return nil
-}
-
-func prompt(reader *bufio.Reader, label string) (string, error) {
-	fmt.Print(label)
-	value, err := reader.ReadString('\n')
-	if err != nil && !errors.Is(err, os.ErrClosed) && len(value) == 0 {
-		return "", err
-	}
-	return strings.TrimSpace(value), nil
-}
-func promptDefault(reader *bufio.Reader, label, def string) (string, error) {
-	value, err := prompt(reader, fmt.Sprintf("%s [%s]: ", label, def))
-	if err != nil {
-		return "", err
-	}
-	if value == "" {
-		return def, nil
-	}
-	return value, nil
-}
-func promptBool(reader *bufio.Reader, label string, def bool) (bool, error) {
-	hint := "y/n"
-	if def {
-		hint = "Y/n"
-	} else {
-		hint = "y/N"
-	}
-	value, err := prompt(reader, fmt.Sprintf("%s (%s): ", label, hint))
-	if err != nil {
-		return false, err
-	}
-	if value == "" {
-		return def, nil
-	}
-	switch strings.ToLower(value) {
-	case "y", "yes", "true", "1":
-		return true, nil
-	case "n", "no", "false", "0":
-		return false, nil
-	}
-	return false, fmt.Errorf("browser: answer y or n for %q", label)
-}
-func runSystemConfig(args []string) error {
-	state, err := stateRoot()
-	if err != nil {
-		return err
-	}
-	path := filepath.Join(state, runtime.DefaultSystemConfigPath)
-	if len(args) >= 1 && args[0] == "clear" {
-		if err := runtime.SaveSystemConfig(path, runtime.SystemConfig{}); err != nil {
-			return err
-		}
-		fmt.Printf("System prompt cleared, using built-in default. Config: %s\n", path)
-		return nil
-	}
-	if len(args) >= 2 && args[0] == "set" {
-		text := strings.TrimSpace(strings.Join(args[1:], " "))
-		if text == "" {
-			return errors.New("system: usage is 'ai system set <prompt>'")
-		}
-		if err := runtime.SaveSystemConfig(path, runtime.SystemConfig{SystemPrompt: text}); err != nil {
-			return err
-		}
-		fmt.Printf("System prompt saved to %s\n", path)
-		return nil
-	}
-	if len(args) != 0 {
-		return errors.New("system: usage is 'ai system', 'ai system set <prompt>' or 'ai system clear'")
-	}
-	fmt.Printf("Source: %s\n\n%s\n", systemPromptSource(), systemPrompt(nil))
-	return nil
-}
-
-func runBrowserConfig(args []string) error {
-	state, err := stateRoot()
-	if err != nil {
-		return err
-	}
-	path := filepath.Join(state, runtime.DefaultBrowserConfigPath)
-	current, err := runtime.LoadBrowserConfig(path)
-	if err != nil {
-		return err
-	}
-	if len(args) == 1 && args[0] == "disable" {
-		current.Enabled = false
-		if err := runtime.SaveBrowserConfig(path, current); err != nil {
-			return err
-		}
-		fmt.Printf("Browser automation disabled. Config: %s\n", path)
-		return nil
-	}
-	if len(args) != 0 {
-		return errors.New("browser: usage is 'ai browser' or 'ai browser disable'")
-	}
-	reader := bufio.NewReader(os.Stdin)
-	enabled, err := promptBool(reader, "Enable browser automation", current.Enabled)
-	if err != nil {
-		return err
-	}
-	current.Enabled = enabled
-	mode, err := promptDefault(reader, "Mode (managed/attach)", current.Mode)
-	if err != nil {
-		return err
-	}
-	mode = strings.ToLower(strings.TrimSpace(mode))
-	if mode != "managed" && mode != "attach" {
-		return fmt.Errorf("browser: mode must be managed or attach")
-	}
-	current.Mode = mode
-	if mode == "attach" {
-		endpoint, err := promptDefault(reader, "CDP endpoint (http://127.0.0.1:9222)", current.CDPEndpoint)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(endpoint) == "" {
-			return errors.New("browser: cdp_endpoint is required in attach mode")
-		}
-		current.CDPEndpoint = strings.TrimSpace(endpoint)
-	} else {
-		browser, err := promptDefault(reader, "Browser (auto/chrome/chromium/edge/firefox)", current.Browser)
-		if err != nil {
-			return err
-		}
-		browser = strings.ToLower(strings.TrimSpace(browser))
-		switch browser {
-		case "auto", "chrome", "chromium", "edge", "firefox":
-		default:
-			return fmt.Errorf("browser must be one of auto, chrome, chromium, edge, firefox")
-		}
-		current.Browser = browser
-		profile, err := promptDefault(reader, "Profile directory", current.Profile)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(profile) == "" {
-			return errors.New("browser: profile is required in managed mode")
-		}
-		current.Profile = strings.TrimSpace(profile)
-		headless, err := promptBool(reader, "Headless", current.Headless)
-		if err != nil {
-			return err
-		}
-		current.Headless = headless
-		if !headless {
-			dispDef := current.Display
-			if strings.TrimSpace(dispDef) == "" {
-				dispDef = ":1"
-			}
-			disp, err := promptDefault(reader, "Display", dispDef)
-			if err != nil {
-				return err
-			}
-			current.Display = strings.TrimSpace(disp)
-		} else {
-			current.Display = ""
-		}
-	}
-	allowPrivate, err := promptBool(reader, "Allow private pages", current.AllowPrivate)
-	if err != nil {
-		return err
-	}
-	current.AllowPrivate = allowPrivate
-	if err := runtime.SaveBrowserConfig(path, current); err != nil {
-		return err
-	}
-	fmt.Printf("Browser config saved to %s\n", path)
-	return nil
-}
-func runBackground() error {
-	app, err := installedBinary()
-	if err != nil {
-		return err
-	}
-	return startDaemon(app)
-}
-func startDaemon(app string) error {
-	state, err := stateRoot()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(state, 0o755); err != nil {
-		return err
-	}
-	lockPath := filepath.Join(state, "ai.start.lock")
-	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return errors.New("ai start is already in progress")
-		}
-		return err
-	}
-	defer func() { _ = lock.Close(); _ = os.Remove(lockPath) }()
-	pidPath := filepath.Join(state, "ai.pid")
-	if data, err := os.ReadFile(pidPath); err == nil {
-		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && processAlive(pid) {
-			return fmt.Errorf("ai is already running (pid %d)", pid)
-		}
-		_ = os.Remove(pidPath)
-	}
-	logFile, err := os.OpenFile(filepath.Join(state, "ai.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return err
-	}
-	cmd := exec.Command(app, "daemon")
-	cmd.Dir = state
-	cmd.Env = os.Environ()
-	cmd.Stdin = nil
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
-		_ = logFile.Close()
-		return err
-	}
-	pid := cmd.Process.Pid
-	if pid <= 0 {
-		_ = logFile.Close()
-		_ = cmd.Process.Kill()
-		_ = cmd.Process.Release()
-		return fmt.Errorf("failed to start ai daemon: invalid pid %d", pid)
-	}
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
-		_ = cmd.Process.Kill()
-		_ = logFile.Close()
-		_ = cmd.Process.Release()
-		return err
-	}
-	_ = logFile.Close()
-	_ = cmd.Process.Release()
-	fmt.Printf("[ai] started (pid %d)\n", pid)
-	return nil
-}
-func stopDaemon(_ string) error {
-	state, err := stateRoot()
-	if err != nil {
-		return err
-	}
-	pidPath := filepath.Join(state, "ai.pid")
-	data, err := os.ReadFile(pidPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid <= 0 {
-		_ = os.Remove(pidPath)
-		return nil
-	}
-	if !processAlive(pid) {
-		_ = os.Remove(pidPath)
-		return nil
-	}
-	killBrowserChild(state)
-	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return err
-	}
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if !processAlive(pid) {
-			_ = os.Remove(pidPath)
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if processAlive(pid) {
-		_ = syscall.Kill(pid, syscall.SIGKILL)
-	}
-	_ = os.Remove(pidPath)
-	return nil
-}
-
-func killBrowserChild(state string) {
-	if strings.TrimSpace(state) == "" {
-		return
-	}
-	data, err := os.ReadFile(filepath.Join(state, "browser.pid"))
-	if err != nil {
-		return
-	}
-	bpid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || bpid <= 0 {
-		return
-	}
-	_ = syscall.Kill(bpid, syscall.SIGTERM)
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if !processAlive(bpid) {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if processAlive(bpid) {
-		_ = syscall.Kill(bpid, syscall.SIGKILL)
-	}
-}
-func runStop() error {
-	state, err := stateRoot()
-	if err != nil {
-		return err
-	}
-	wasRunning := daemonRunning()
-	if err := stopDaemon(""); err != nil {
-		return err
-	}
-	if daemonRunning() {
-		return fmt.Errorf("ai daemon is still running")
-	}
-	if !wasRunning {
-		fmt.Printf("[ai] not running (state: %s)\n", state)
-		return nil
-	}
-	fmt.Printf("[ai] stopped\n")
-	return nil
-}
+// runDaemon is the whole product surface: state root, config, provider
+// catalogue, sessions, worker tools, the mobile tunnel gateway, and the harness
+// loop that ties them together.
 func runDaemon() error {
 	state, err := stateRoot()
 	if err != nil {
@@ -454,37 +63,21 @@ func runDaemon() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	consumeUpdateHandoff(state)
-	return run(ctx, false)
+	return run(ctx)
 }
 
-// isStandbyDaemonArgs detects the blue-green probation boot
-// (`ai daemon --standby`, REQ-043): green boots without Discord intake
-// connect, on shadow pid/heartbeat paths, until cutover marks it live.
-func isStandbyDaemonArgs(args []string) bool {
-	for _, a := range args {
-		if strings.TrimSpace(a) == greenStandbyArg {
-			return true
-		}
+// stateRoot is where the local materialization of D1 state lives: config files
+// and one SQLite file per session (CON-012 keeps that shape; D1 is the
+// authoritative copy and this directory is a cache that can be wiped).
+func stateRoot() (string, error) {
+	home, err := os.UserHomeDir()
+	if err == nil && strings.TrimSpace(home) != "" {
+		return filepath.Join(home, ".local", "share", "ai"), nil
 	}
-	return false
+	return "", errors.New("ai: cannot resolve the home directory for the state root")
 }
-func runCLI() error {
-	state, err := stateRoot()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(state, 0o755); err != nil {
-		return err
-	}
-	if err := os.Chdir(state); err != nil {
-		return err
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	return run(ctx, true)
-}
-func run(ctx context.Context, cliOnly bool) error {
+
+func run(ctx context.Context) error {
 	state, err := stateRoot()
 	if err != nil {
 		return err
@@ -493,15 +86,10 @@ func run(ctx context.Context, cliOnly bool) error {
 		return err
 	}
 	providerConfigPath := filepath.Join(state, runtime.DefaultProviderConfigPath)
-	providerFile, err := runtime.LoadProviderFile(providerConfigPath)
-	if err != nil {
-		return err
-	}
 	rt, err := runtime.Load(providerConfigPath)
 	if err != nil {
 		return err
 	}
-	providerManager := runtime.NewProviderManager(providerConfigPath, rt, providerFile)
 	maxOutputTokens, err := envInt("AI_MAX_OUTPUT_TOKENS")
 	if err != nil {
 		return err
@@ -527,8 +115,8 @@ func run(ctx context.Context, cliOnly bool) error {
 	if err != nil {
 		return err
 	}
-	if !cliOnly && !transportConfig.Discord.Enabled && !transportConfig.Mobile.Enabled {
-		log.Printf("no Discord or mobile transport enabled; configure config/entry.json")
+	if !transportConfig.Mobile.Enabled {
+		return errors.New("mobile transport is disabled; set mobile.enabled in config/entry.json")
 	}
 	// The attachment file store is opened from config/attachment.json under the
 	// state root (CON-011) and shared by both directions of the file boundary:
@@ -563,72 +151,12 @@ func run(ctx context.Context, cliOnly bool) error {
 	for _, provider := range rt.ProviderConfigs {
 		providerKeys[provider.ID] = provider.Keys
 	}
-	if cliOnly {
-		return runInteractiveCLI(ctx, sessions, agent, providerManager, providerKeys, rt, maxOutputTokens)
-	}
 	var sources []sdk.InputSource
 	var displays []sdk.Display
-	if transportConfig.Discord.Enabled {
-		discord, err := discordtransport.NewGateway(transportConfig.Discord.Token)
-		if err != nil {
-			return err
-		}
-		defer discord.Close(context.Background())
-		discord.ConfigureAuthorizedUser(transportConfig.Discord.OwnerID)
-		discord.ConfigureSessionList(sessions.ListSessions)
-		discord.ConfigureSessionResolver(sessions.Resolve)
-		modelSettings := &discordtransport.ModelSettingsHandler{ResolveSession: sessions.Resolve, SessionForChannel: discord.SessionIDForChannel, Providers: rt.Providers, ProviderKeys: providerKeys, Models: func(ctx context.Context, provider sdk.ProviderID) ([]sdk.Model, error) {
-			models := rt.Router.Models(provider)
-			if len(models) == 0 {
-				if err := rt.RefreshProvider(ctx, provider); err != nil {
-					return nil, err
-				}
-				models = rt.Router.Models(provider)
-			}
-			return models, nil
-		}}
-		discord.ConfigureModelSettings(modelSettings)
-		discord.ConfigureNewChannel(&discordtransport.NewChannelHandler{ResolveSession: sessions.Resolve, SessionForChannel: discord.SessionIDForChannel, ProviderKeys: providerKeys})
-		discord.ConfigureWorkspaceHandler(&discordtransport.WorkspaceHandler{ResolveSession: sessions.Resolve, SessionForChannel: discord.SessionIDForChannel})
-		discord.ConfigureProviderSettings(&discordtransport.ProviderSettingsHandler{Adapters: providerManager.Adapters(), Upsert: func(ctx context.Context, name, adapter, endpoint, apiKey string, freeOnly bool) error {
-			if err := providerManager.Upsert(ctx, name, adapter, endpoint, apiKey, freeOnly); err != nil {
-				return err
-			}
-			config, err := rt.Router.Provider(sdk.ProviderID(name))
-			if err != nil {
-				return err
-			}
-			sessions.RegisterProvider(config.ID, config.Keys)
-			providerKeys[config.ID] = config.Keys
-			modelSettings.Providers = providerManager.Providers()
-			modelSettings.ProviderKeys = providerKeys
-			return nil
-		}})
-		discord.ConfigureStop(agent.Interrupt)
-		// Both directions of the Discord file boundary run on the same store the
-		// worker registry reads (REQ-025, REQ-026). A nil store is the disabled
-		// case: inbound files then stay readable as reference notes and outbound
-		// uploads are refused with a safe indicator instead of being dropped.
-		discord.ConfigureAttachments(attachmentDiscordStore(attachmentStore), attachmentDownloadClient(attachmentConfig), discordtransport.AttachmentFileConfig{
-			DownloadTimeout:  attachmentConfig.DownloadTimeout,
-			UploadTimeout:    attachmentConfig.UploadTimeout,
-			MaxSendFileBytes: attachmentConfig.MaxSendFileBytes,
-			MaxSendFileCount: attachmentConfig.MaxSendFileCount,
-		})
-		// Bot-connectivity timestamp (REQ-044): operator-visible liveness
-		// signal under the state root, like ai.pid and ai.log (CON-001).
-		// No external supervisor watches it (CHANGE-055) — automated repair
-		// ends at the in-process gateway watchdog reopen.
-		discord.ConfigureHeartbeatPath(filepath.Join(state, "discord.heartbeat"))
-		if err := discord.Start(ctx); err != nil {
-			return err
-		}
-		sources = append(sources, discord)
-		displays = append(displays, discord)
-	}
-	// Mobile transport (REQ-046). Stateless: the daemon holds no credential
-	// until a phone connects, then the verified D1 token (memory only) unlocks
-	// the runtime state stored in Cloudflare D1.
+	// Mobile transport (REQ-046/REQ-047): the daemon's only gateway. It is
+	// reachable exclusively through the Cloudflare quick tunnel, authenticated
+	// with the D1 token a phone presents, and it hydrates runtime state from D1
+	// on the first verified connection.
 	mobileRT, err := newMobileRuntime(state, mobileSessionDir(state), runtimeMobileConfig{
 		workerBase:   transportConfig.Mobile.WorkerBase,
 		syncConfig:   transportConfig.Mobile.SyncConfig,
@@ -637,58 +165,22 @@ func run(ctx context.Context, cliOnly bool) error {
 	if err != nil {
 		return err
 	}
-	if mobileRT != nil {
-		listen := transportConfig.Mobile.Listen
-		if listen == "" {
-			listen = "127.0.0.1:18789"
-		}
-		if transportConfig.Mobile.Tunnel && transportConfig.Mobile.PublicListen != "" {
-			listen = transportConfig.Mobile.PublicListen
-		}
-		stop, err := mobileRT.transport.StartHTTP(ctx, listen)
-		if err != nil {
-			return err
-		}
-		defer stop()
-		if transportConfig.Mobile.SyncConfig || transportConfig.Mobile.SyncSessions {
-			defer mobileRT.PushState(context.WithoutCancel(ctx))
-		}
-		sources = append(sources, mobileRT.transport)
-		displays = append(displays, mobileDisplayAdapter{mobile: mobileRT})
-		log.Printf("mobile transport listening on %s (tunnel=%v, worker=%s)", listen,
-			transportConfig.Mobile.Tunnel, transportConfig.Mobile.WorkerBase)
+	listen := transportConfig.Mobile.Listen
+	if listen == "" {
+		listen = "127.0.0.1:18789"
 	}
-	cli := clitransport.New(os.Stdin, os.Stdout)
-	cli.Command = func(ctx context.Context, args []string) (string, error) {
-		if len(args) == 0 {
-			if len(providerManager.Providers()) == 0 {
-				return "No providers configured. Use: /provider add <name> <adapter> <url> <api-key>", nil
-			}
-			return "Providers: " + joinProviderIDs(providerManager.Providers()), nil
-		}
-		if args[0] != "add" || (len(args) != 5 && len(args) != 6) {
-			return "Usage: /provider add <name> <adapter> <url> <api-key> [free]", nil
-		}
-		name := args[1]
-		freeOnly := len(args) == 6 && strings.EqualFold(args[5], "free")
-		if len(args) == 6 && !freeOnly {
-			return "Usage: /provider add <name> <adapter> <url> <api-key> [free]", nil
-		}
-		if err := providerManager.Upsert(ctx, name, args[2], args[3], args[4], freeOnly); err != nil {
-			return "", err
-		}
-		config, err := rt.Router.Provider(sdk.ProviderID(name))
-		if err != nil {
-			return "", err
-		}
-		sessions.RegisterProvider(config.ID, config.Keys)
-		providerKeys[config.ID] = config.Keys
-		return fmt.Sprintf("Provider %q saved and model catalogue refreshed. Configure AI_MODEL to use it.", name), nil
+	stop, err := mobileRT.transport.StartHTTP(ctx, listen)
+	if err != nil {
+		return err
 	}
-	if transportConfig.CLI.Enabled {
-		sources = append(sources, cli)
-		displays = append(displays, clitransport.NewDisplay(os.Stdout))
+	defer stop()
+	if transportConfig.Mobile.SyncConfig || transportConfig.Mobile.SyncSessions {
+		defer mobileRT.PushState(context.WithoutCancel(ctx))
 	}
+	sources = append(sources, mobileRT.transport)
+	displays = append(displays, mobileDisplayAdapter{mobile: mobileRT})
+	log.Printf("ai daemon ready: mobile gateway on %s (tunnel=%v worker=%s)", listen,
+		transportConfig.Mobile.Tunnel, transportConfig.Mobile.WorkerBase)
 	if len(sources) == 0 {
 		return fmt.Errorf("no transports enabled; configure config/entry.json")
 	}
@@ -701,24 +193,9 @@ func run(ctx context.Context, cliOnly bool) error {
 	}, Displays: displays, DisplayTimeout: 10 * time.Second, OnTurnError: func(input sdk.Input, err error) {
 		log.Printf("turn failed source=%s session=%s: %v", input.Source, input.SessionID, err)
 	}}
-	err = loop.Run(ctx)
-	if app, e := installedBinary(); e == nil {
-		if state, e := stateRoot(); e == nil {
-			_ = os.Remove(filepath.Join(state, "ai.pid"))
-		}
-		_ = app
-	}
-	return err
+	return loop.Run(ctx)
 }
-func processAlive(pid int) bool { return pid > 0 && syscall.Kill(pid, 0) == nil }
 
-// newAgent builds the shared agent and injects the attachment store into its
-// worker tool registry. The registry is the single tool executor both roles use
-// — the SDK hands the same executor to a worker — so one injection gives
-// list_attachments, read_attachment, and describe_attachment to the worker while
-// the Main Agent sees only planning, orchestration, and read-only context
-// tools, because planning filters by name (REQ-016, REQ-017, REQ-026, CHANGE-054). A nil store leaves the
-// tools present but reporting that no store is configured.
 func newAgent(client *sdk.RouterClient, workspace string, browser *tools.BrowserClient, allowPrivate bool, jobsPath string, attachments tools.AttachmentStore) (*sdk.Agent, error) {
 	return newAgentWithWorkspaces(client, workspace, browser, allowPrivate, jobsPath, attachments, nil)
 }
@@ -752,12 +229,14 @@ func newAgentWithWorkspaces(client *sdk.RouterClient, workspace string, browser 
 	// Leave an empty worker prompt to the SDK so CLI and SDK defaults stay aligned.
 	return agent, nil
 }
+
 func envOr(name, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 		return value
 	}
 	return fallback
 }
+
 func systemPrompt(agent *sdk.Agent) string {
 	base := ""
 	if value := strings.TrimSpace(os.Getenv("AI_SYSTEM_PROMPT")); value != "" {
@@ -802,6 +281,7 @@ func defaultSystemPrompt(agent *sdk.Agent) string {
 	b.WriteString("After tool results, summarize briefly what you did. Match the user's language.\n")
 	return b.String()
 }
+
 func resolveWorkspace() (string, error) {
 	raw := strings.TrimSpace(os.Getenv("AI_WORKSPACE"))
 	if raw == "" {
@@ -817,6 +297,7 @@ func resolveWorkspace() (string, error) {
 	}
 	return path, nil
 }
+
 func expandHome(path string) string {
 	if path == "~" {
 		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
@@ -831,6 +312,7 @@ func expandHome(path string) string {
 	}
 	return path
 }
+
 func envInt(name string) (int, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {

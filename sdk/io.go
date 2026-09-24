@@ -24,9 +24,16 @@ type Output struct {
 	Metadata  map[string]string
 }
 
-type InputSource interface { Receive(context.Context) (<-chan Input, error) }
-type Display interface { Display(context.Context, Output) error }
-type RoutedDisplay interface { Display; Source() string }
+type InputSource interface {
+	Receive(context.Context) (<-chan Input, error)
+}
+type Display interface {
+	Display(context.Context, Output) error
+}
+type RoutedDisplay interface {
+	Display
+	Source() string
+}
 type DisplayFunc func(context.Context, Output) error
 
 func (f DisplayFunc) Display(ctx context.Context, output Output) error { return f(ctx, output) }
@@ -34,12 +41,18 @@ func (f DisplayFunc) Display(ctx context.Context, output Output) error { return 
 const defaultDisplayTimeout = 10 * time.Second
 
 func DispatchDisplay(parent context.Context, display Display, output Output, timeout time.Duration) {
-	if display == nil { return }
+	if display == nil {
+		return
+	}
 	if routed, ok := display.(RoutedDisplay); ok {
 		source := routed.Source()
-		if source != "" && source != output.Source { return }
+		if source != "" && source != output.Source {
+			return
+		}
 	}
-	if timeout <= 0 { timeout = defaultDisplayTimeout }
+	if timeout <= 0 {
+		timeout = defaultDisplayTimeout
+	}
 	run := func() {
 		defer func() { _ = recover() }()
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), timeout)

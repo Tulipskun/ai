@@ -10,9 +10,9 @@ import (
 )
 
 type SessionInfo struct {
-	ID       string
-	Provider ProviderID
-	Model    string
+	ID        string
+	Provider  ProviderID
+	Model     string
 	UpdatedAt time.Time
 	TurnCount int
 }

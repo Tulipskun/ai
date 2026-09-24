@@ -17,3 +17,10 @@ DEC-004 — Software project ใหม่ที่ AI สร้างต้อ�
 เหตุผล: repository ของโปรเจคต้องมี specification ของตัวเองตั้งแต่เริ่ม implementation
 
 DEC-005 — Main Agent เป็น senior ที่อ่านโค้ด/บริบทเองผ่าน read-only tools และสั่ง worker (junior) ด้วย delegation contract ที่มี evidence กำกับ; `ai update` เป็น blue-green flow เดียวที่ binary ตัวเดียวเป็นเจ้าของ end-to-end โดยไม่มี supervisor ภายนอก (CHANGE-054, CHANGE-055)
+- D-011 (2026-09-24) — Single-surface daemon: mobile-over-tunnel only. CLI,
+  Discord and self-update are removed (CHANGE-059) because AIxodia is the only
+  client, the daemon is stateless (REQ-046) so it needs no handoff machinery,
+  and every removed surface was untested dead weight. The cost is loss of a
+  fallback operator channel: a phone becomes the only way to talk to the
+  harness, so `GET /api/node` + the tunnel URL must stay reliable, and config
+  changes go through D1 rather than a local command.

@@ -6,7 +6,7 @@ Requirements belong to the project repository, not to the AI's memory. An implem
 
 ## Files
 
-- `product.md` — product purpose and goals.
+- `product.md` — product purpose and goals (single daemon, mobile gateway only).
 - `functional.md` — stable functional requirements with IDs.
 - `constraints.md` — non-negotiable technical and product constraints.
 - `decisions.md` — accepted decisions that affect implementation.

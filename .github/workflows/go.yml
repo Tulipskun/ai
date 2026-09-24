@@ -14,7 +14,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
+      - run: go build ./...
       - run: go test ./... -timeout 2m
       - run: go vet ./...
-      - run: bash -n scripts/install.sh
-      - run: bash -n scripts/dc-keepalive.sh

@@ -1,1 +1,0 @@
-Model selection is session state. The Discord runtime must not require `AI_MODEL` at startup or inject an environment model into every request. The session's persisted model is the source of truth unless a request explicitly overrides it. A new session may remain unset until its transport sets a model.

@@ -49,12 +49,12 @@ func TestBuildReplaysResponsesReasoning(t *testing.T) {
 
 func TestParseResponsePreservesReasoning(t *testing.T) {
 	r := ResponsesResponse{Model: "deepseek-v4-flash", Output: []struct {
-		Type string `json:"type"`
-		ID string `json:"id"`
-		CallID string `json:"call_id"`
-		Name string `json:"name"`
+		Type      string `json:"type"`
+		ID        string `json:"id"`
+		CallID    string `json:"call_id"`
+		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
-		Content []struct {
+		Content   []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`

@@ -1,1 +1,0 @@
-The installed executable is separate from application state.

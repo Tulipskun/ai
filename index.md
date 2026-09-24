@@ -14,24 +14,17 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 ```text
 .
 ├── bin/               empty placeholder (reserved install target)
-├── cmd/ai/            CLI entry, daemon wiring, agent/registry construction
+├── cmd/ai/            daemon entry + agent/registry construction (single gateway)
 ├── cmd/demo/          throwaway provider-smoke prototype (not shipped)
 ├── sdk/               provider-neutral Agent runtime, sessions, orchestration
 ├── tools/             worker execution tools (files, shell, jobs, browser)
 ├── runtime/           config load, session manager, provider wiring, filestore
-├── transport/         CLI + Discord + mobile transports (display only, no core logic)
-│   ├── cli/
-│   ├── discord/
-│   └── mobile/        AIxodia WebSocket transport: 2-step handshake, lockout
+├── transport/         mobile transport only (display only, no core logic)
+│   └── mobile/        AIxodia WebSocket gateway over a Cloudflare quick tunnel
 ├── requirements/      source of truth for product behavior (read before code)
-├── docs/              install, layout, session settings, CLI mode notes
-│   └── docs/superpowers/  archived early-Sept design notes (non-normative;
-│                           requirements/ is authoritative)
 ├── skills/            contributor procedures (spec management, checklists)
-├── scripts/           install / supervisor helpers
 ├── AGENTS.md          contributor entry: spec-first rule + module discipline
-├── workflow.md        turn pipeline diagram (Harness → Agent → Router → tool)
-├── README.md          install, config layout, provider/browser/attachment help
+├── README.md          daemon operation + config layout + AIxodia gateway help
 └── index.md           this file (hand-maintained, concise)
 ```
 
@@ -53,9 +46,7 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 | Outbound file-send intents (worker → transport) | `sdk/outbound_attachments.go` |
 | Runtime config + session manager | `runtime/session_manager.go`, `runtime/*.go` |
 | Stateless runtime state ↔ Cloudflare D1 | `runtime/d1store/client.go`, `runtime/d1store/sync.go` |
-| Self-update: blue-green only, single-binary handoff | `cmd/ai/update.go`, `cmd/ai/update_handoff.go`, `cmd/ai/update_bluegreen.go`, `cmd/ai/update_bluegreen_test.go`, `tools/jobs.go` |
-| Discord transport + trace display | `transport/discord/gateway.go`, `transport/discord/gateway_liveness.go`, `transport/discord/actor_trace_display.go` |
-| Mobile transport (AIxodia) + auth gate | `transport/mobile/gateway.go`, `transport/mobile/auth.go`, `transport/mobile/tunnel.go`, `cmd/ai/mobile.go` |
+| Mobile gateway (AIxodia, the only transport) + auth gate | `transport/mobile/gateway.go`, `transport/mobile/auth.go`, `transport/mobile/tunnel.go`, `transport/mobile/proxy.go`, `cmd/ai/mobile.go` |
 
 ## Key files (what each owns)
 
@@ -105,12 +96,15 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
   file; keep the change in the owning module (no cross-module refactors).
 - Provider / catalogue / retry issue: `sdk/router_client.go` +
   `sdk/routing.go` + `sdk/providers/<adapter>/`.
+- Daemon start / gateway / tunnel / D1 hydration: `cmd/ai/main.go`,
+  `cmd/ai/mobile.go`, `transport/mobile/`, `runtime/d1store/`.
 - Session persist / workspace / settings: `sdk/session_db.go` +
   `sdk/session_settings.go` + `runtime/session_manager.go`.
-- Discord display / trace / command: `transport/discord/` only; core
-  orchestration and canonical contracts stay untouched.
-- Mobile app (AIxodia) display / command: `transport/mobile/` plus
-  `cmd/ai/mobile.go`; core orchestration stays untouched.
+- Config or state that must come from D1 instead of disk: `runtime/d1store/`
+  keys `config:*` and `sessions/<id>` (CON-012).
+- Mobile app (AIxodia) gateway: `transport/mobile/` plus `cmd/ai/mobile.go`;
+  core orchestration stays untouched. There is no other transport
+  (CHANGE-059).
 - Stateless runtime state / D1 sync: `runtime/d1store/` only (CON-012 keeps
   `config/*.json` and one SQLite file per session as the local materialization).
 - New spec conflict: update `requirements/` + append `requirements/changes.md`

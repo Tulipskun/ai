@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,16 +14,15 @@ import (
 	"github.com/Tulipskun/ai/runtime/filestore"
 	"github.com/Tulipskun/ai/sdk"
 	"github.com/Tulipskun/ai/tools"
-	discordtransport "github.com/Tulipskun/ai/transport/discord"
 )
 
 // These tests cover only the wiring: config in, one store out, and that store
 // reaching the worker registry and the Discord transport. Nothing here opens a
 // network connection, calls a provider, or talks to Discord.
 
-// wiringStore opens a real attachment store under a temp state root through the
+// storeForTest opens a real attachment store under a temp state root through the
 // same entry point the runtime uses.
-func wiringStore(t *testing.T) (*runtime.AttachmentConfig, *filestore.Store, string) {
+func storeForTest(t *testing.T) (*runtime.AttachmentConfig, *filestore.Store, string) {
 	t.Helper()
 	state := t.TempDir()
 	cfg, err := runtime.LoadAttachmentConfig(filepath.Join(state, runtime.DefaultAttachmentConfigPath))
@@ -41,23 +39,19 @@ func wiringStore(t *testing.T) (*runtime.AttachmentConfig, *filestore.Store, str
 	return &cfg, store, state
 }
 
-func TestAttachmentRuntimeWiringKeepsOneStore(t *testing.T) {
-	_, store, state := wiringStore(t)
+func TestAttachmentRuntimeWiringReachesTheRegistry(t *testing.T) {
+	_, store, state := storeForTest(t)
 	toolStore := attachmentToolStore(store)
-	discordStore := attachmentDiscordStore(store)
-	if toolStore == nil || discordStore == nil {
-		t.Fatal("an opened store must reach both consumers")
+	if toolStore == nil {
+		t.Fatal("an opened store must reach the worker registry")
 	}
-	// A reference written through the transport's view is readable through the
-	// worker's view, with the same session key. That identity is the whole
-	// contract between the two directions (REQ-025, REQ-026).
-	ref, err := discordStore.PutWithContentType(context.Background(), "discord:channel:1", "design.txt", "", bytes.NewReader([]byte("plan text")))
+	ref, err := toolStore.PutWithContentType(context.Background(), "mobile:session:1", "design.txt", "", bytes.NewReader([]byte("plan text")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader, meta, err := toolStore.Get(context.Background(), "discord:channel:1", ref.ID)
+	reader, meta, err := toolStore.Get(context.Background(), "mobile:session:1", ref.ID)
 	if err != nil {
-		t.Fatalf("the registry cannot read what the transport stored: %v", err)
+		t.Fatalf("the registry cannot read back what it stored: %v", err)
 	}
 	defer reader.Close()
 	body, err := io.ReadAll(reader)
@@ -73,103 +67,9 @@ func TestAttachmentRuntimeWiringKeepsOneStore(t *testing.T) {
 	}
 }
 
-func TestAttachmentWiringNilStoreStaysNil(t *testing.T) {
-	// A typed nil must not become a non-nil interface: every consumer tests for
-	// nil, and a wrapped nil would turn "disabled" into a panic.
-	if attachmentToolStore(nil) != nil {
-		t.Fatal("the tool adapter wrapped a nil store")
-	}
-	if attachmentDiscordStore(nil) != nil {
-		t.Fatal("the transport adapter wrapped a nil store")
-	}
-	store, err := (runtime.AttachmentConfig{Enabled: false, Root: filestore.DefaultRoot}).Open(t.TempDir())
-	if err != nil || store != nil {
-		t.Fatalf("a disabled config must open nothing: store=%v err=%v", store, err)
-	}
-	if attachmentToolStore(store) != nil || attachmentDiscordStore(store) != nil {
-		t.Fatal("a disabled config must leave both consumers nil")
-	}
-	// The cleanup start is a no-op for the same case rather than a goroutine
-	// that would panic on a nil store.
-	startAttachmentCleanup(context.Background(), nil, time.Millisecond)
-}
-
-func TestAttachmentDownloadClientAlwaysHasABudget(t *testing.T) {
-	// The default config leaves the transfer budgets unset, so the client must
-	// fall back instead of handing out a client with no deadline.
-	fallback := attachmentDownloadClient(runtime.AttachmentConfig{})
-	if fallback == nil || fallback.Timeout != runtime.DefaultAttachmentDownloadTimeout {
-		t.Fatalf("fallback client = %+v", fallback)
-	}
-	// Transport is left unset so the proxy-aware http.DefaultTransport applies.
-	if fallback.Transport != nil {
-		t.Fatalf("a custom transport would defeat the proxy-aware default: %#v", fallback.Transport)
-	}
-	cfg := runtime.AttachmentConfig{DownloadTimeout: 3 * time.Second}
-	client := attachmentDownloadClient(cfg)
-	if client.Timeout != 3*time.Second {
-		t.Fatalf("configured timeout = %v", client.Timeout)
-	}
-	// A negative value cannot survive validation, but the wiring must not
-	// produce a client that never expires just because someone built the struct
-	// by hand.
-	negative := attachmentDownloadClient(runtime.AttachmentConfig{DownloadTimeout: -time.Second})
-	if negative.Timeout <= 0 {
-		t.Fatalf("negative budget produced an unbounded client: %v", negative.Timeout)
-	}
-}
-
-func TestAttachmentWiringConfigFeedsBothSides(t *testing.T) {
-	// What the user writes in config/attachment.json has to be the number the
-	// transport and the store both use, or CON-001 is only half honoured.
-	state := t.TempDir()
-	path := filepath.Join(state, runtime.DefaultAttachmentConfigPath)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	content := `{"enabled":true,"root":"data/attachments","max_file_bytes":4096,"max_session_bytes":8192,"ttl":"2h","download_timeout":"4s","upload_timeout":"5m","max_send_file_bytes":2048,"max_send_file_count":3}`
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := runtime.LoadAttachmentConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := cfg.Open(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	limits := store.Limits()
-	if limits.MaxFileBytes != 4096 || limits.MaxSessionBytes != 8192 || limits.TTL != 2*time.Hour {
-		t.Fatalf("store limits = %+v", limits)
-	}
-	if cfg.DownloadTimeout != 4*time.Second || cfg.UploadTimeout != 5*time.Minute || cfg.MaxSendFileBytes != 2048 || cfg.MaxSendFileCount != 3 {
-		t.Fatalf("transfer budgets = %+v", cfg)
-	}
-	gateway, err := discordtransport.NewGateway("mock-token")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer gateway.Close(context.Background())
-	gateway.ConfigureAttachments(attachmentDiscordStore(store), attachmentDownloadClient(cfg), discordtransport.AttachmentFileConfig{
-		DownloadTimeout:  cfg.DownloadTimeout,
-		UploadTimeout:    cfg.UploadTimeout,
-		MaxSendFileBytes: cfg.MaxSendFileBytes,
-		MaxSendFileCount: cfg.MaxSendFileCount,
-	})
-	// The budget the config named is the budget the transport uses, and it is
-	// separate from the harness display timeout.
-	if client := attachmentDownloadClient(cfg); client.Timeout != 4*time.Second {
-		t.Fatalf("download client timeout = %v", client.Timeout)
-	}
-	if got := gateway.SessionIDForChannel("123"); got != "discord:channel:123" {
-		t.Fatalf("session routing changed by the attachment wiring: %q", got)
-	}
-}
-
 func TestNewAgentInjectsTheAttachmentStore(t *testing.T) {
 	client := sdk.NewRouterClient(sdk.NewRouter())
-	_, store, state := wiringStore(t)
+	_, store, state := storeForTest(t)
 	jobsPath := filepath.Join(state, "data", "jobs.json")
 	agent, err := newAgent(client, t.TempDir(), nil, false, jobsPath, store)
 	if err != nil {
@@ -242,7 +142,7 @@ func TestAttachmentToolsReachOnlyTheWorker(t *testing.T) {
 	// worker is offered all three: the same registry is the worker's executor,
 	// and planning filters the Main Agent's set by name (REQ-016, REQ-017).
 	state := t.TempDir()
-	_, store, _ := wiringStore(t)
+	_, store, _ := storeForTest(t)
 	workspace := t.TempDir()
 	router := sdk.NewRouter()
 	keys := sdk.NewKeyPool("test-key")

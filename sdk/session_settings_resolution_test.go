@@ -10,7 +10,7 @@ type settingsCaptureAdapter struct {
 	last Request
 }
 
-func (a *settingsCaptureAdapter) Name() string { return a.name }
+func (a *settingsCaptureAdapter) Name() string               { return a.name }
 func (a *settingsCaptureAdapter) WithAPIKey(string) Provider { return a }
 func (a *settingsCaptureAdapter) Generate(_ context.Context, req Request) (Response, error) {
 	a.last = req
@@ -36,10 +36,18 @@ func TestRouterClientRequestSettingsOverrideSessionDefaults(t *testing.T) {
 
 	requestTemperature := 0.9
 	resp, err := c.Generate(context.Background(), session, Request{Model: "request-model", Temperature: &requestTemperature, ThinkingLevel: ThinkingHigh})
-	if err != nil { t.Fatal(err) }
-	if resp.Model != "request-model" { t.Fatalf("model = %q", resp.Model) }
-	if adapter.last.Temperature == nil || *adapter.last.Temperature != requestTemperature { t.Fatalf("temperature = %v", adapter.last.Temperature) }
-	if adapter.last.ThinkingLevel != ThinkingHigh { t.Fatalf("thinking level = %q", adapter.last.ThinkingLevel) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Model != "request-model" {
+		t.Fatalf("model = %q", resp.Model)
+	}
+	if adapter.last.Temperature == nil || *adapter.last.Temperature != requestTemperature {
+		t.Fatalf("temperature = %v", adapter.last.Temperature)
+	}
+	if adapter.last.ThinkingLevel != ThinkingHigh {
+		t.Fatalf("thinking level = %q", adapter.last.ThinkingLevel)
+	}
 }
 
 func TestRouterClientUsesSessionSettingsWhenRequestOmitsThem(t *testing.T) {
@@ -52,8 +60,16 @@ func TestRouterClientUsesSessionSettingsWhenRequestOmitsThem(t *testing.T) {
 	session := NewSession(SessionConfig{ID: "s1", Provider: ProviderOpenRouter, Model: "session-model", Temperature: &temperature, ThinkingLevel: ThinkingMedium}, NewKeyPool("key"))
 
 	_, err := c.Generate(context.Background(), session, Request{})
-	if err != nil { t.Fatal(err) }
-	if adapter.last.Model != "session-model" { t.Fatalf("model = %q", adapter.last.Model) }
-	if adapter.last.Temperature == nil || *adapter.last.Temperature != temperature { t.Fatalf("temperature = %v", adapter.last.Temperature) }
-	if adapter.last.ThinkingLevel != ThinkingMedium { t.Fatalf("thinking level = %q", adapter.last.ThinkingLevel) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter.last.Model != "session-model" {
+		t.Fatalf("model = %q", adapter.last.Model)
+	}
+	if adapter.last.Temperature == nil || *adapter.last.Temperature != temperature {
+		t.Fatalf("temperature = %v", adapter.last.Temperature)
+	}
+	if adapter.last.ThinkingLevel != ThinkingMedium {
+		t.Fatalf("thinking level = %q", adapter.last.ThinkingLevel)
+	}
 }

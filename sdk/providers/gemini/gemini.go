@@ -14,13 +14,68 @@ import (
 	"github.com/Tulipskun/ai/sdk/providers/openai"
 )
 
-type Client struct{ BaseURL string; APIKey string; Headers map[string]string; HTTP *http.Client }
-func New(apiKey string) *Client { return &Client{BaseURL: "https://generativelanguage.googleapis.com/v1beta", APIKey: apiKey, HTTP: http.DefaultClient} }
-func (c *Client) WithAPIKey(key string) sdk.Provider { cp := *c; cp.APIKey = key; return &cp }
+type Client struct {
+	BaseURL string
+	APIKey  string
+	Headers map[string]string
+	HTTP    *http.Client
+}
+
+func New(apiKey string) *Client {
+	return &Client{BaseURL: "https://generativelanguage.googleapis.com/v1beta", APIKey: apiKey, HTTP: http.DefaultClient}
+}
+func (c *Client) WithAPIKey(key string) sdk.Provider      { cp := *c; cp.APIKey = key; return &cp }
 func (c *Client) WithBaseURL(baseURL string) sdk.Provider { cp := *c; cp.BaseURL = baseURL; return &cp }
-func (c *Client) WithHeaders(headers map[string]string) sdk.Provider { cp := *c; cp.Headers = cloneHeaders(headers); return &cp }
-func (c *Client) ListModels(ctx context.Context, apiKey string) ([]sdk.Model, error) {var cancel context.CancelFunc; ctx, cancel = context.WithTimeout(ctx, 30*time.Second); defer cancel(); key := apiKey; if key == "" { key = c.APIKey }; u := c.BaseURL + "/models"; if key != "" { u += "?key=" + url.QueryEscape(key) }; var r struct { Models []struct { Name string `json:"name"`; DisplayName string `json:"displayName"`; Supported []string `json:"supportedGenerationMethods"` } `json:"models"` }; if err := internal.DoJSON(ctx, c.http(), http.MethodGet, u, nil, nil, &r); err != nil { return nil, err }; models := make([]sdk.Model, 0, len(r.Models)); for _, item := range r.Models { id := strings.TrimPrefix(item.Name, "models/"); if id == "" { continue }; streaming := false; for _, method := range item.Supported { if method == "streamGenerateContent" { streaming = true; break } }; name := item.DisplayName; if name == "" { name = id }; models = append(models, sdk.Model{ID: id, Name: name, SupportsStreaming: streaming, SupportsTools: true, SupportsThinking: true, SupportsTemperature: true}) }; return models, nil }
+func (c *Client) WithHeaders(headers map[string]string) sdk.Provider {
+	cp := *c
+	cp.Headers = cloneHeaders(headers)
+	return &cp
+}
+func (c *Client) ListModels(ctx context.Context, apiKey string) ([]sdk.Model, error) {
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	key := apiKey
+	if key == "" {
+		key = c.APIKey
+	}
+	u := c.BaseURL + "/models"
+	if key != "" {
+		u += "?key=" + url.QueryEscape(key)
+	}
+	var r struct {
+		Models []struct {
+			Name        string   `json:"name"`
+			DisplayName string   `json:"displayName"`
+			Supported   []string `json:"supportedGenerationMethods"`
+		} `json:"models"`
+	}
+	if err := internal.DoJSON(ctx, c.http(), http.MethodGet, u, nil, nil, &r); err != nil {
+		return nil, err
+	}
+	models := make([]sdk.Model, 0, len(r.Models))
+	for _, item := range r.Models {
+		id := strings.TrimPrefix(item.Name, "models/")
+		if id == "" {
+			continue
+		}
+		streaming := false
+		for _, method := range item.Supported {
+			if method == "streamGenerateContent" {
+				streaming = true
+				break
+			}
+		}
+		name := item.DisplayName
+		if name == "" {
+			name = id
+		}
+		models = append(models, sdk.Model{ID: id, Name: name, SupportsStreaming: streaming, SupportsTools: true, SupportsThinking: true, SupportsTemperature: true})
+	}
+	return models, nil
+}
 func (c *Client) Name() string { return "gemini" }
+
 // build converts via the central OpenAI Responses interface:
 // sdk.Request -> OpenAI canonical -> Gemini native.
 func build(req sdk.Request) map[string]any {
@@ -101,16 +156,108 @@ func BuildFromOpenAI(openAIReq map[string]any) map[string]any {
 	}
 	return b
 }
-type functionCall struct { Name string `json:"name"`; Args map[string]any `json:"args"` }
-type part struct { Text string `json:"text"`; FunctionCall *functionCall `json:"functionCall"`; Thought bool `json:"thought"` }
-type candidate struct { Content struct { Parts []part `json:"parts"` } `json:"content"`; FinishReason string `json:"finishReason"` }
-type response struct { Candidates []candidate `json:"candidates"`; Usage struct { Prompt int `json:"promptTokenCount"`; Output int `json:"candidatesTokenCount"`; Total int `json:"totalTokenCount"`; Cached int `json:"cachedContentTokenCount"` } `json:"usageMetadata"` }
-func (c *Client) endpoint(model string, stream bool) string { method := "generateContent"; if stream { method = "streamGenerateContent" }; u := fmt.Sprintf("%s/models/%s:%s", c.BaseURL, url.PathEscape(model), method); if stream { u += "?alt=sse" }; return u }
-func (c *Client) Generate(ctx context.Context, req sdk.Request) (sdk.Response, error) { var r response; if err := internal.DoJSON(ctx, c.http(), http.MethodPost, c.endpoint(req.Model, false), c.headers(), build(req), &r); err != nil { return sdk.Response{}, err }; return ToOpenAIResponse(r, req.Model), nil }
+
+type functionCall struct {
+	Name string         `json:"name"`
+	Args map[string]any `json:"args"`
+}
+type part struct {
+	Text         string        `json:"text"`
+	FunctionCall *functionCall `json:"functionCall"`
+	Thought      bool          `json:"thought"`
+}
+type candidate struct {
+	Content struct {
+		Parts []part `json:"parts"`
+	} `json:"content"`
+	FinishReason string `json:"finishReason"`
+}
+type response struct {
+	Candidates []candidate `json:"candidates"`
+	Usage      struct {
+		Prompt int `json:"promptTokenCount"`
+		Output int `json:"candidatesTokenCount"`
+		Total  int `json:"totalTokenCount"`
+		Cached int `json:"cachedContentTokenCount"`
+	} `json:"usageMetadata"`
+}
+
+func (c *Client) endpoint(model string, stream bool) string {
+	method := "generateContent"
+	if stream {
+		method = "streamGenerateContent"
+	}
+	u := fmt.Sprintf("%s/models/%s:%s", c.BaseURL, url.PathEscape(model), method)
+	if stream {
+		u += "?alt=sse"
+	}
+	return u
+}
+func (c *Client) Generate(ctx context.Context, req sdk.Request) (sdk.Response, error) {
+	var r response
+	if err := internal.DoJSON(ctx, c.http(), http.MethodPost, c.endpoint(req.Model, false), c.headers(), build(req), &r); err != nil {
+		return sdk.Response{}, err
+	}
+	return ToOpenAIResponse(r, req.Model), nil
+}
 func parse(r response, model string) sdk.Response { return ToOpenAIResponse(r, model) }
-func (c *Client) Stream(ctx context.Context, req sdk.Request) (<-chan sdk.Event, error) { req.Stream = true; ch := make(chan sdk.Event, 16); go func() { defer close(ch); err := internal.SSE(ctx, c.http(), http.MethodPost, c.endpoint(req.Model, true), c.headers(), build(req), func(data []byte) error { var r response; if json.Unmarshal(data, &r) != nil { return nil }; if len(r.Candidates) == 0 { return nil }; for _, p := range r.Candidates[0].Content.Parts { if p.Text != "" { if p.Thought { ch <- sdk.Event{Type: sdk.EventReasoning, Reasoning: &sdk.ReasoningState{Text: p.Text}} } else { ch <- sdk.Event{Type: sdk.EventText, Text: p.Text} } }; if p.FunctionCall != nil { a, _ := json.Marshal(p.FunctionCall.Args); ch <- sdk.Event{Type: sdk.EventToolCall, ToolCall: &sdk.ToolCall{ID: fmt.Sprintf("gemini-%s", p.FunctionCall.Name), Name: p.FunctionCall.Name, Arguments: string(a)}} } }; if r.Candidates[0].FinishReason != "" { ch <- sdk.Event{Type: sdk.EventDone} }; return nil }); if err != nil { ch <- sdk.Event{Type: sdk.EventError, Err: err} } }(); return ch, nil }
-func (c *Client) headers() map[string]string { h := map[string]string{"x-goog-api-key": c.APIKey}; for k, v := range c.Headers { if v == "" || strings.EqualFold(k, "x-goog-api-key") { continue }; h[k] = v }; return h }
-func cloneHeaders(in map[string]string) map[string]string { if len(in) == 0 { return nil }; out := make(map[string]string, len(in)); for k, v := range in { out[k] = v }; return out }
+func (c *Client) Stream(ctx context.Context, req sdk.Request) (<-chan sdk.Event, error) {
+	req.Stream = true
+	ch := make(chan sdk.Event, 16)
+	go func() {
+		defer close(ch)
+		err := internal.SSE(ctx, c.http(), http.MethodPost, c.endpoint(req.Model, true), c.headers(), build(req), func(data []byte) error {
+			var r response
+			if json.Unmarshal(data, &r) != nil {
+				return nil
+			}
+			if len(r.Candidates) == 0 {
+				return nil
+			}
+			for _, p := range r.Candidates[0].Content.Parts {
+				if p.Text != "" {
+					if p.Thought {
+						ch <- sdk.Event{Type: sdk.EventReasoning, Reasoning: &sdk.ReasoningState{Text: p.Text}}
+					} else {
+						ch <- sdk.Event{Type: sdk.EventText, Text: p.Text}
+					}
+				}
+				if p.FunctionCall != nil {
+					a, _ := json.Marshal(p.FunctionCall.Args)
+					ch <- sdk.Event{Type: sdk.EventToolCall, ToolCall: &sdk.ToolCall{ID: fmt.Sprintf("gemini-%s", p.FunctionCall.Name), Name: p.FunctionCall.Name, Arguments: string(a)}}
+				}
+			}
+			if r.Candidates[0].FinishReason != "" {
+				ch <- sdk.Event{Type: sdk.EventDone}
+			}
+			return nil
+		})
+		if err != nil {
+			ch <- sdk.Event{Type: sdk.EventError, Err: err}
+		}
+	}()
+	return ch, nil
+}
+func (c *Client) headers() map[string]string {
+	h := map[string]string{"x-goog-api-key": c.APIKey}
+	for k, v := range c.Headers {
+		if v == "" || strings.EqualFold(k, "x-goog-api-key") {
+			continue
+		}
+		h[k] = v
+	}
+	return h
+}
+func cloneHeaders(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
 
 // ToOpenAIResponse converts a native Gemini response into sdk.Response
 // through the central OpenAI Responses shape.
@@ -146,4 +293,9 @@ func ToOpenAIResponse(r response, model string) sdk.Response {
 	out.Cache = sdk.CacheInfo{Layer: "provider", Hit: usage.CacheReadTokens > 0}
 	return out
 }
-func (c *Client) http() *http.Client { if c.HTTP != nil { return c.HTTP }; return http.DefaultClient }
+func (c *Client) http() *http.Client {
+	if c.HTTP != nil {
+		return c.HTTP
+	}
+	return http.DefaultClient
+}

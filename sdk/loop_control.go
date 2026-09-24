@@ -35,7 +35,7 @@ var (
 
 // loopControlTracker counts tool executions inside one turn attempt.
 type loopControlTracker struct {
-	total      int
+	total       int
 	consecutive int
 }
 

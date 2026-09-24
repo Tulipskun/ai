@@ -1,27 +1,20 @@
-name: Release
+# Builds the daemon binary for Linux arm64 as a CI artifact.
+# There is no release/tag pipeline any more: `ai update` and the
+# install-from-release path were removed with the single-surface daemon
+# (REQ-047, CHANGE-059), so deployments are a normal `go build` + run.
+name: Build daemon
 
 on:
   push:
-    branches:
-      - main
-    tags:
-      - 'v*'
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag (default: auto-increment v1.N)'
-        required: false
-        default: ''
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.tag.outputs.name }}
-      sha: ${{ steps.tag.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -29,83 +22,16 @@ jobs:
           go-version-file: go.mod
       - name: Test
         run: go test ./... -timeout 2m
-      - name: Resolve release tag
-        id: tag
-        run: |
-          set -euo pipefail
-          git fetch --tags --force
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            tag="${{ github.ref_name }}"
-          elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
-            tag="${{ github.event.inputs.tag }}"
-          else
-            existing="$(git tag --points-at HEAD | grep -E '^v1\.[0-9]+$' | sort -V | tail -n 1 || true)"
-            if [[ -n "$existing" ]]; then
-              tag="$existing"
-            else
-              max="$(git tag -l 'v1.*' | sed -E 's/^v1\.//' | grep -E '^[0-9]+$' | sort -n | tail -n 1 || true)"
-              if [[ -z "$max" ]]; then next=0; else next=$((max + 1)); fi
-              tag="v1.$next"
-            fi
-          fi
-          echo "name=$tag" >> "$GITHUB_OUTPUT"
-          echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
-      - name: Build (linux arm64 only)
+      - name: Build (linux arm64)
         env:
           GOOS: linux
           GOARCH: arm64
           CGO_ENABLED: '0'
-          VERSION: ${{ steps.tag.outputs.name }}
         run: |
           mkdir -p dist
-          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o dist/ai-linux-arm64 ./cmd/ai
-          printf '%s\n' "${VERSION}" > dist/release-version.txt
-      - name: Upload binary
-        uses: actions/upload-artifact@v4
+          go build -trimpath -ldflags "-s -w -X main.version=${{ github.sha }}" -o dist/ai-linux-arm64 ./cmd/ai
+          sha256sum dist/ai-linux-arm64 | tee dist/checksums.txt
+      - uses: actions/upload-artifact@v4
         with:
           name: ai-linux-arm64
-          path: dist/ai-linux-arm64
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          pattern: ai-*
-          merge-multiple: true
-      - name: Prepare release assets
-        run: |
-          set -euo pipefail
-          chmod 0755 dist/ai-linux-arm64
-          (cd dist && sha256sum ai-linux-arm64 > checksums.txt)
-          cat dist/checksums.txt
-      - name: Publish GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.build.outputs.tag }}
-          SHA: ${{ needs.build.outputs.sha }}
-        run: |
-          set -euo pipefail
-          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
-            git tag "$TAG" "$SHA"
-            git push origin "$TAG"
-          fi
-          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release upload "$TAG" --repo "${{ github.repository }}" --clobber \
-              dist/ai-linux-arm64 dist/checksums.txt
-          else
-            gh release create "$TAG" --repo "${{ github.repository }}" \
-              --title "$TAG" \
-              --notes "Automated Linux arm64 build from main @ ${SHA}. Install with: curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | bash" \
-              dist/ai-linux-arm64 dist/checksums.txt
-          fi
-      - name: Show release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release view "${{ needs.build.outputs.tag }}" --repo "${{ github.repository }}"
+          path: dist/

@@ -3,19 +3,17 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
 	"time"
 
-	"github.com/Tulipskun/ai/runtime"
 	"github.com/Tulipskun/ai/runtime/filestore"
 	"github.com/Tulipskun/ai/tools"
-	discordtransport "github.com/Tulipskun/ai/transport/discord"
 )
 
 // This file owns the runtime wiring of the attachment file store: one store
-// opened from config/attachment.json, handed to the worker registry for reads
-// and to the Discord transport for intake writes and outbound uploads, plus the
-// TTL sweep that keeps the store bounded (REQ-025, REQ-026, CON-011).
+// opened from config/attachment.json and handed to the worker registry for
+// reads, plus the TTL sweep that keeps the store bounded (REQ-026, CON-011).
+// The Discord intake/upload side of the boundary was removed with the transport
+// (CHANGE-059); the mobile gateway stays text-only.
 //
 // Nothing here moves file content. Every consumer receives either the store
 // itself or an opaque reference, so the canonical text path stays byte-free
@@ -45,28 +43,6 @@ func attachmentToolStore(store *filestore.Store) tools.AttachmentStore {
 		return nil
 	}
 	return store
-}
-
-// attachmentDiscordStore is the same rule for the transport side of the
-// boundary, where the store receives inbound files and resolves outbound ones.
-func attachmentDiscordStore(store *filestore.Store) discordtransport.AttachmentStore {
-	if store == nil {
-		return nil
-	}
-	return store
-}
-
-// attachmentDownloadClient builds the HTTP client the transport uses to fetch
-// inbound attachments. The timeout is the transport's per-operation budget, so
-// a client with no deadline is never handed out: a stalled CDN must not be able
-// to hold an intake message open forever. Transport is left nil on purpose so
-// the standard proxy-aware default transport still applies.
-func attachmentDownloadClient(cfg runtime.AttachmentConfig) *http.Client {
-	timeout := cfg.DownloadTimeout
-	if timeout <= 0 {
-		timeout = runtime.DefaultAttachmentDownloadTimeout
-	}
-	return &http.Client{Timeout: timeout}
 }
 
 // startAttachmentCleanup runs the TTL sweep in the background for the life of

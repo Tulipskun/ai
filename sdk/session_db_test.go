@@ -62,14 +62,14 @@ func TestSessionDBRecordsAttemptAndUsageWithoutRawPayloads(t *testing.T) {
 	}
 
 	req := Request{
-		Provider:      "test",
-		Model:         "model",
-		SystemPrompt:  "system",
-		Messages:      []Turn{{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: "hello"}}}},
-		Tools:         []Tool{{Name: "read_file"}},
-		ThinkingLevel: ThinkingLow,
+		Provider:        "test",
+		Model:           "model",
+		SystemPrompt:    "system",
+		Messages:        []Turn{{Role: RoleUser, Content: []ContentPart{{Type: ContentText, Text: "hello"}}}},
+		Tools:           []Tool{{Name: "read_file"}},
+		ThinkingLevel:   ThinkingLow,
 		MaxOutputTokens: 100,
-		Stream:        true,
+		Stream:          true,
 	}
 	id, err := s.RecordRequest(1, req)
 	if err != nil {

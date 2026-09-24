@@ -7,7 +7,7 @@ import (
 )
 
 type normalToolTraceProvider struct {
-	calls   int
+	calls          int
 	seenToolResult bool
 }
 

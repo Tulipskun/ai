@@ -8,19 +8,10 @@ import (
 	"path/filepath"
 )
 
-type DiscordConfig struct {
-	Token   string `json:"token"`
-	OwnerID string `json:"owner_id"`
-	Enabled bool   `json:"enabled"`
-}
-
-type CLIConfig struct {
-	Enabled bool `json:"enabled"`
-}
-
 // MobileConfig points the daemon at the AIxodia Worker and the local listener a
-// Cloudflare quick tunnel publishes (REQ-046). It carries no credential: the
-// D1 token arrives in the phone's Authorization header and is held in memory.
+// Cloudflare quick tunnel publishes (REQ-046, REQ-047). It carries no
+// credential: the D1 token arrives in the phone's Authorization header and is
+// held in memory only (CON-012).
 type MobileConfig struct {
 	Enabled      bool   `json:"enabled"`
 	WorkerBase   string `json:"worker_base"`
@@ -32,10 +23,10 @@ type MobileConfig struct {
 	SyncSessions bool   `json:"sync_sessions"`
 }
 
+// Config is the whole entry config: one gateway, mobile over tunnel. The
+// Discord and CLI blocks were removed with their transports (CHANGE-059).
 type Config struct {
-	Discord DiscordConfig `json:"discord"`
-	CLI     CLIConfig     `json:"cli"`
-	Mobile  MobileConfig  `json:"mobile"`
+	Mobile MobileConfig `json:"mobile"`
 }
 
 const DefaultConfigPath = "config/entry.json"
@@ -54,12 +45,6 @@ func LoadConfig(path string) (Config, error) {
 	var config Config
 	if err := json.Unmarshal(data, &config); err != nil {
 		return Config{}, fmt.Errorf("transport: decode entry config %q: %w", path, err)
-	}
-	if config.Discord.Enabled && config.Discord.Token == "" {
-		return Config{}, errors.New("transport: discord token is required when Discord is enabled")
-	}
-	if config.Discord.Enabled && config.Discord.OwnerID == "" {
-		return Config{}, errors.New("transport: discord owner_id is required when Discord is enabled")
 	}
 	if config.Mobile.Enabled && config.Mobile.WorkerBase == "" {
 		return Config{}, errors.New("transport: mobile worker_base is required when mobile is enabled")

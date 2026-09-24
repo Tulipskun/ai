@@ -118,6 +118,7 @@ func filterFreeModels(models []Model, freeOnly bool) []Model {
 	}
 	return out
 }
+
 // isFreeModelID matches the free-tier naming of the gateways in use:
 // "-free" suffix (opencode Zen), ":free" suffix (OpenRouter-style,
 // e.g. NousResearch) and "free/" prefix used by some providers.

@@ -116,14 +116,6 @@ func (s *SessionDB) init() error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_attempts_session_created ON attempts(session_id, created_at);
 
-		CREATE TABLE IF NOT EXISTS session_discord_channels (
-			session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-			discord_channel_id TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			PRIMARY KEY(session_id, discord_channel_id)
-		);
-		CREATE INDEX IF NOT EXISTS idx_session_discord_channels_channel ON session_discord_channels(discord_channel_id);
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_session_discord_channels_unique_channel ON session_discord_channels(discord_channel_id);
 	`)
 	if err != nil {
 		return err

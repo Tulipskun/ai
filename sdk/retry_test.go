@@ -12,8 +12,8 @@ type retryTestError struct {
 	delay  time.Duration
 }
 
-func (e retryTestError) Error() string { return "rate limited" }
-func (e retryTestError) HTTPStatusCode() int { return e.status }
+func (e retryTestError) Error() string             { return "rate limited" }
+func (e retryTestError) HTTPStatusCode() int       { return e.status }
 func (e retryTestError) RetryAfter() time.Duration { return e.delay }
 
 func TestRetryDelayUsesProviderRetryAfter(t *testing.T) {

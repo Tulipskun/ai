@@ -41,10 +41,18 @@ func TestParseCommand(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := parseCommand(tt.args)
-			if got != tt.want { t.Fatalf("command = %v, want %v", got, tt.want) }
-			if tt.err != nil && err == nil { t.Fatal("expected an error") }
-			if tt.err == nil && err != nil { t.Fatalf("error = %v, want nil", err) }
-			if errors.Is(tt.err, errHelp) && !errors.Is(err, errHelp) { t.Fatalf("error = %v, want errHelp", err) }
+			if got != tt.want {
+				t.Fatalf("command = %v, want %v", got, tt.want)
+			}
+			if tt.err != nil && err == nil {
+				t.Fatal("expected an error")
+			}
+			if tt.err == nil && err != nil {
+				t.Fatalf("error = %v, want nil", err)
+			}
+			if errors.Is(tt.err, errHelp) && !errors.Is(err, errHelp) {
+				t.Fatalf("error = %v, want errHelp", err)
+			}
 		})
 	}
 }

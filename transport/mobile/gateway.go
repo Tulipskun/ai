@@ -91,6 +91,7 @@ type Config struct {
 	Verifier     Verifier
 	Hydrate      Hydrator
 	AnnounceURL  string // Worker base URL; when set, the tunnel URL is announced
+	WorkerBase   string // Worker base URL for the /api proxy, so the phone needs one address
 	InputBuffer  int
 }
 
@@ -390,6 +391,12 @@ func (t *Transport) StartHTTP(ctx context.Context, listen string) (func(), error
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", t.serveWS)
+	if t.cfg.WorkerBase != "" {
+		// One address for the phone: history comes through the tunnel and the
+		// daemon forwards it with the token it already holds, so the app only
+		// ever needs the tunnel URL plus the D1 token (REQ-046(3)).
+		mux.Handle("/api/", NewHistoryProxy(t.cfg.WorkerBase, t.cfg.Tokens))
+	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true}`))

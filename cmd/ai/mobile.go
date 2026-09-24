@@ -47,6 +47,7 @@ func newMobileRuntime(stateRoot, sessionDir string, cfg runtimeMobileConfig) (*m
 	}
 	rt.transport = mobiletransport.New(mobiletransport.Config{
 		Tokens:      tokens,
+		WorkerBase:  cfg.workerBase,
 		Verifier:    d1storeVerifier{client: client},
 		Hydrate:     rt,
 		AnnounceURL: cfg.workerBase,

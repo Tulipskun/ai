@@ -22,6 +22,33 @@ type HarnessLoop struct {
 	OnTurnError    func(Input, error)
 
 	sessionLocks sync.Map
+	turns        sync.Map // session id -> cancel func of the turn in flight
+}
+
+// CancelTurn stops the turn currently running for a session and reports whether
+// there was one. The phone's stop button needs this: the turn owns a provider
+// request and a set of tool calls that must stop now, not after the next step.
+func (h *HarnessLoop) CancelTurn(sessionID string) bool {
+	if h == nil || sessionID == "" {
+		return false
+	}
+	cancel, ok := h.turns.LoadAndDelete(sessionID)
+	if !ok {
+		return false
+	}
+	if fn, ok := cancel.(context.CancelFunc); ok && fn != nil {
+		fn()
+	}
+	return true
+}
+
+// Busy reports whether a session has a turn in flight.
+func (h *HarnessLoop) Busy(sessionID string) bool {
+	if h == nil {
+		return false
+	}
+	_, ok := h.turns.Load(sessionID)
+	return ok
 }
 
 func (h *HarnessLoop) Run(ctx context.Context) error {
@@ -106,6 +133,17 @@ func (h *HarnessLoop) Entry(ctx context.Context, input Input) error {
 		lock := h.sessionLock(lockKey)
 		lock.Lock()
 		defer lock.Unlock()
+	}
+	// One cancelable context per turn, published so CancelTurn can stop it.
+	if lockKey != "" {
+		turnCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		ctx = turnCtx
+		h.turns.Store(lockKey, context.CancelFunc(cancel))
+		defer h.turns.Delete(lockKey)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 	var req Request
 	if h.BuildRequest != nil {

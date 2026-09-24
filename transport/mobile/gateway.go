@@ -3,6 +3,7 @@ package mobile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -21,6 +22,7 @@ const (
 	FrameAck     = "ack"
 	FrameTrace   = "trace"
 	FrameDelta   = "delta"
+	FrameCancel  = "cancel"
 	FrameDone    = "done"
 	FrameError   = "error"
 )
@@ -103,6 +105,9 @@ type Config struct {
 	Hydrate      Hydrator
 	History      HistoryStore                        // serves the phone's history from D1
 	Models       ModelStore                          // provider/model catalogue and per-chat choice
+	Admin        AdminStore                          // provider keys and agent settings from the phone
+	CancelTurn   func(sessionID string) bool         // stops the turn a phone asked to stop
+	ReportError  func(sessionID, message string)     // shows a turn failure on the phone
 	Announce     func(context.Context, string) error // publishes the tunnel URL (D1 `nodes`)
 	InputBuffer  int
 }
@@ -123,6 +128,41 @@ func (t *Transport) SetModelStore(store ModelStore) {
 		return
 	}
 	t.cfg.Models = store
+}
+
+// SetAdminStore attaches the provider/settings surface after construction, like
+// SetModelStore, before the server starts.
+func (t *Transport) SetAdminStore(store AdminStore) {
+	if t == nil {
+		return
+	}
+	t.cfg.Admin = store
+}
+
+// SetErrorReporter attaches the hook that shows a failed turn on the phone, so
+// a provider that refuses the request (a dead key, a free tier that only works
+// inside another app) is visible instead of a silent retry.
+func (t *Transport) SetErrorReporter(report func(sessionID, message string)) {
+	if t == nil {
+		return
+	}
+	t.cfg.ReportError = report
+}
+
+// ReportTurnError sends one turn failure to the phones watching that session.
+func (t *Transport) ReportTurnError(sessionID, message string) {
+	if t == nil || sessionID == "" || message == "" {
+		return
+	}
+	t.broadcast(sessionID, Outbound{Kind: FrameError, SessionID: sessionID, Text: message})
+}
+
+// SetCancel attaches the stop hook the phone's cancel frame calls.
+func (t *Transport) SetCancel(cancel func(string) bool) {
+	if t == nil {
+		return
+	}
+	t.cfg.CancelTurn = cancel
 }
 
 // Version reports the label this build announces with, so the daemon can write
@@ -277,6 +317,14 @@ func (t *Transport) displayTrace(output sdk.Output) error {
 		return nil
 
 	case sdk.TraceError:
+		if trace.Err != nil && errors.Is(trace.Err, context.Canceled) {
+			// The phone asked to stop. A raw "context canceled" provider error
+			// would read as a failure, so report it as the stop it was.
+			t.broadcast(output.SessionID, Outbound{
+				Kind: FrameDone, SessionID: output.SessionID, Role: "system", Stage: "cancelled",
+			})
+			return nil
+		}
 		text := strings.TrimSpace(trace.Message)
 		if text == "" && trace.Err != nil {
 			text = trace.Err.Error()
@@ -358,6 +406,15 @@ func (t *Transport) sendAnswer(output sdk.Output, agent, jobID, text string, clo
 		t.broadcast(output.SessionID, Outbound{Kind: FrameDone, SessionID: output.SessionID, JobID: jobID})
 	}
 	return nil
+}
+
+// cancelStage tells the phone whether there was something to stop, so it can say
+// "หยุดแล้ว" or "turn นั้นจบไปแล้ว" instead of guessing.
+func cancelStage(stopped bool) string {
+	if stopped {
+		return "cancelled"
+	}
+	return "already_done"
 }
 
 func responseText(resp *sdk.Response) string {
@@ -556,6 +613,18 @@ func (t *Transport) serveWS(w http.ResponseWriter, r *http.Request) {
 			t.send(conn, Outbound{Kind: FrameAck, SessionID: sessionID, Role: "system", Stage: "resumed"})
 			continue
 		}
+		if in.Type == FrameCancel {
+			// The phone's stop button. A turn that is not running is not an
+			// error: the phone may have pressed it a moment too late.
+			stopped := t.cfg.CancelTurn != nil && t.cfg.CancelTurn(sessionID)
+			t.send(conn, Outbound{
+				Kind: FrameDone, SessionID: sessionID, Role: "system", Stage: cancelStage(stopped),
+			})
+			t.broadcast(sessionID, Outbound{
+				Kind: FrameDone, SessionID: sessionID, Role: "system", Stage: cancelStage(stopped),
+			})
+			continue
+		}
 		if in.Type != FrameMessage {
 			continue
 		}
@@ -682,6 +751,13 @@ func (t *Transport) StartHTTP(ctx context.Context, listen string) (func(), error
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", t.serveWS)
+	if t.cfg.Admin != nil {
+		// Provider keys and agent settings are writes, not reads: the phone can
+		// set them, and key material never comes back out.
+		mux.Handle("/api/providers", NewAdminHandler(t.cfg.Admin, t.gate))
+		mux.Handle("/api/providers/", NewAdminHandler(t.cfg.Admin, t.gate))
+		mux.Handle("/api/settings", NewAdminHandler(t.cfg.Admin, t.gate))
+	}
 	if t.cfg.History != nil {
 		// One address for the phone: history and the model catalogue come
 		// through the tunnel and are answered from D1 plus the live router with

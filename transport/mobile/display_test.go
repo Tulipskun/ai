@@ -3,6 +3,7 @@ package mobile
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/Tulipskun/ai/sdk"
@@ -172,5 +173,29 @@ func TestOtherSourcesAndEmptyTextAreIgnored(t *testing.T) {
 	})
 	if len(frames) != 0 {
 		t.Fatalf("frames = %+v, want none", frames)
+	}
+}
+
+func TestCancelStageTellsThePhoneWhetherItStoppedAnything(t *testing.T) {
+	if got := cancelStage(true); got != "cancelled" {
+		t.Fatalf("cancelStage(true) = %q", got)
+	}
+	if got := cancelStage(false); got != "already_done" {
+		t.Fatalf("cancelStage(false) = %q", got)
+	}
+}
+
+// A turn the phone stopped must not read as a provider failure.
+func TestCancelledTraceBecomesTheStopFrame(t *testing.T) {
+	tr := newDisplayTransport()
+	frames := capture(t, tr, func() {
+		_ = tr.Display(context.Background(), sdk.Output{Source: SourceName, SessionID: "s1",
+			Trace: &sdk.TraceEvent{
+				Stage: sdk.TraceError,
+				Err:   fmt.Errorf("chat/completions: %w", context.Canceled),
+			}})
+	})
+	if len(frames) != 1 || frames[0].Kind != FrameDone || frames[0].Stage != "cancelled" {
+		t.Fatalf("frames = %+v, want a single done frame marked cancelled", frames)
 	}
 }

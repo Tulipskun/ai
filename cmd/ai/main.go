@@ -186,6 +186,12 @@ func run(ctx context.Context) error {
 	models := modelStore{router: rt.Router, client: mobileRT.client, sessions: sessions}
 	mobileRT.sessions = sessions
 	mobileRT.transport.SetModelStore(models)
+	// The phone owns provider keys and which model each agent runs on. The admin
+	// store writes config/provider and config/system, which is what the daemon
+	// hydrates from, so a restart keeps the choices.
+	admin := newAdminStore(state, mobileRT.client, providerManager, &providerFile, sessions, agent,
+		sdk.SessionConfig{Provider: sdk.ProviderID(providerID), Model: modelID})
+	mobileRT.transport.SetAdminStore(admin)
 	sessions.SetSessionDefaults(func(ctx context.Context, sessionID string) (sdk.ProviderID, string, bool) {
 		choice, ok, err := models.SessionModel(ctx, sessionID)
 		if err != nil || !ok {
@@ -208,18 +214,38 @@ func run(ctx context.Context) error {
 	if len(sources) == 0 {
 		return fmt.Errorf("no transports enabled; configure config/entry.json")
 	}
+	var loop *sdk.HarnessLoop
 	inputs, err := sdk.MergeInputSources(ctx, sources...)
 	if err != nil {
 		return err
 	}
-	loop := &sdk.HarnessLoop{Agent: agent, Source: sdk.ChannelInputSource{Inputs: inputs}, ResolveSession: sessions.Resolve, BuildRequest: func(context.Context, sdk.Input, *sdk.Session) (sdk.Request, error) {
+	loop = &sdk.HarnessLoop{Agent: agent, Source: sdk.ChannelInputSource{Inputs: inputs}, ResolveSession: sessions.Resolve, BuildRequest: func(context.Context, sdk.Input, *sdk.Session) (sdk.Request, error) {
 		// Stream every turn: the phone renders deltas as they arrive, and a
 		// provider that cannot stream still answers through the same path.
 		return sdk.Request{SystemPrompt: systemPrompt(agent), MaxOutputTokens: maxOutputTokens, Stream: true}, nil
 	}, Displays: displays, DisplayTimeout: 10 * time.Second, OnTurnError: func(input sdk.Input, err error) {
+		if errors.Is(err, context.Canceled) {
+			log.Printf("turn stopped by the phone source=%s session=%s", input.Source, input.SessionID)
+			return
+		}
 		log.Printf("turn failed source=%s session=%s: %v", input.Source, input.SessionID, err)
+		mobileRT.transport.ReportTurnError(input.SessionID, turnErrorMessage(err))
 	}}
+	mobileRT.transport.SetCancel(func(sessionID string) bool { return loop.CancelTurn(sessionID) })
 	return loop.Run(ctx)
+}
+
+// turnErrorMessage keeps the phone's copy short: the full error stays in the log
+// with the request id and provider detail.
+func turnErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.TrimSpace(err.Error())
+	if len(msg) > 200 {
+		msg = msg[:200]
+	}
+	return msg
 }
 
 func newAgent(client *sdk.RouterClient, workspace string, browser *tools.BrowserClient, allowPrivate bool, jobsPath string, attachments tools.AttachmentStore) (*sdk.Agent, error) {

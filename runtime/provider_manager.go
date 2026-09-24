@@ -31,6 +31,24 @@ func NewProviderManager(path string, rt *Runtime, config ProviderFileConfig) *Pr
 	}
 	return &ProviderManager{path: path, rt: rt, config: config}
 }
+
+// Rt exposes the runtime the manager rebuilds, so the phone-facing admin
+// surface can read the live router and refresh one provider's catalogue.
+func (m *ProviderManager) Rt() *Runtime {
+	if m == nil {
+		return nil
+	}
+	return m.rt
+}
+
+// RefreshProvider re-runs model discovery for one provider.
+func (m *ProviderManager) RefreshProvider(ctx context.Context, id sdk.ProviderID) error {
+	if m == nil || m.rt == nil {
+		return errors.New("runtime: provider manager is not initialized")
+	}
+	return m.rt.RefreshProvider(ctx, id)
+}
+
 func (m *ProviderManager) Adapters() []sdk.AdapterID {
 	return []sdk.AdapterID{sdk.AdapterOpenAI, sdk.AdapterAnthropic, sdk.AdapterGemini, sdk.AdapterOpenCode}
 }

@@ -96,6 +96,31 @@ func TestAdminKeyPoolEdits(t *testing.T) {
 	}
 }
 
+// A provider nobody probed is unknown, not healthy, and a key change takes the
+// old verdict away with it.
+func TestAdminReportsUntestedUntilProbed(t *testing.T) {
+	store, _ := adminFixture(t)
+	list, err := store.Providers(context.Background())
+	if err != nil {
+		t.Fatalf("Providers: %v", err)
+	}
+	if list[0].Probed {
+		t.Fatalf("a provider nobody probed must not report probed: %+v", list[0])
+	}
+	store.setStatus("test-gateway", "401 Invalid API key")
+	list, _ = store.Providers(context.Background())
+	if !list[0].Probed || list[0].LastError == "" || list[0].Reachable {
+		t.Fatalf("a failed probe must read as unusable: %+v", list[0])
+	}
+	if _, err := store.UpdateKeys(context.Background(), "test-gateway", mobiletransport.KeyChange{Add: []string{"k2"}}); err != nil {
+		t.Fatalf("add key: %v", err)
+	}
+	list, _ = store.Providers(context.Background())
+	if list[0].Probed || list[0].LastError == "401 Invalid API key" {
+		t.Fatalf("changing the pool must clear the old verdict: %+v", list[0])
+	}
+}
+
 func TestAdminSettingsRoundTrip(t *testing.T) {
 	store, _ := adminFixture(t)
 	view, err := store.Settings(context.Background())

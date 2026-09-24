@@ -36,6 +36,12 @@ type adminStore struct {
 	// here would take the whole admin surface with it.
 	statusMu sync.RWMutex
 
+	// status is the last probe failure per provider, probed records which
+	// providers a probe has actually answered for: a provider nobody tested is
+	// unknown, not healthy.
+	status map[string]string
+	probed map[string]bool
+
 	providerPath string
 	systemPath   string
 	stateRoot    string
@@ -52,8 +58,6 @@ type adminStore struct {
 	// mainRoute is the daemon's boot default, used when the system config leaves
 	// the main provider or model empty.
 	mainRoute sdk.SessionConfig
-
-	status map[string]string // provider id -> last discovery error
 }
 
 func newAdminStore(stateRoot string, client *d1store.Client, manager *runtime.ProviderManager,
@@ -70,12 +74,35 @@ func newAdminStore(stateRoot string, client *d1store.Client, manager *runtime.Pr
 		agent:          agent,
 		mainRoute:      mainRoute,
 		status:         map[string]string{},
+		probed:         map[string]bool{},
 	}
 }
 
 // setStatus records the last discovery failure per provider so the app can show
 // why a provider is unusable instead of an empty model list.
 func (a *adminStore) setStatus(id, message string) {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
+	a.probed[id] = true
+	if message == "" {
+		delete(a.status, id)
+		return
+	}
+	a.status[id] = message
+}
+
+// forgetStatus drops what a probe knew, so a provider whose keys just changed is
+// reported as untested rather than as still healthy.
+func (a *adminStore) forgetStatus(id string) {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
+	delete(a.status, id)
+	delete(a.probed, id)
+}
+
+// setDiscovery records what model discovery says without claiming a probe ran:
+// a gateway can list models for a key that cannot generate anything.
+func (a *adminStore) setDiscovery(id, message string) {
 	a.statusMu.Lock()
 	defer a.statusMu.Unlock()
 	if message == "" {
@@ -89,6 +116,12 @@ func (a *adminStore) lastError(id string) string {
 	a.statusMu.RLock()
 	defer a.statusMu.RUnlock()
 	return a.status[id]
+}
+
+func (a *adminStore) wasProbed(id string) bool {
+	a.statusMu.RLock()
+	defer a.statusMu.RUnlock()
+	return a.probed[id]
 }
 
 func (a *adminStore) Providers(context.Context) ([]mobiletransport.ProviderStatus, error) {
@@ -108,6 +141,7 @@ func (a *adminStore) statusOf(p runtime.ProviderFile, manager *runtime.ProviderM
 	view := mobiletransport.ProviderStatus{
 		ID: p.Name, Adapter: p.Adapter, Endpoint: p.HTTPEndpoint,
 		FreeOnly: p.FreeOnly, KeyCount: len(p.APIKeys), LastError: a.lastError(p.Name),
+		Probed: a.wasProbed(p.Name),
 	}
 	if manager == nil || manager.Rt() == nil || manager.Rt().Router == nil {
 		return view
@@ -235,6 +269,7 @@ func (a *adminStore) UpdateKeys(ctx context.Context, id string, change mobiletra
 		return mobiletransport.ProviderStatus{}, errors.New("ระบุ add, remove หรือ replace")
 	}
 	file.Providers[index] = entry
+	a.forgetStatus(entry.Name)
 	err = a.saveProvidersLocked(ctx, file)
 	a.fileMu.Unlock()
 	if err != nil {
@@ -343,10 +378,10 @@ func (a *adminStore) saveProvidersLocked(ctx context.Context, file runtime.Provi
 	}
 	for _, config := range configs {
 		if err := a.manager.RefreshProvider(ctx, config.ID); err != nil {
-			a.setStatus(string(config.ID), discoveryMessage(err))
+			a.setDiscovery(string(config.ID), discoveryMessage(err))
 			log.Printf("provider %s: discovery failed after an update: %v", config.ID, err)
 		} else {
-			a.setStatus(string(config.ID), "")
+			a.setDiscovery(string(config.ID), "")
 		}
 	}
 	if a.sessions != nil {

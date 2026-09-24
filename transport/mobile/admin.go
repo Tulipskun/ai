@@ -18,6 +18,7 @@ type ProviderStatus struct {
 	KeyCount   int    `json:"key_count"`
 	ModelCount int    `json:"model_count"`
 	Reachable  bool   `json:"reachable"`
+	Probed     bool   `json:"probed"`
 	LastError  string `json:"last_error,omitempty"`
 }
 

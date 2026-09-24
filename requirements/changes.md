@@ -875,3 +875,16 @@ Reason: ผู้ใช้ต้องจัดการ provider/key/model จ�
 Impact: transport/mobile/{admin.go ใหม่, admin_test.go ใหม่, gateway.go (FrameCancel/Admin/ReportError/cancelStage/เสิร์จ route admin)}, sdk/{loop.go (CancelTurn/Busy + per-turn cancel ctx), loop_cancel_test.go ใหม่}, runtime/provider_manager.go (Rt/RefreshProvider), cmd/ai/{main.go, admin_store.go ใหม่, admin_store_test.go ใหม่}, index.md, requirements/functional.md (REQ-048); ฝั่งแอป data/remote/{AiDirectSocket.kt (cancel), HistoryApi.kt (providers/keys/settings)}, data/repo/ChatRepository.kt (stopTurn), ui/chat/{ChatViewModel.kt, ChatScreen.kt (ปุ่มหยุด + padding + autoscroll)}, ui/settings/SettingsScreen.kt (provider/key pool/agent) + AX-083..086/AXCH-013
 Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่านทั้งหมด; e2e จริงผ่าน quick tunnel: `POST /api/providers/refresh` คืน NousResearch ผ่าน / AgentRouter 503 / B.AI 403 / OpenCode 401 (เหตุผลจริงจาก provider) / cavoti 402 / tokenharbor 402, เพิ่ม-ลบ key ผ่าน REST เดียวกับที่แอปใช้แล้วคืนจำนวนเดิม, ปุ่มหยุดบนมือถือจริงเปลี่ยนสถานะเป็น "หยุดแล้ว" และ log เป็น `turn stopped by the phone`, provider status/error แสดงบนมือถือจริง, bubble ไม่ชนกับแถบพิมพ์
 Status: accepted
+
+CHANGE-067
+
+Date: 2026-09-25
+Type: fix
+Request: "UI/UX อย่างแย่ … แก้ provider opencode ที่ใช้งานไม่ได้" — ผู้ใช้เห็น provider ที่ยังไม่เคยทดสอบแล้วขึ้นว่า "ใช้ได้"
+Conflict: REQ-048(1) (refresh ต้องยิงจริงเพื่อให้เห็นเหตุผลจริง) — `reachable` เดิมคำนวณจาก "ไม่มี error + มีโมเดล" ซึ่งเป็นจริงแม้ยังไม่เคย probe
+Previous: `ProviderStatus.Reachable = LastError == "" && ModelCount > 0` — provider ที่ gateway แค่ list model ได้ (แต่ generate ไม่ได้ เช่น Opencode free tier) ขึ้น "ใช้ได้" จนกว่าจะกด refresh
+New: `ProviderStatus.Probed` บอกว่ามี probe ตอบสำหรับ provider นั้นหรือยัง; `adminStore` แยก `status` (ข้อความ) กับ `probed` (ผลการตรวจจริง) — `RefreshProviders` เป็นเจ้าของ `probed` ส่วน reload หลังแก้ไฟล์ใช้ `setDiscovery` ที่บันทึกข้อผิดพลาดแต่ไม่อ้างว่า probe แล้ว; `UpdateKeys` ล้างผลเดิมด้วย `forgetStatus` เพราะ key ใหม่ต้องทดสอบใหม่
+Reason: REQ-048(1) ต้องการให้มือถือเห็นความจริงก่อนส่งงานจริง การรายงาน provider ที่ยังไม่รู้ว่าใช้ได้หรือไม่ว่า "ใช้ได้" ทำให้ผู้ใช้เลือก provider ที่พัง
+Impact: transport/mobile/admin.go (Probed), cmd/ai/admin_store.go (probed map, forgetStatus, setDiscovery, statusOf), cmd/ai/admin_store_test.go (เทสต์สามสถานะ), requirements/changes.md; ฝั่งแอป AX-088 แสดงสามสถานะและเชื่อผลของ probe ที่เพิ่งกดในหน้านั้น
+Validation: `go build ./...`, `go vet ./...`, `go test ./cmd/ai/... ./transport/mobile/...` ผ่าน; e2e จริงบนมือถือ: ก่อนกดทดสอบขึ้น "ยังไม่ทดสอบ", หลังกดขึ้น "5 provider ใช้ไม่ได้" พร้อมข้อความจริงจาก provider
+Status: accepted

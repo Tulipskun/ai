@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func testClient(t *testing.T, fake *fakeCloudflare) (*Client, *MemoryToken) {
@@ -384,5 +386,25 @@ func TestQueriesCarryTheBoundParameters(t *testing.T) {
 	}
 	if q.path != "/accounts/acct-1/d1/database/db-1/query" {
 		t.Fatalf("path = %q, want the resolved account and database", q.path)
+	}
+}
+
+func TestFirstUserMessageNamesTheChatWithoutBreakingThaiText(t *testing.T) {
+	fake := newFakeCloudflare("cf-token")
+	client, _ := testClient(t, fake)
+	ctx := context.Background()
+	long := strings.Repeat("ก", 60) // three bytes each
+	if err := client.AppendTurn(ctx, "work-utf8", "user", "user", "", long); err != nil {
+		t.Fatal(err)
+	}
+	session, found, err := client.GetSession(ctx, "work-utf8")
+	if err != nil || !found {
+		t.Fatalf("GetSession: found=%v err=%v", found, err)
+	}
+	if !utf8.ValidString(session.Title) {
+		t.Fatalf("title %q is not valid UTF-8 (byte slicing cut a rune)", session.Title)
+	}
+	if n := utf8.RuneCountInString(session.Title); n != 42 {
+		t.Fatalf("title has %d runes, want 42", n)
 	}
 }

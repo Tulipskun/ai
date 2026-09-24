@@ -447,6 +447,19 @@ type Node struct {
 	Heartbeat int64  `json:"heartbeat"`
 }
 
+// truncateRunes cuts a title on a character boundary: slicing bytes would leave
+// a half-written rune in the chat title, which every client renders as ���.
+func truncateRunes(text string, limit int) string {
+	count := 0
+	for i := range text {
+		if count == limit {
+			return text[:i]
+		}
+		count++
+	}
+	return text
+}
+
 const sessionColumns = "id, title, provider, model, created_at, updated_at"
 
 // ListSessions returns the newest chats, the order the phone shows them in.
@@ -603,10 +616,7 @@ func (c *Client) AppendTurnAt(ctx context.Context, sessionID, role, agent, jobID
 			return 0, err
 		}
 		if len(titles) == 1 && (titles[0].Title == "" || titles[0].Title == sessionID) {
-			name := text
-			if len(name) > 42 {
-				name = name[:42]
-			}
+			name := truncateRunes(text, 42)
 			if name == "" {
 				name = sessionID
 			}

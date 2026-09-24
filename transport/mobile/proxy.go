@@ -16,6 +16,20 @@ var allowedHistoryPaths = map[string]bool{
 	"/api/ping":     true, // token check
 }
 
+// allowedSessionOps matches /api/sessions/<id> for the two operations a chat UI
+// needs: rename (PATCH) and delete (DELETE). GET is intentionally not allowed —
+// the list endpoint already carries everything the phone renders.
+func allowedSessionOps(method, path string) bool {
+	if method != http.MethodPatch && method != http.MethodDelete {
+		return false
+	}
+	rest := strings.TrimPrefix(path, "/api/sessions/")
+	if rest == path {
+		return false
+	}
+	return rest != "" && !strings.Contains(rest, "/")
+}
+
 // allowedTurns matches /api/sessions/<id>/turns.
 func allowedTurns(path string) bool {
 	rest := strings.TrimPrefix(path, "/api/sessions/")
@@ -46,7 +60,7 @@ func NewHistoryProxy(workerBase string, tokens TokenStore) http.Handler {
 			return
 		}
 		path := r.URL.Path
-		if !allowedHistoryPaths[path] && !allowedTurns(path) {
+		if !allowedHistoryPaths[path] && !allowedTurns(path) && !allowedSessionOps(r.Method, path) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"not proxied"}`))

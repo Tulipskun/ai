@@ -82,3 +82,44 @@ func TestHistoryProxyRefusesStateAndOtherPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestHistoryProxyAllowsRenameAndDeleteOnly(t *testing.T) {
+	var seen []string
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Method+" "+r.URL.Path)
+		w.WriteHeader(200)
+	}))
+	defer worker.Close()
+	front := httptest.NewServer(NewHistoryProxy(worker.URL, &stubTokens{}))
+	defer front.Close()
+
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodPatch, "/api/sessions/abc"},
+		{http.MethodDelete, "/api/sessions/abc"},
+	} {
+		req, _ := http.NewRequest(tc.method, front.URL+tc.path, strings.NewReader(`{"title":"x"}`))
+		req.Header.Set("Authorization", "Bearer d1-token")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s %s: status = %d, want 200 (proxied)", tc.method, tc.path, resp.StatusCode)
+		}
+	}
+	// A GET of the same path is not proxied: the list endpoint is enough.
+	req, _ := http.NewRequest(http.MethodGet, front.URL+"/api/sessions/abc", nil)
+	req.Header.Set("Authorization", "Bearer d1-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET session: status = %d, want 404", resp.StatusCode)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("worker saw %v, want exactly the two ops", seen)
+	}
+}

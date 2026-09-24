@@ -2,6 +2,40 @@
 
 Prototype canonical Go SDK for an AI Harness.
 
+## Mobile app (AIxodia) — stateless mode
+
+`transport/mobile` serves the Android client over a Cloudflare quick tunnel
+(`config/entry.json` → `mobile`):
+
+```json
+{
+  "mobile": {
+    "enabled": true,
+    "worker_base": "https://aixodia.<subdomain>.workers.dev",
+    "listen": "127.0.0.1:18789",
+    "tunnel": true,
+    "sync_config": true,
+    "sync_sessions": true
+  }
+}
+```
+
+- **Two-step access**: the daemon is only reachable through the random
+  quick-tunnel hostname, and the phone must send the D1 token in the handshake
+  header `Authorization: Bearer <token>`. The daemon verifies it against the
+  Worker (`GET /api/ping`) *before* the socket is upgraded, then keeps it in
+  memory only — the daemon itself owns no credential, and a restart needs a
+  phone to hand the token over again.
+- **Lockout**: no header → `401` (not counted); wrong token five times → `429`
+  for 30s, then 60/120/240/300s for that client address
+  (`CF-Connecting-IP` → `X-Forwarded-For` → peer); Worker unreachable → `503`
+  (fail closed, not counted).
+- **Stateless state**: `runtime/d1store` treats D1 as the authoritative copy of
+  `config/*.json` and the per-session SQLite files, materializing them into the
+  state root after the first verified connection and pushing changes back.
+  Local files stay the format the rest of the runtime uses (CON-001, CON-002),
+  so wiping `~/.local/share/ai` is recoverable — as long as a phone connects.
+
 ## Install
 
 Install the `ai` command on Linux arm64 with one command. The installer downloads only the `ai-linux-arm64` binary from GitHub Releases (`gh release download`); it does not require Git or Go. Runtime state is kept under `~/.local/share/ai` by default.

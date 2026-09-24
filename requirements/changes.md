@@ -758,3 +758,16 @@ Reason: หลักฐาน readiness ที่ไม่ผูก identity ข
 Impact: cmd/ai/update_bluegreen.go (gates), cmd/ai/update_bluegreen_test.go (stale-marker tests), requirements/functional.md (REQ-043), requirements/lessons.md (LESSON-002)
 Validation: unit (stale marker ตก gate, pid ตรงผ่าน); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`; deploy จริงต้องเห็น live intake ของ green pid ใหม่ใน log
 Status: accepted
+
+CHANGE-058
+
+Date: 2026-09-24
+Type: add
+Request: ให้ `ai` เป็น stateless — เปิด Cloudflare quick tunnel แล้วเก็บ config/runtime state (รวม provider API keys) ไว้ที่ Cloudflare D1 โดยมือถือเป็นผู้ส่ง D1 token ให้ daemon ตอนเชื่อมต่อ
+Conflict: CON-001 (config ต้องอยู่ใน `config/*.json`, ห้ามใช้ env เป็น runtime config), CON-002 (หนึ่ง session ต้อง map ไปหนึ่ง DB ใต้ `data/sessions/`), REQ-011 (layout ใต้ `~/.local/share/ai` เป็นแหล่ง config/state), CON-003 (ห้ามเก็บ raw provider request/response)
+Previous: ทุกอย่างเป็นไฟล์ใต้ state root — `config/*.json` + `data/sessions/<base64url(id)>.db` — daemon ไม่มี transport อื่นนอก CLI/Discord และไม่เคยคุยกับ cloud
+New: REQ-046 — เพิ่ม `transport/mobile` (WebSocket source/display, handshake 2 ขั้น + lockout 5 ครั้ง/30 วิ แบบขยับขึ้น, token เก็บใน memory เท่านั้น) และ `runtime/d1store` (D1 เป็น authoritative copy, local เป็น materialization: config JSON + session DB ไฟล์เดิมถูกดึง/เขียนกลับผ่าน Worker) + turn ingest แบบ FIFO; CON-012 ระบุว่า local materialization ต้องคงรูปแบบเดิมและห้ามสร้าง credential ใหม่
+Reason: ผู้ใช้ต้องการ daemon ที่รีสตาร์ตแล้วยังคุยต่อได้โดยไม่ต้องมี local state แต่ข้อกำหนดเดิมของโปรเจกต์บังคับให้รูปแบบไฟล์เป็นแกน — การทำ D1 เป็น sync layer (ไม่ใช่ storage ที่ core อ่านตรง) จึงได้ทั้ง stateless ที่ต้องการโดยไม่ละ CON-001/002/011 และไม่แตะ core loop/SDK
+Impact: transport/mobile/ (ใหม่: auth.go, gateway.go, tunnel.go + tests), runtime/d1store/ (ใหม่: client.go, sync.go + tests), transport/config.go (mobile block ใน entry.json), runtime/provider_manager.go (Reload หลัง hydrate), cmd/ai/main.go (wire mobile + hydrate callback), index.md (module map), requirements/functional.md (REQ-046), requirements/constraints.md (CON-012)
+Validation: unit (`go test ./... -timeout 3m` ครอบคลุม handshake/lockout/hydrate/push/ขนาดเกิน limit/ไม่มี token), `go vet ./...`, `git diff --check`; integration ต้องเช็คกับ Worker จริงว่า 401 เมื่อไม่มี header, 429 เมื่อผิดครบ 5 ครั้ง, และ turn เขียนลง D1 ตามลำดับ
+Status: accepted

@@ -527,8 +527,8 @@ func run(ctx context.Context, cliOnly bool) error {
 	if err != nil {
 		return err
 	}
-	if !cliOnly && !transportConfig.Discord.Enabled {
-		log.Printf("no Discord transport enabled; configure config/entry.json")
+	if !cliOnly && !transportConfig.Discord.Enabled && !transportConfig.Mobile.Enabled {
+		log.Printf("no Discord or mobile transport enabled; configure config/entry.json")
 	}
 	// The attachment file store is opened from config/attachment.json under the
 	// state root (CON-011) and shared by both directions of the file boundary:
@@ -625,6 +625,38 @@ func run(ctx context.Context, cliOnly bool) error {
 		}
 		sources = append(sources, discord)
 		displays = append(displays, discord)
+	}
+	// Mobile transport (REQ-046). Stateless: the daemon holds no credential
+	// until a phone connects, then the verified D1 token (memory only) unlocks
+	// the runtime state stored in Cloudflare D1.
+	mobileRT, err := newMobileRuntime(state, mobileSessionDir(state), runtimeMobileConfig{
+		workerBase:   transportConfig.Mobile.WorkerBase,
+		syncConfig:   transportConfig.Mobile.SyncConfig,
+		syncSessions: transportConfig.Mobile.SyncSessions,
+	})
+	if err != nil {
+		return err
+	}
+	if mobileRT != nil {
+		listen := transportConfig.Mobile.Listen
+		if listen == "" {
+			listen = "127.0.0.1:18789"
+		}
+		if transportConfig.Mobile.Tunnel && transportConfig.Mobile.PublicListen != "" {
+			listen = transportConfig.Mobile.PublicListen
+		}
+		stop, err := mobileRT.transport.StartHTTP(ctx, listen)
+		if err != nil {
+			return err
+		}
+		defer stop()
+		if transportConfig.Mobile.SyncConfig || transportConfig.Mobile.SyncSessions {
+			defer mobileRT.PushState(context.WithoutCancel(ctx))
+		}
+		sources = append(sources, mobileRT.transport)
+		displays = append(displays, mobileDisplayAdapter{mobile: mobileRT})
+		log.Printf("mobile transport listening on %s (tunnel=%v, worker=%s)", listen,
+			transportConfig.Mobile.Tunnel, transportConfig.Mobile.WorkerBase)
 	}
 	cli := clitransport.New(os.Stdin, os.Stdout)
 	cli.Command = func(ctx context.Context, args []string) (string, error) {

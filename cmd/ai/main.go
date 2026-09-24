@@ -175,9 +175,7 @@ func run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		for _, config := range configs {
-			sessions.RegisterProvider(config.ID, config.Keys)
-		}
+		sessions.AdoptProviders(configs, sdk.SessionConfig{Provider: sdk.ProviderID(providerID), Model: modelID})
 		log.Printf("providers reloaded after D1 hydrate: %d", len(configs))
 		return nil
 	})

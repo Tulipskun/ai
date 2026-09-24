@@ -55,6 +55,55 @@ func NewSessionManagerWithProviders(path string, base sdk.SessionConfig, provide
 	}
 	return &SessionManager{dir: sessionDir(path), base: base, keys: fallback, providerKeys: providerKeys, sessions: make(map[string]*list.Element), lru: list.New(), maxCached: defaultMaxCachedSessions}
 }
+
+// AdoptProviders swaps in the provider set the daemon actually has after a
+// config reload, and re-points sessions whose stored provider is gone. A
+// session row hydrated from D1 keeps whatever provider wrote it, so without
+// this a chat created before the restart would keep a provider that no longer
+// exists and every turn on it fails with "provider is required" (REQ-046(4)).
+func (m *SessionManager) AdoptProviders(configs []sdk.ProviderConfig, base sdk.SessionConfig) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if base.Provider != "" {
+		m.base.Provider = base.Provider
+	}
+	if base.Model != "" {
+		m.base.Model = base.Model
+	}
+	for _, config := range configs {
+		if config.ID != "" && config.Keys != nil {
+			m.providerKeys[config.ID] = config.Keys
+		}
+	}
+	for _, entry := range m.sessions {
+		_ = m.repointUnknownProviderLocked(entry.Value.(*sessionCacheEntry).session)
+	}
+}
+
+func (m *SessionManager) repointUnknownProviderLocked(session *sdk.Session) error {
+	if session == nil || m.base.Provider == "" {
+		return nil
+	}
+	stored := session.Config().Provider
+	if stored != "" && m.providerKeys[stored] != nil {
+		return nil
+	}
+	keys := m.keys
+	if providerKeys := m.providerKeys[m.base.Provider]; providerKeys != nil {
+		keys = providerKeys
+	}
+	if err := session.SetProvider(m.base.Provider, keys); err != nil {
+		return err
+	}
+	if m.base.Model != "" {
+		return session.SetModel(m.base.Model)
+	}
+	return nil
+}
+
 func (m *SessionManager) RegisterProvider(provider sdk.ProviderID, keys *sdk.KeyPool) {
 	if m == nil || provider == "" || keys == nil {
 		return
@@ -96,6 +145,10 @@ func (m *SessionManager) Resolve(ctx context.Context, input sdk.Input) (*sdk.Ses
 			_ = session.Close()
 			return nil, err
 		}
+	}
+	if err := m.repointUnknownProviderLocked(session); err != nil {
+		_ = session.Close()
+		return nil, err
 	}
 	elem := m.lru.PushFront(&sessionCacheEntry{id: input.SessionID, session: session})
 	m.sessions[input.SessionID] = elem

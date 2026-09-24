@@ -797,3 +797,16 @@ Reason: การรันจริงเผยว่าบั๊กทั้ง
 Impact: transport/mobile/gateway.go (Display/displayTrace/FinalText, subscriber interface เพื่อทดสอบ, MirrorInput hook), transport/mobile/display_trace_test.go (ใหม่), runtime/d1store/sync.go (ตัด config:entry), cmd/ai/mobile.go (wire reloadProviders + mirrorUserTurn + mirror จาก trace), cmd/ai/main.go (ส่ง listen/tunnel/cloudflared เข้า transport), index.md, requirements/functional.md, requirements/changes.md
 Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 4m`; e2e จริงผ่าน quick tunnel: 401 เมื่อไม่มี header, trace→message→done พร้อม usage, `turn ok` ใน log, D1 มี user+model turn เรียงลำดับ และ `/api/node` ชี้ tunnel ของ daemon ที่ heartbeat สด
 Status: accepted
+
+CHANGE-061
+
+Date: 2026-09-24
+Type: fix
+Request: ผู้ใช้เปิดแอปจากเครื่องจริงแล้วส่งข้อความในแชทเดิม (สร้างตอนยังใช้ mock agent) แล้ว turn ล้มเหลวซ้ำ
+Conflict: REQ-046(4) (หลัง hydrate runtime ต้องใช้งานได้จริงด้วย provider ที่เพิ่งถูกดึง)
+Previous: `runtime.SessionManager` เก็บ provider/model จาก env ไว้ครั้งเดียวตอนบูต (ตอนนั้น provider ยังไม่ถูก hydrate) และ `sdk.OpenSession` ให้ค่าที่เก็บใน DB ของแชทนั้นชนะเสมอ — แชทที่สร้างก่อนหน้านี้จึงยังผูก provider ที่ไม่มีอยู่แล้ว (หรือว่าง) และทุก turn จบด้วย `sdk: provider is required` หลัง retry ครบ 7 ครั้ง
+New: `SessionManager.AdoptProviders(configs, base)` ถูกเรียกใน reload callback หลัง hydrate เพื่ออัปเดต provider key pools + base และย้าย session ที่เปิดอยู่; `Resolve` ย้าย provider/model ของ session ที่ provider เดิมไม่อยู่ในรายการใหม่ทันทีหลังเปิด (เทสต์ `TestSessionManagerAdoptsProvidersAndRepointsStaleSessions` ครอบทั้ง cached session และ session ที่เปิดใหม่)
+Reason: REQ-046 กำหนดให้ daemon ทำงานต่อได้หลัง restart โดยไม่ต้องมี local state — session row ที่เก็บ provider เก่าคือ local state ที่หลงเหลือ จึงต้องถูกจัดการตอน materialize ไม่ใช่ปล่อยให้ล้ม
+Impact: runtime/session_manager.go (AdoptProviders + repoint ใน Resolve), runtime/session_manager_test.go (เทสต์ใหม่), cmd/ai/main.go (reload callback เรียก AdoptProviders), requirements/functional.md (REQ-046(4)), requirements/changes.md
+Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 4m`; e2e จริง: ส่งข้อความจากมือถือจริงในแชท `work-1` (turn ที่เคยล้ม) แล้วได้คำตอบจริงจาก provider พร้อม user+model turn ใน D1
+Status: accepted

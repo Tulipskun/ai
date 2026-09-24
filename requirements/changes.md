@@ -849,3 +849,16 @@ Reason: ผู้ใช้ต้องการเห็นคำตอบที
 Impact: transport/mobile/{gateway.go, history.go, display_test.go, history_test.go}, sdk/providers/openai/{openai.go, openai_test.go}, sdk/routing.go (ProviderIDs), runtime/{session_manager.go, session_manager_test.go}, runtime/d1store/client.go (SetSessionRoute), cmd/ai/{main.go, mobile.go, mobile_turn_mirror_test.go}, requirements/{functional,changes}.md; ฝั่งแอป: data/model/ChatModels.kt, data/remote/HistoryApi.kt, data/repo/ChatRepository.kt, ui/chat/{ChatViewModel,ChatScreen}.kt, ui/settings/SettingsScreen.kt + AX-080..082/AXCH-012
 Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 4m`; e2e จริงผ่าน quick tunnel: 32 `delta` → `done` จาก provider จริง, D1 มี user 1 + model 1 turn (ไม่ซ้ำ), `/api/models` คืน 6 provider พร้อม catalogue, `PATCH /api/sessions/:id` ตอบค่าที่เลือก; โค้ดฝั่งแอปยังไม่ได้ compile เพราะเครื่องนี้ไม่มี JDK
 Status: accepted
+
+CHANGE-065
+
+Date: 2026-09-25
+Type: fix
+Request: ผู้ใช้สั่ง build บน GitHub Actions แล้วทดสอบบนเครื่องจริง
+Conflict: AX-082 (local table ต้องเป็น mirror ของ D1), REQ-046(5) (หนึ่ง turn = หนึ่งแถว)
+Previous: ชื่อแชทตัดด้วย byte (`text[:42]`) ทำให้ชื่อภาษาไทยเพี้ยนเป็น `���`; `ChatRepository.onFrame` บันทึกทุกเฟรม (รวม `delta` และ `trace`) ลง Room ทำให้คำตอบ stream เดียวแตกเป็นหลาย bubble และซ้ำกับแถวที่ daemon mirror ลง D1
+New: ชื่อแชทตัดตาม rune (`truncateRunes`) + เทสต์ภาษาไทย; local table เก็บเฉพาะ ack/error และดึงประวัติจาก D1 เมื่อ turn จบ
+Reason: ผลจากการรันจริงบนเครื่องที่ผู้ใช้ build ผ่าน CI — ทั้งสองอย่างคือความผิดพลาดที่ผิดสเปกเดิม ไม่ใช่ข้อตกลงใหม่
+Impact: runtime/d1store/{client.go, d1store_test.go}, requirements/changes.md; ฝั่งแอป data/repo/ChatRepository.kt (ลบ `record`)
+Validation: CI `Android build` ผ่าน (APK v0.1.32), ติดตั้งบนมือถือจริงแล้วส่งข้อความ: คำตอบเป็น bubble เดียว มีสถานะระหว่าง stream, `go build/vet/test ./...` ผ่าน
+Status: accepted

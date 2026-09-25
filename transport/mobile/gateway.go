@@ -81,6 +81,12 @@ type Outbound struct {
 	ClientMsgID  string          `json:"client_msg_id,omitempty"`
 	InputTokens  int             `json:"input_tokens,omitempty"`
 	OutputTokens int             `json:"output_tokens,omitempty"`
+	// Model and DurationMs are what the phone puts in the footer of this one
+	// message. They are read off the terminal trace rather than the chat's
+	// configured route, so the footer names the model that actually answered
+	// (AX-095).
+	Model      string `json:"model,omitempty"`
+	DurationMs int64  `json:"duration_ms,omitempty"`
 }
 
 // TokenStore is the daemon's volatile credential (d1store.MemoryToken in
@@ -295,6 +301,8 @@ func (t *Transport) Display(ctx context.Context, output sdk.Output) error {
 		Content:      []ContentPart{{Type: "text", Text: text}},
 		InputTokens:  output.Response.Usage.InputTokens,
 		OutputTokens: output.Response.Usage.OutputTokens,
+		Model:        output.Response.Model,
+		DurationMs:   turnDurationMs(nil),
 	}
 	t.broadcast(output.SessionID, frame)
 	if frame.InputTokens > 0 || frame.OutputTokens > 0 {
@@ -454,6 +462,19 @@ func (t *Transport) displayTrace(output sdk.Output) error {
 	}
 }
 
+// turnDurationMs is how long the provider took for one answer, taken from the
+// timestamps the trace recorded (REQ-033): the request was sent, then the event
+// arrived. Never a duration measured while the phone is drawing.
+func turnDurationMs(trace *sdk.TraceEvent) int64 {
+	if trace == nil {
+		return 0
+	}
+	if trace.RequestStartedMs > 0 && trace.AtMs >= trace.RequestStartedMs {
+		return trace.AtMs - trace.RequestStartedMs
+	}
+	return trace.Elapsed.Milliseconds()
+}
+
 // sendAnswer puts one authoritative message on the wire. closeTurn is false when
 // a traced turn is still running and its terminal event will close it.
 func (t *Transport) sendAnswer(output sdk.Output, agent, jobID, text string, closeTurn bool) error {
@@ -471,7 +492,9 @@ func (t *Transport) sendAnswer(output sdk.Output, agent, jobID, text string, clo
 	if output.Trace != nil && output.Trace.Response != nil {
 		frame.InputTokens = output.Trace.Response.Usage.InputTokens
 		frame.OutputTokens = output.Trace.Response.Usage.OutputTokens
+		frame.Model = output.Trace.Response.Model
 	}
+	frame.DurationMs = turnDurationMs(output.Trace)
 	t.broadcast(output.SessionID, frame)
 	t.markAnswered(output.SessionID, agent, jobID)
 	if frame.InputTokens > 0 || frame.OutputTokens > 0 {

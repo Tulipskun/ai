@@ -258,3 +258,53 @@ func TestSubAgentTerminalNamesTheStoppedJob(t *testing.T) {
 		t.Fatalf("frame = %+v, want an unknown status read as completed", frames[1])
 	}
 }
+
+// The footer of one answer says which model produced it and how long it took,
+// measured from the timestamps the trace recorded rather than at draw time
+// (AX-095).
+func TestAnswerFrameCarriesItsFooter(t *testing.T) {
+	tr := newDisplayTransport()
+	frames := capture(t, tr, func() {
+		_ = tr.Display(context.Background(), sdk.Output{
+			SessionID: "s1",
+			Trace: &sdk.TraceEvent{
+				Stage: sdk.TraceResponse,
+				Response: &sdk.Response{
+					Model:   "nemotron-3-ultra-free",
+					Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "pong"}},
+					Usage:   sdk.Usage{InputTokens: 2269, OutputTokens: 51},
+				},
+				RequestStartedMs: 1_700_000_000_000,
+				AtMs:             1_700_000_004_000,
+			},
+		})
+	})
+	var answer Outbound
+	for _, f := range frames {
+		if f.Kind == FrameMessage {
+			answer = f
+		}
+	}
+	if answer.Model != "nemotron-3-ultra-free" {
+		t.Errorf("frame model = %q, want nemotron-3-ultra-free", answer.Model)
+	}
+	if answer.InputTokens != 2269 || answer.OutputTokens != 51 {
+		t.Errorf("counts = %d/%d, want 2269/51", answer.InputTokens, answer.OutputTokens)
+	}
+	if answer.DurationMs != 4000 {
+		t.Errorf("duration = %dms, want 4000ms", answer.DurationMs)
+	}
+}
+
+// A turn that fell back to the trace's own elapsed time still gets a duration.
+func TestAnswerFrameDurationFallsBackToTheTracesElapsed(t *testing.T) {
+	if got := turnDurationMs(&sdk.TraceEvent{Elapsed: 1500 * 1000 * 1000}); got != 1500 {
+		t.Fatalf("duration = %d, want 1500", got)
+	}
+	if got := turnDurationMs(&sdk.TraceEvent{RequestStartedMs: 500, AtMs: 400}); got != 0 {
+		t.Fatalf("a negative window became %d", got)
+	}
+	if got := turnDurationMs(nil); got != 0 {
+		t.Fatalf("no trace became %d", got)
+	}
+}

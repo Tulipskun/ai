@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -438,6 +439,13 @@ type Turn struct {
 	JobID     string `json:"job_id"`
 	Text      string `json:"text"`
 	CreatedAt int64  `json:"created_at"`
+	// Footer of a model turn: which model answered, what it cost and how long
+	// it took, so the phone can draw it under that message and keep it after a
+	// restart (AX-095).
+	Model        string `json:"model"`
+	InputTokens  int    `json:"input_tokens"`
+	OutputTokens int    `json:"output_tokens"`
+	DurationMs   int64  `json:"duration_ms"`
 }
 
 // Node is the quick-tunnel announcement the phone reads to find the daemon.
@@ -569,7 +577,7 @@ func (c *Client) Turns(ctx context.Context, sessionID string, beforeSeq int64, l
 		beforeSeq = 1<<62 - 1
 	}
 	res, err := c.query(ctx,
-		`SELECT seq, role, agent, job_id, text, created_at FROM turns
+		`SELECT seq, role, agent, job_id, text, created_at, model, input_tokens, output_tokens, duration_ms FROM turns
 		 WHERE session_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?`,
 		[]string{sessionID, fmt.Sprint(beforeSeq), fmt.Sprint(limit)})
 	if err != nil {
@@ -593,9 +601,27 @@ func (c *Client) AppendTurn(ctx context.Context, sessionID, role, agent, jobID, 
 	return err
 }
 
+// TurnMeta is the part of a turn the phone shows in the message footer.
+type TurnMeta struct {
+	Model        string
+	InputTokens  int
+	OutputTokens int
+	DurationMs   int64
+}
+
+// AppendModelTurn mirrors one answered turn together with the footer data, and
+// returns its seq. A user turn carries none of it.
+func (c *Client) AppendModelTurn(ctx context.Context, sessionID, agent, jobID, text string, meta TurnMeta) (int64, error) {
+	return c.appendTurn(ctx, sessionID, "model", agent, jobID, text, meta)
+}
+
 // AppendTurnAt appends one turn and returns its seq. A user turn that is the
 // first message names the session, the way every messenger does.
 func (c *Client) AppendTurnAt(ctx context.Context, sessionID, role, agent, jobID, text string) (int64, error) {
+	return c.appendTurn(ctx, sessionID, role, agent, jobID, text, TurnMeta{})
+}
+
+func (c *Client) appendTurn(ctx context.Context, sessionID, role, agent, jobID, text string, meta TurnMeta) (int64, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return 0, errors.New("d1store: session id is required")
 	}
@@ -628,9 +654,10 @@ func (c *Client) AppendTurnAt(ctx context.Context, sessionID, role, agent, jobID
 	// The next seq is read inside the same statement so a turn can never land on
 	// a duplicate (session_id, seq) when two phones finish at the same moment.
 	inserted, err := c.query(ctx,
-		`INSERT INTO turns(session_id, seq, role, agent, job_id, text, created_at)
-		 SELECT ?, COALESCE((SELECT MAX(seq) + 1 FROM turns WHERE session_id = ?), 1), ?, ?, ?, ?, unixepoch()`,
-		[]string{sessionID, sessionID, role, agent, jobID, text})
+		`INSERT INTO turns(session_id, seq, role, agent, job_id, text, created_at, model, input_tokens, output_tokens, duration_ms)
+		 SELECT ?, COALESCE((SELECT MAX(seq) + 1 FROM turns WHERE session_id = ?), 1), ?, ?, ?, ?, unixepoch(), ?, ?, ?, ?`,
+		[]string{sessionID, sessionID, role, agent, jobID, text, meta.Model,
+			strconv.Itoa(meta.InputTokens), strconv.Itoa(meta.OutputTokens), strconv.FormatInt(meta.DurationMs, 10)})
 	if err != nil {
 		return 0, err
 	}

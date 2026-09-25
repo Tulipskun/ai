@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -56,6 +57,12 @@ func (f *fakeCloudflare) start(t *testing.T) *httptest.Server {
 	server := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(server.Close)
 	return server
+}
+
+// fakeInt parses a bound parameter that stands for a number.
+func fakeInt(s string) int64 {
+	n, _ := strconv.ParseInt(s, 10, 64)
+	return n
 }
 
 func (f *fakeCloudflare) serve(w http.ResponseWriter, r *http.Request) {
@@ -215,7 +222,7 @@ func (f *fakeCloudflare) exec(sql string, params []string) ([]map[string]any, in
 			changes = 1
 		}
 		return nil, changes, 0, nil
-	case strings.HasPrefix(s, "INSERT INTO turns(session_id, seq, role, agent, job_id, text, created_at) SELECT"):
+	case strings.HasPrefix(s, "INSERT INTO turns(session_id, seq, role, agent, job_id, text, created_at, model, input_tokens, output_tokens, duration_ms) SELECT"):
 		sessionID, role, agent, jobID, text := params[0], params[2], params[3], params[4], params[5]
 		seq := f.nextTurn
 		f.nextTurn++
@@ -223,9 +230,11 @@ func (f *fakeCloudflare) exec(sql string, params []string) ([]map[string]any, in
 		f.turns = append(f.turns, map[string]any{
 			"id": id, "session_id": sessionID, "seq": seq, "role": role,
 			"agent": agent, "job_id": jobID, "text": text, "created_at": seq,
+			"model": params[6], "input_tokens": fakeInt(params[7]), "output_tokens": fakeInt(params[8]),
+			"duration_ms": fakeInt(params[9]),
 		})
 		return nil, 1, id, nil
-	case strings.HasPrefix(s, "SELECT seq, role, agent, job_id, text, created_at FROM turns"):
+	case strings.HasPrefix(s, "SELECT seq, role, agent, job_id, text, created_at, model, input_tokens, output_tokens, duration_ms FROM turns"):
 		before := params[1]
 		var limit int
 		fmt.Sscan(params[2], &limit)
@@ -241,6 +250,8 @@ func (f *fakeCloudflare) exec(sql string, params []string) ([]map[string]any, in
 			rows = append(rows, map[string]any{
 				"seq": turn["seq"], "role": turn["role"], "agent": turn["agent"],
 				"job_id": turn["job_id"], "text": turn["text"], "created_at": turn["created_at"],
+				"model": turn["model"], "input_tokens": turn["input_tokens"],
+				"output_tokens": turn["output_tokens"], "duration_ms": turn["duration_ms"],
 			})
 			if len(rows) == limit {
 				break

@@ -270,7 +270,9 @@ func (h historyStore) Turns(ctx context.Context, sessionID string, beforeSeq int
 	for _, row := range rows {
 		out = append(out, mobiletransport.TurnRow{
 			Seq: row.Seq, Role: row.Role, Agent: row.Agent, JobID: row.JobID,
-			Text: row.Text, CreatedAt: row.CreatedAt,
+			Text: row.Text, CreatedAt: row.CreatedAt, Model: row.Model,
+			InputTokens: row.InputTokens, OutputTokens: row.OutputTokens,
+			DurationMs: row.DurationMs,
 		})
 	}
 	return out, nil
@@ -390,7 +392,22 @@ func (m *mobileRuntime) PublishOutput(ctx context.Context, output sdk.Output) {
 		return
 	}
 	jobID := output.Metadata["mobile_job_id"]
-	if err := m.client.AppendTurn(ctx, output.SessionID, "model", "main", jobID, text); err != nil {
+	// The footer is read off the terminal trace: the model that answered, the
+	// counts it reported and how long it took (AX-095).
+	var meta d1store.TurnMeta
+	if output.Trace != nil {
+		if output.Trace.Response != nil {
+			meta.Model = output.Trace.Response.Model
+			meta.InputTokens = output.Trace.Response.Usage.InputTokens
+			meta.OutputTokens = output.Trace.Response.Usage.OutputTokens
+		}
+		if output.Trace.RequestStartedMs > 0 && output.Trace.AtMs >= output.Trace.RequestStartedMs {
+			meta.DurationMs = output.Trace.AtMs - output.Trace.RequestStartedMs
+		} else {
+			meta.DurationMs = output.Trace.Elapsed.Milliseconds()
+		}
+	}
+	if _, err := m.client.AppendModelTurn(ctx, output.SessionID, "main", jobID, text, meta); err != nil {
 		log.Printf("mobile: mirror turn to D1 session=%s: %v", output.SessionID, err)
 		m.turns.forget(key)
 	}

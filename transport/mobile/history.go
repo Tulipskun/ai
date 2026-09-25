@@ -27,6 +27,11 @@ type TurnRow struct {
 	JobID     string `json:"job_id"`
 	Text      string `json:"text"`
 	CreatedAt int64  `json:"created_at"`
+	// Footer of an answered turn (AX-095).
+	Model        string `json:"model,omitempty"`
+	InputTokens  int    `json:"input_tokens,omitempty"`
+	OutputTokens int    `json:"output_tokens,omitempty"`
+	DurationMs   int64  `json:"duration_ms,omitempty"`
 }
 
 type NodeRow struct {

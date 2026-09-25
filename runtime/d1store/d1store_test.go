@@ -408,3 +408,34 @@ func TestFirstUserMessageNamesTheChatWithoutBreakingThaiText(t *testing.T) {
 		t.Fatalf("title has %d runes, want 42", n)
 	}
 }
+
+// A model turn keeps the footer data the phone draws under that message, and
+// history hands it back (AX-095).
+func TestModelTurnKeepsItsFooter(t *testing.T) {
+	fake := newFakeCloudflare("cf-token")
+	c, _ := testClient(t, fake)
+	ctx := context.Background()
+	if _, err := c.AppendTurnAt(ctx, "s1", "user", "user", "", "งาน"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AppendModelTurn(ctx, "s1", "main", "", "pong", TurnMeta{
+		Model: "nemotron-3-ultra-free", InputTokens: 2269, OutputTokens: 51, DurationMs: 4000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	turns, err := c.Turns(ctx, "s1", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 2 {
+		t.Fatalf("got %d turns, want 2", len(turns))
+	}
+	answer := turns[1]
+	if answer.Model != "nemotron-3-ultra-free" || answer.InputTokens != 2269 ||
+		answer.OutputTokens != 51 || answer.DurationMs != 4000 {
+		t.Fatalf("footer lost on the way back: %+v", answer)
+	}
+	if turns[0].Model != "" {
+		t.Errorf("a user turn grew a model: %q", turns[0].Model)
+	}
+}

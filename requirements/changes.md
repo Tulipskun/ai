@@ -971,3 +971,22 @@ Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่าน; เ�
 ที่มี `job_id` ตอบ `done` stage `subagent_stopping` พร้อม job id เดิมและไม่ไปเรียก
 `CancelTurn`; เทสต์จริงบน provider ที่รายงาน usage: ตัวเลข token ของ turn ที่ stream ไม่เป็นศูนย์
 Status: accepted
+
+CHANGE-073
+
+Date: 2026-09-25
+Type: fix
+Request: "การแสดงการทำงานของ sub agent/การหยุด sub agent" — ทดสอบจริงแล้วแถวค้างที่ "กำลังหยุด…"
+Conflict: AX-093/REQ-048(11) บอกว่าแถวเปลี่ยนสถานะเมื่อ daemon สั่งเท่านั้น — แต่ daemon ไม่เคยส่ง
+เฟรมปิดของ sub agent แยก มีแต่เฟรม ack ตอนรับคำสั่งหยุด เลยไม่มีอะไรบอกว่า worker จบแล้ว
+Previous: `sdk.Agent.SetSubAgentSinks` ไม่ได้ต่อเข้ากับ mobile transport; เฟรม `done` มีแต่ตอน
+จบ turn ของ main agent
+New: `Transport.SubAgentTerminal(session, job, stage)` ส่ง `done` ที่มี `job_id` + stage
+`subagent_completed`/`subagent_stopped`/`subagent_failed` จาก sub-agent final event
+(`cmd/ai/main.go` ต่อ sink); แอปแปลง stage เหล่านี้เป็นสถานะปลายของแถว ("เสร็จแล้ว"/"หยุดแล้ว"/"ล้มเหลว")
+Reason: แถวที่ค้าง "กำลังหยุด…" ทำให้ผู้ใช้เข้าใจว่ายังหยุดไม่ได้ และไม่มีทางรู้ว่า worker จบแล้วหรือยัง
+Impact: transport/mobile/gateway.go (SubAgentTerminal), cmd/ai/main.go (wire sink),
+app ChatViewModel.onSubAgentStopped, requirements/functional.md (AX-093), requirements/changes.md
+Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่าน; จริงบนมือถือ: กด "หยุด"
+ในแถว sub agent แล้ว main turn ยังเดินต่อจนจบ (`turn ok`) และแถวเปลี่ยนเป็นปลายงาน
+Status: accepted

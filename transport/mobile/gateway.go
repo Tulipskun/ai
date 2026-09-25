@@ -171,6 +171,18 @@ func (t *Transport) SetCancel(cancel func(string) bool) {
 	t.cfg.CancelTurn = cancel
 }
 
+// SubAgentTerminal reports that one sub agent job reached its end state, so the
+// phone can settle that row instead of leaving it spinning. The stage names the
+// outcome: completed, stopped or failed.
+func (t *Transport) SubAgentTerminal(sessionID, jobID, stage string) {
+	if t == nil || sessionID == "" || jobID == "" || stage == "" {
+		return
+	}
+	t.broadcast(sessionID, Outbound{
+		Kind: FrameDone, SessionID: sessionID, Role: "system", JobID: jobID, Stage: "subagent_" + stage,
+	})
+}
+
 // SetCancelSubAgent attaches the per-sub-agent stop hook. A cancel frame that
 // names a job stops that worker only; without it the frame keeps its old
 // meaning and stops the whole turn.

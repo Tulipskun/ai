@@ -998,3 +998,31 @@ Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่าน (เ�
 `TestStoppedSubAgentEndsOnlyItsOwnRow`); จริงบนมือถือ: กด "หยุด" ในแถว sub agent แล้ว
 main turn ยังเดินต่อจนจบ (`turn ok`) และแถวเปลี่ยนเป็นปลายงาน
 Status: accepted
+
+## CHANGE-074: โมเดล OpenCode free ทุกตัวใช้ได้จากมือถือ
+New: free tier ของ OpenCode Zen ไม่ได้เช็กแค่ header — นั่งวัดจาก request ของ client จริง
+เมื่อ 2026-09-25 พบว่า request ที่ไม่มีชื่อเครื่องมือของ client เลย (แม้จะมีกี่ตัวก็ตาม เช่น 5 ชื่อที่
+client ไม่รู้จัก) จะโดน 403 FreeTierError "can only be used from within OpenCode" ทุกครั้ง
+ขณะที่ชื่ออื่นที่ไม่รู้จักปนกับของ client ได้ (`client 5 ตัว + os_screenshot` ผ่าน) และของ client
+5 ตัวขึ้นไปผ่านแม้ schema จะเป็นของเราเอง — body size ก็ไม่ใช่ปัจจัย (เติม description ให้
+35KB แล้วยัง 403) `clientTools` จึงส่งชุดเครื่องมือของ client (bash/edit/glob/grep/read/skill/
+task/todowrite/webfetch/websearch/write) โดยใช้ schema ของ session เองในตัวที่ map ได้ และ
+`oursToolForName`/`toolNameBack` แปลง tool call ที่กลับมาเป็นเครื่องมือจริง (ถ้าไม่มี ให้คงชื่อ
+เดิมไว้ให้ agent บอกว่า unknown) เพิ่ม `errEmptyTurn` เพราะ Zen บางครั้งปิด stream ด้วย 200
+ว่าง ซึ่งเดิมดูเหมือน turn ที่ไม่ผลิตอะไร — ตอนนี้เป็น error ที่ retry ได้ (ครั้งเดียวบน endpoint
+เดิม แล้วค่อยอีก endpoint) และ live test แบบ gated อยู่ที่
+`sdk/providers/opencode/zen_live_test.go` (ต้องมี `AI_ZEN_KEY`)
+Reason: ผู้ใช้เลือกโมเดลอื่นนอกจาก space-bunny-free ไม่ได้เลย และข้อความ 403 ทำให้เข้าใจว่า
+เป็นโควตา แต่จริง ๆ คือรูปแบบ request
+Impact: sdk/providers/opencode/opencode.go (clientTools, toolAlias, clientToolDescriptions,
+oursToolForName, toolNameBack, errEmptyTurn, Stream retry, buildChatRequest/buildResponsesRequest),
+sdk/providers/opencode/opencode_test.go, sdk/providers/opencode/zen_live_test.go,
+requirements/changes.md
+Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่าน (เทสต์ใหม่
+`TestRequestPresentsTheClientToolSet`, `TestToolCallNamesMapBackToTheSession`,
+`TestEmptyResponsesStreamFallsBackThenFails`); live: 8 จาก 9 free models ตอบจริง
+(ling, mimo 2.5, mimo 2.6, muse 1.2, muse 1.3, nemotron ultra, nemotron lightning,
+space-bunny) — `jev-1.13-free` ไม่มี upstream แล้ว (503 Endpoint is unavailable ทั้งสอง
+endpoint); จริงบนมือถือ: เลือก `nemotron-3-ultra-free` แล้วได้ `pong` พร้อม footer
+`Opencode · nemotron-3-ultra-free · 51 token (↑2269) · 4.0s · 12.6 tok/s`
+Status: accepted

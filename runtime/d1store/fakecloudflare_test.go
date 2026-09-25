@@ -18,7 +18,10 @@ import (
 // package sends. It keeps the tests honest about the request shape (bearer
 // token, account/database path, bound params) instead of only the mapping.
 type fakeCloudflare struct {
-	mu sync.Mutex
+	// extraTurnColumns are the footer columns a migration has added so far, so a
+	// test can check that EnsureTurnFooter is idempotent.
+	extraTurnColumns []string
+	mu               sync.Mutex
 
 	token     string
 	accounts  []map[string]string
@@ -222,6 +225,20 @@ func (f *fakeCloudflare) exec(sql string, params []string) ([]map[string]any, in
 			changes = 1
 		}
 		return nil, changes, 0, nil
+	case s == "PRAGMA table_info(turns)":
+		rows := []map[string]any{}
+		for _, name := range []string{"id", "session_id", "seq", "role", "agent", "job_id", "text", "created_at"} {
+			rows = append(rows, map[string]any{"name": name})
+		}
+		for _, name := range f.extraTurnColumns {
+			rows = append(rows, map[string]any{"name": name})
+		}
+		return rows, 0, 0, nil
+	case strings.HasPrefix(s, "ALTER TABLE turns ADD COLUMN "):
+		name := strings.TrimSuffix(strings.TrimPrefix(s, "ALTER TABLE turns ADD COLUMN "), " ")
+		name = strings.Fields(name)[0]
+		f.extraTurnColumns = append(f.extraTurnColumns, name)
+		return nil, 1, 0, nil
 	case strings.HasPrefix(s, "INSERT INTO turns(session_id, seq, role, agent, job_id, text, created_at, model, input_tokens, output_tokens, duration_ms) SELECT"):
 		sessionID, role, agent, jobID, text := params[0], params[2], params[3], params[4], params[5]
 		seq := f.nextTurn

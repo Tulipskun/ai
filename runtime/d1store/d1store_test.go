@@ -439,3 +439,23 @@ func TestModelTurnKeepsItsFooter(t *testing.T) {
 		t.Errorf("a user turn grew a model: %q", turns[0].Model)
 	}
 }
+
+// The footer columns are added once and only when they are missing, so a
+// database that already has them is left alone (AX-095).
+func TestEnsureTurnFooterAddsColumnsOnce(t *testing.T) {
+	fake := newFakeCloudflare("cf-token")
+	c, _ := testClient(t, fake)
+	ctx := context.Background()
+	if err := c.EnsureTurnFooter(ctx); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if len(fake.extraTurnColumns) != 4 {
+		t.Fatalf("added %v, want the four footer columns", fake.extraTurnColumns)
+	}
+	if err := c.EnsureTurnFooter(ctx); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(fake.extraTurnColumns) != 4 {
+		t.Fatalf("a second run added %v again", fake.extraTurnColumns)
+	}
+}

@@ -737,3 +737,47 @@ func (m *MemoryToken) Clear() {
 		m.value.Store("")
 	}
 }
+
+// turnFooterColumns are the columns an answered turn needs for the footer the
+// phone draws under that message (AX-095).
+var turnFooterColumns = []struct{ name, ddl string }{
+	{"model", "ALTER TABLE turns ADD COLUMN model TEXT NOT NULL DEFAULT ''"},
+	{"input_tokens", "ALTER TABLE turns ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0"},
+	{"output_tokens", "ALTER TABLE turns ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0"},
+	{"duration_ms", "ALTER TABLE turns ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0"},
+}
+
+// EnsureTurnFooter adds the footer columns when they are missing. The daemon
+// writes them on every answer, so a database created before AX-095 would fail
+// every insert until it is brought up to date; the phone's Worker schema lists
+// the same columns for a fresh database, and worker/migrations/0002_turn_footer.sql
+// is the same change written for wrangler. It runs once, after the token that
+// reaches the database has been verified.
+func (c *Client) EnsureTurnFooter(ctx context.Context) error {
+	if c == nil {
+		return errors.New("d1store: client is not configured")
+	}
+	res, err := c.query(ctx, "PRAGMA table_info(turns)", nil)
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	rows, err := queryInto[struct {
+		Name string `json:"name"`
+	}](res.rows)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		have[row.Name] = true
+	}
+	for _, column := range turnFooterColumns {
+		if have[column.name] {
+			continue
+		}
+		if _, err := c.query(ctx, column.ddl, nil); err != nil {
+			return fmt.Errorf("d1store: add turns.%s: %w", column.name, err)
+		}
+	}
+	return nil
+}

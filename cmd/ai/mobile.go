@@ -311,6 +311,11 @@ func (m *mobileRuntime) Hydrate(ctx context.Context) error {
 	if m == nil || m.client == nil {
 		return nil
 	}
+	// The daemon writes the per-message footer on every answer, so the columns
+	// it needs have to be there before the first phone turn (AX-095).
+	if err := m.client.EnsureTurnFooter(ctx); err != nil {
+		log.Printf("mobile: prepare turns for the message footer: %v", err)
+	}
 	if m.cfg.syncConfig {
 		report, err := m.client.HydrateConfig(ctx, d1store.DefaultConfigFiles(m.stateRoot))
 		if err != nil {

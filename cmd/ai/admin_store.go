@@ -680,6 +680,24 @@ func (a *adminStore) SaveSettings(ctx context.Context, settings mobiletransport.
 	}, nil
 }
 
+// RefreshRoutesFromDisk re-reads the stored agent defaults and pushes them
+// into the live runtime. It runs after D1 hydrate so the routes the phone
+// saved earlier keep working across restarts without anyone re-saving them.
+func (a *adminStore) RefreshRoutesFromDisk() {
+	if a == nil {
+		return
+	}
+	a.fileMu.Lock()
+	defer a.fileMu.Unlock()
+	cfg, err := runtime.LoadSystemConfig(a.systemPath)
+	if err != nil {
+		log.Printf("admin: reroute from stored settings: %v", err)
+		return
+	}
+	a.applySettings(cfg)
+	log.Printf("admin: agent defaults now %s/%s (sub %s/%s)", cfg.Provider, cfg.Model, cfg.SubAgent.Provider, cfg.SubAgent.Model)
+}
+
 // applySettings pushes the saved routes into the live runtime: the sub agent
 // takes its provider/model, and the session manager learns the main default for
 // chats that have never picked one.

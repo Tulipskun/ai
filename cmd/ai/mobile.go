@@ -33,6 +33,11 @@ type mobileRuntime struct {
 	// loaded providers at boot, before any phone connected, so without this
 	// the daemon would know zero providers for its whole lifetime (REQ-046(4)).
 	reloadProviders func(context.Context) error
+	// applySystemRoutes runs after the reload above. The provider set is
+	// useless without the routes that go with it: the phone's agent defaults
+	// live in config/system, and a daemon that started with empty boot env
+	// would otherwise route every unpinned chat to an empty provider forever.
+	applySystemRoutes func()
 
 	// sessions applies a phone's provider/model choice to a live chat.
 	sessions *runtime.SessionManager
@@ -350,6 +355,9 @@ func (m *mobileRuntime) Hydrate(ctx context.Context) error {
 			if err := m.reloadProviders(ctx); err != nil {
 				return fmt.Errorf("reload providers after hydrate: %w", err)
 			}
+		}
+		if m.applySystemRoutes != nil {
+			m.applySystemRoutes()
 		}
 	}
 	if m.cfg.syncSessions {

@@ -195,6 +195,7 @@ func run(ctx context.Context) error {
 	// answer from, so the phone does not hand the user a model the key refuses.
 	models.workingModel = admin.WorkingModel
 	mobileRT.transport.SetAdminStore(admin)
+	mobileRT.applySystemRoutes = admin.RefreshRoutesFromDisk
 	sessions.SetSessionDefaults(func(ctx context.Context, sessionID string) (sdk.ProviderID, string, bool) {
 		choice, ok, err := models.SessionModel(ctx, sessionID)
 		if err != nil || !ok {

@@ -1074,3 +1074,19 @@ Reason: error ใหม่มีความหมายเดียวกับ
 Impact: sdk/providers/opencode/opencode.go (shouldTryChat), sdk/providers/opencode/opencode_test.go (`TestShouldTryChatFallsBackOnModelProtocolUnsupported`), requirements/changes.md
 Validation: unit test ใหม่ (fake `/responses` ตอบ 400 shape นี้ แล้วได้คำตอบจาก `/chat/completions`); `go test ./sdk/providers/opencode -count=1`
 Status: accepted
+
+CHANGE-080
+
+Date: 2026-09-26
+Type: revise
+Request: แชทใหม่ที่ไม่มี pin ล้มด้วย `sdk: provider is required` ทั้งที่ settings มีค่าเริ่มต้นสากล
+Conflict: REQ-048(4) (ค่าเริ่มต้นต้องมีผลกับ turn ถัดไป ไม่ใช่แค่แสดงในหน้าตั้งค่า)
+Previous: daemon อ่านค่าเริ่มต้นจาก env ตอน boot เท่านั้น (`AI_PROVIDER`/`AI_MODEL`) และ `applySettings`
+ทำงานเฉพาะตอน `SaveSettings`; หลัง hydrate ค่าใน D1 อยู่บน disk แต่ runtime ยังใช้ค่าว่าง
+New: `adminStore.RefreshRoutesFromDisk` อ่าน `config/system.json` แล้ว `applySettings` ทุกครั้งหลัง
+hydrate (ต่อจาก reload providers) ผ่าน hook `mobileRuntime.applySystemRoutes`
+Reason: ค่าเริ่มต้นสากลต้องมีผลกับ runtime จริง ไม่ใช่แค่ตัวหนังสือในหน้าตั้งค่า
+Impact: cmd/ai/admin_store.go (RefreshRoutesFromDisk), cmd/ai/mobile.go (hook + เรียกใน Hydrate),
+cmd/ai/main.go (ต่อ hook), cmd/ai/admin_store_test.go, requirements/changes.md
+Validation: `TestRefreshRoutesFromDiskPicksUpStoredDefaults`; `go test ./cmd/ai -count=1`
+Status: accepted

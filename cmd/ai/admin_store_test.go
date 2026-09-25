@@ -206,3 +206,23 @@ type statusError struct{ status int }
 
 func (e *statusError) Error() string       { return "http status" }
 func (e *statusError) HTTPStatusCode() int { return e.status }
+
+// A daemon that boots with empty env must still route unpinned chats once D1
+// has hydrated: the stored agent defaults are pushed into the live runtime,
+// not just left on disk for the settings screen to display.
+func TestRefreshRoutesFromDiskPicksUpStoredDefaults(t *testing.T) {
+	store, _ := adminFixture(t)
+	systemPath := store.systemPath
+	if err := os.MkdirAll(filepath.Dir(systemPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"provider":"Opencode","model":"muse-spark-1.3-contributor-free","sub_agent":{"Provider":"Opencode","Model":"space-bunny-free","Enabled":true}}`
+	if err := os.WriteFile(systemPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store.RefreshRoutesFromDisk()
+	route := store.defaultRoute()
+	if route.Provider != "Opencode" || route.Model != "muse-spark-1.3-contributor-free" {
+		t.Fatalf("default route = %+v, want the stored agent defaults", route)
+	}
+}

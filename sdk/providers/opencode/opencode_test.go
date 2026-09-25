@@ -541,3 +541,38 @@ func TestNoInstructionFilesLeavesTheSystemPromptAlone(t *testing.T) {
 		t.Fatalf("system message = %q", system)
 	}
 }
+
+// Zen moved some models between endpoints with a new 400 shape; that still
+// means "try the other endpoint", not a dead key.
+func TestShouldTryChatFallsBackOnModelProtocolUnsupported(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/responses" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"ModelProtocolUnsupported","message":"Model does not support this protocol."}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	c := New("k")
+	c.BaseURL = srv.URL
+	ch, err := c.Stream(context.Background(), sdk.Request{Model: "space-bunny-free", SessionID: "stream-proto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text string
+	for ev := range ch {
+		if ev.Type == sdk.EventError {
+			t.Fatal(ev.Err)
+		}
+		if ev.Type == sdk.EventText {
+			text += ev.Text
+		}
+	}
+	if text != "hi" {
+		t.Fatalf("text = %q, want the answer from the other endpoint", text)
+	}
+}

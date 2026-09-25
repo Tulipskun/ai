@@ -1061,3 +1061,16 @@ Reason: แยกขอบเขต session/global ให้ชัด ป้อ�
 Impact: transport/mobile/history.go, transport/mobile/gateway.go, transport/mobile/display_test.go, transport/mobile/history_test.go, cmd/ai/mobile.go, runtime/session_manager.go (+Forget), runtime/session_manager_test.go, runtime/d1store/client.go (+cache + ensure), runtime/d1store tests/fake, sdk/providers/opencode (parse cache usage)
 Validation: `go test ./transport/mobile ./runtime/d1store ./runtime ./cmd/ai ./sdk/providers/opencode -count=1`; `go test ./... -count=1`; `git diff --check`
 Status: accepted
+
+CHANGE-078
+
+Date: 2026-09-26
+Type: revise
+Request: Zen เริ่มตอบ 400 `ModelProtocolUnsupported` กับโมเดลที่ย้าย endpoint (space-bunny-free บน `/responses`) ทำให้ adapter ไม่ fallback แล้ว retry เดิม 7 ครั้งจน turn ล้ม
+Conflict: REQ-039 (รายการ trigger ของการตกไปอีก endpoint ขาด shape ใหม่นี้)
+Previous: 400 จะ fallback เฉพาะ body ที่มี `"code":"model_not_supported_on_endpoint"`
+New: 400 ที่มี `"type":"ModelProtocolUnsupported"` ก็ตกไปอีก endpoint เช่นกัน
+Reason: error ใหม่มีความหมายเดียวกับของเดิม คือ "โมเดลนี้ไม่ได้ serve บน endpoint นี้" ไม่ใช่ key ตายหรือคำขอผิด
+Impact: sdk/providers/opencode/opencode.go (shouldTryChat), sdk/providers/opencode/opencode_test.go (`TestShouldTryChatFallsBackOnModelProtocolUnsupported`), requirements/changes.md
+Validation: unit test ใหม่ (fake `/responses` ตอบ 400 shape นี้ แล้วได้คำตอบจาก `/chat/completions`); `go test ./sdk/providers/opencode -count=1`
+Status: accepted

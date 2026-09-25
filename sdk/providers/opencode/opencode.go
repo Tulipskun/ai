@@ -409,7 +409,10 @@ func shouldTryChat(err error) bool {
 	case http.StatusForbidden:
 		return strings.Contains(httpErr.Body, "FreeTierError")
 	case http.StatusBadRequest:
-		return strings.Contains(httpErr.Body, `"code":"model_not_supported_on_endpoint"`)
+		// Zen answers 400 when the model is served only on the other endpoint,
+		// in two shapes so far: the documented code and ModelProtocolUnsupported.
+		return strings.Contains(httpErr.Body, `"code":"model_not_supported_on_endpoint"`) ||
+			strings.Contains(httpErr.Body, `"type":"ModelProtocolUnsupported"`)
 	case http.StatusInternalServerError, http.StatusServiceUnavailable:
 		return true
 	}

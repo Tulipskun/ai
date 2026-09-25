@@ -981,14 +981,18 @@ Conflict: AX-093/REQ-048(11) บอกว่าแถวเปลี่ยนส
 เฟรมปิดของ sub agent แยก มีแต่เฟรม ack ตอนรับคำสั่งหยุด เลยไม่มีอะไรบอกว่า worker จบแล้ว
 Previous: `sdk.Agent.SetSubAgentSinks` ไม่ได้ต่อเข้ากับ mobile transport; เฟรม `done` มีแต่ตอน
 จบ turn ของ main agent
-New: ปลายงานของแต่ละ worker มาจาก trace ของมันเอง — `displayTrace` ส่ง `done` ที่มี
+New: ปลายงานของแต่ละ worker มาจากสองทางที่ครอบคลุมกัน — (ก) trace ของมันเอง — `displayTrace` ส่ง `done` ที่มี
 `job_id` + stage `subagent_completed` (TraceResponse), `subagent_stopped` (TraceError ที่เป็น
-context.Canceled) และ `subagent_failed` (TraceError อื่น) พร้อมแก้กรณีที่เคยเป็นกับดัก: error
+context.Canceled) และ `subagent_failed` (TraceError อื่น) และ (ข) worker ที่ถูกมือถือสั่งหยุด
+ไม่มี trace ปิดของตัวเองเลย (การหยุดคือสิ่งที่จบมัน) จึงต่อ `SetSubAgentSinks` เข้ากับ
+`Transport.SubAgentTerminal` เพื่อใช้ final report ของ worker บอกแถวนั้น; พร้อมแก้กับดักเดิม: error
 ที่ cancel ของ sub agent เคยถูกส่งเป็น `done/cancelled` ที่ไม่มี job → มือถืออ่านว่า "ทั้ง turn
 หยุด" ทั้งที่จริง ๆ แค่ worker ตัวเดียว; แอปแปลง stage เหล่านี้เป็นสถานะปลายของแถว
 ("เสร็จแล้ว"/"หยุดแล้ว"/"ล้มเหลว")
 Reason: แถวที่ค้าง "กำลังหยุด…" ทำให้ผู้ใช้เข้าใจว่ายังหยุดไม่ได้ และไม่มีทางรู้ว่า worker จบแล้วหรือยัง
-Impact: transport/mobile/gateway.go (TraceResponse/TraceError ตาม job, error frame มี agent/job),
+Impact: transport/mobile/gateway.go (TraceResponse/TraceError ตาม job, error frame มี agent/job,
+SubAgentTerminal), cmd/ai/main.go (ต่อ SetSubAgentSinks), transport/mobile/display_test.go
+(`TestSubAgentTerminalNamesTheStoppedJob`),
 app ChatViewModel.onSubAgentStopped, requirements/functional.md (AX-093), requirements/changes.md
 Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่าน (เทสต์ใหม่
 `TestStoppedSubAgentEndsOnlyItsOwnRow`); จริงบนมือถือ: กด "หยุด" ในแถว sub agent แล้ว

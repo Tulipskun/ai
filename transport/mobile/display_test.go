@@ -238,3 +238,23 @@ func TestStoppedSubAgentEndsOnlyItsOwnRow(t *testing.T) {
 		t.Fatalf("frame = %+v, want the stopped worker named by its job", frames[0])
 	}
 }
+
+// A worker the phone stopped has no terminal trace, so its final report is what
+// settles the row.
+func TestSubAgentTerminalNamesTheStoppedJob(t *testing.T) {
+	tr := newDisplayTransport()
+	frames := capture(t, tr, func() {
+		tr.SubAgentTerminal("s1", "sa-3", "stopped")
+		tr.SubAgentTerminal("s1", "", "stopped")
+		tr.SubAgentTerminal("s1", "sa-4", "weird-status")
+	})
+	if len(frames) != 2 {
+		t.Fatalf("frames = %+v, want one frame per named job", frames)
+	}
+	if frames[0].Kind != FrameDone || frames[0].JobID != "sa-3" || frames[0].Stage != "subagent_stopped" {
+		t.Fatalf("frame = %+v, want the stopped worker named", frames[0])
+	}
+	if frames[1].JobID != "sa-4" || frames[1].Stage != "subagent_completed" {
+		t.Fatalf("frame = %+v, want an unknown status read as completed", frames[1])
+	}
+}

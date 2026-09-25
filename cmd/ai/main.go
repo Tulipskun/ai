@@ -238,6 +238,13 @@ func run(ctx context.Context) error {
 	// The phone's per-row stop: one sub agent stops without ending the turn that
 	// delegated to it (REQ-048(11)).
 	mobileRT.transport.SetCancelSubAgent(agent.StopSubAgent)
+	// A stopped worker never reaches a terminal trace, so the phone learns about
+	// it from the sub agent's final report instead (REQ-048(11)).
+	agent.SetSubAgentSinks(func(event sdk.SubAgentEvent) {
+		if event.Kind == "final" && event.Parent != nil {
+			mobileRT.transport.SubAgentTerminal(event.Parent.ID(), event.JobID, event.Status)
+		}
+	}, nil)
 	return loop.Run(ctx)
 }
 

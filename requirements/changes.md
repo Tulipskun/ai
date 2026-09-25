@@ -940,3 +940,34 @@ Reason: สิ่งที่ผู้ใช้เจอต้องมีที
 Impact: transport/mobile/gateway.go (StartHTTP), transport/mobile/listen_test.go (ใหม่), transport/mobile/admin.go (writeAdminError + log รูปร่าง body), requirements/changes.md
 Validation: `go build ./...`, `go vet ./...`, `go test ./transport/mobile/...` ผ่าน; จริงบนเครื่องจริง: restart daemon ทั้งหมดแล้ว URL ใหม่ตอบ `/healthz` 200 และทุก provider write ที่ล้มเหลวมีบรรทัด `admin ...` ใน log
 Status: accepted
+
+CHANGE-072
+
+Date: 2026-09-25
+Type: add
+Request: "การแสดงผลแชทควรแสดงเต็มหน้าจอ แสดง footer สำหรับ token/model/เวลาที่ใช้/
+การแสดง Animation/การแสดงการทำงานของ sub agent/การหยุด sub agent" และ "เพิ่มแสดง token/s
+แบบ realtime"
+Conflict: REQ-048(5) รู้จักแค่ `cancel` ที่หยุดทั้ง turn — มือถือจึงหยุด sub agent ไม่ได้
+โดยไม่ทิ้งงานของ main agent, และ REQ-048(6) ส่งเฟรมที่มี `input_tokens`/`output_tokens`
+อยู่แล้วแต่ turn ที่ stream ได้ 0 เสมอ เพราะ adapter ไม่เคยอ่าน `usage` ของ stream
+Previous: เฟรม `cancel` มีแค่ session id และหยุดทั้ง turn; `openai`/`opencode` adapter
+ไม่ขอ `stream_options.include_usage` และไม่อ่าน chunk `usage` ที่มาทีหลัง — ตัวเลข token
+ของ turn ที่ stream จึงเป็นศูนย์เสมอ
+New: `Inbound.JobID` + `Transport.SetCancelSubAgent` + `sdk.Agent.StopSubAgent`
+(`subAgentManager.RequestStop` ยกเลิก job เดียว ไม่ตั้ง `reportDelivered` เพื่อให้รายงาน
+ปิดของ worker ยังส่งออกไปหาแถวนั้น) พร้อม stage `subagent_stopping` /
+`subagent_not_found` / `subagent_stop_failed`; adapter ทั้งสองขอ `include_usage` และอ่าน
+`usage` จาก chunk ปิดท้าย/เหตุการณ์ `response.completed` แล้วใส่ใน `EventDone.Response.Usage`
+Reason: ผู้ใช้ต้องเห็นว่า agent คิดอะไรไปใช้เวลาเท่าไรและเร็วแค่ไหน และต้องหยุดงาน
+ที่ไม่ต้องการเฉพาะตัวได้ โดยไม่ต้องรอให้ turn จบ
+Impact: sdk/subagent.go (RequestStop), sdk/agent.go (StopSubAgent),
+sdk/subagent_test.go, transport/mobile/gateway.go (Inbound.JobID, Config.CancelSubAgent,
+SetCancelSubAgent, cancelSubAgent, subAgentStopStage), transport/mobile/cancel_subagent_test.go
+(ใหม่), cmd/ai/main.go (wire), sdk/providers/openai/openai.go (addStreamUsage + usage ใน
+stream), sdk/providers/openai/openai_test.go, sdk/providers/opencode/opencode.go + test,
+requirements/functional.md (REQ-048(11)(12)); ฝั่งแอป AX-092/AX-093
+Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่าน; เทสต์จริง: เฟรม cancel
+ที่มี `job_id` ตอบ `done` stage `subagent_stopping` พร้อม job id เดิมและไม่ไปเรียก
+`CancelTurn`; เทสต์จริงบน provider ที่รายงาน usage: ตัวเลข token ของ turn ที่ stream ไม่เป็นศูนย์
+Status: accepted

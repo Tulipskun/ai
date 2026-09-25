@@ -39,12 +39,15 @@ type ContentPart struct {
 }
 
 type Inbound struct {
-	Type        string        `json:"type"`
-	Source      string        `json:"source"`
-	SessionID   string        `json:"session_id"`
-	Role        string        `json:"role"`
-	Content     []ContentPart `json:"content"`
-	ClientMsgID string        `json:"client_msg_id"`
+	Type      string        `json:"type"`
+	Source    string        `json:"source"`
+	SessionID string        `json:"session_id"`
+	Role      string        `json:"role"`
+	Content   []ContentPart `json:"content"`
+	// JobID names one sub agent on a cancel frame: the phone stops one worker
+	// without stopping the turn that delegated to it. Empty means the turn.
+	JobID       string `json:"job_id,omitempty"`
+	ClientMsgID string `json:"client_msg_id"`
 }
 
 type ToolCall struct {
@@ -96,22 +99,23 @@ type Hydrator interface {
 
 // Config wires the transport.
 type Config struct {
-	Listen       string // e.g. 127.0.0.1:18789 (the tunnel is the only public ingress)
-	PublicListen string // e.g. 0.0.0.0:18789 for LAN-only operation
-	Tunnel       bool
-	Cloudflared  string
-	Version      string
-	Tokens       TokenStore
-	MirrorInput  func(sdk.Input) func(context.Context) error
-	Verifier     Verifier
-	Hydrate      Hydrator
-	History      HistoryStore                        // serves the phone's history from D1
-	Models       ModelStore                          // provider/model catalogue and per-chat choice
-	Admin        AdminStore                          // provider keys and agent settings from the phone
-	CancelTurn   func(sessionID string) bool         // stops the turn a phone asked to stop
-	ReportError  func(sessionID, message string)     // shows a turn failure on the phone
-	Announce     func(context.Context, string) error // publishes the tunnel URL (D1 `nodes`)
-	InputBuffer  int
+	Listen         string // e.g. 127.0.0.1:18789 (the tunnel is the only public ingress)
+	PublicListen   string // e.g. 0.0.0.0:18789 for LAN-only operation
+	Tunnel         bool
+	Cloudflared    string
+	Version        string
+	Tokens         TokenStore
+	MirrorInput    func(sdk.Input) func(context.Context) error
+	Verifier       Verifier
+	Hydrate        Hydrator
+	History        HistoryStore                        // serves the phone's history from D1
+	Models         ModelStore                          // provider/model catalogue and per-chat choice
+	Admin          AdminStore                          // provider keys and agent settings from the phone
+	CancelTurn     func(sessionID string) bool         // stops the turn a phone asked to stop
+	CancelSubAgent func(sessionID, jobID string) error // stops one sub agent job, leaving the turn
+	ReportError    func(sessionID, message string)     // shows a turn failure on the phone
+	Announce       func(context.Context, string) error // publishes the tunnel URL (D1 `nodes`)
+	InputBuffer    int
 }
 
 const defaultInputBuffer = 64
@@ -165,6 +169,16 @@ func (t *Transport) SetCancel(cancel func(string) bool) {
 		return
 	}
 	t.cfg.CancelTurn = cancel
+}
+
+// SetCancelSubAgent attaches the per-sub-agent stop hook. A cancel frame that
+// names a job stops that worker only; without it the frame keeps its old
+// meaning and stops the whole turn.
+func (t *Transport) SetCancelSubAgent(cancel func(sessionID, jobID string) error) {
+	if t == nil {
+		return
+	}
+	t.cfg.CancelSubAgent = cancel
 }
 
 // Version reports the label this build announces with, so the daemon can write
@@ -419,6 +433,33 @@ func cancelStage(stopped bool) string {
 	return "already_done"
 }
 
+// subAgentStopStage is the same idea for one worker: the phone updates that one
+// row instead of ending the whole turn, and a job it cannot find is named so the
+// row does not spin forever.
+func subAgentStopStage(err error) string {
+	switch {
+	case err == nil:
+		return "subagent_stopping"
+	case strings.Contains(err.Error(), "not found"):
+		return "subagent_not_found"
+	default:
+		return "subagent_stop_failed"
+	}
+}
+
+// cancelSubAgent asks the agent to stop one job and answers immediately. The
+// worker's own final report is what proves it stopped; the frame only says the
+// request was accepted.
+func (t *Transport) cancelSubAgent(conn *websocket.Conn, sessionID, jobID string) {
+	stage := "subagent_stop_failed"
+	if t.cfg.CancelSubAgent != nil {
+		stage = subAgentStopStage(t.cfg.CancelSubAgent(sessionID, jobID))
+	}
+	frame := Outbound{Kind: FrameDone, SessionID: sessionID, Role: "system", Stage: stage, JobID: jobID}
+	t.send(conn, frame)
+	t.broadcast(sessionID, frame)
+}
+
 func responseText(resp *sdk.Response) string {
 	if resp == nil {
 		return ""
@@ -616,8 +657,14 @@ func (t *Transport) serveWS(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if in.Type == FrameCancel {
-			// The phone's stop button. A turn that is not running is not an
-			// error: the phone may have pressed it a moment too late.
+			// The phone's stop button. A cancel that names a sub agent stops that
+			// worker and leaves the turn running; a cancel without a job stops
+			// the turn. Neither is an error when there was nothing to stop: the
+			// phone may have pressed a moment too late.
+			if jobID := strings.TrimSpace(in.JobID); jobID != "" {
+				t.cancelSubAgent(conn, sessionID, jobID)
+				continue
+			}
 			stopped := t.cfg.CancelTurn != nil && t.cfg.CancelTurn(sessionID)
 			t.send(conn, Outbound{
 				Kind: FrameDone, SessionID: sessionID, Role: "system", Stage: cancelStage(stopped),

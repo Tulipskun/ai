@@ -293,3 +293,79 @@ func TestStreamChatCollectsToolCallDeltas(t *testing.T) {
 		t.Fatalf("tool call = %+v, want the arguments assembled from the deltas", call)
 	}
 }
+
+// A streamed gateway reports its token counts in a trailing usage chunk, and the
+// closing event is the one that carries them.
+func TestStreamChatReportsTokenUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":42,\"completion_tokens\":5,\"total_tokens\":47,\"prompt_tokens_details\":{\"cached_tokens\":7}}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+	client := New("test-key").WithBaseURL(server.URL).(*Client)
+
+	events, err := client.Stream(context.Background(), sdk.Request{Model: "m", Messages: []sdk.Turn{{Role: sdk.RoleUser, Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "hi"}}}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var usage sdk.Usage
+	for event := range events {
+		if event.Type == sdk.EventError {
+			t.Fatalf("stream error: %v", event.Err)
+		}
+		if event.Type == sdk.EventDone && event.Response != nil {
+			usage = event.Response.Usage
+		}
+	}
+	if usage.InputTokens != 42 || usage.OutputTokens != 5 || usage.CacheReadTokens != 7 {
+		t.Fatalf("usage = %+v, want the counts the gateway sent", usage)
+	}
+}
+
+// The Responses dialect reports usage on the completed event.
+func TestStreamResponsesReportsTokenUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/chat/completions" {
+			// A gateway that only speaks the Responses dialect: the client falls
+			// back to it, which is where the usage event is.
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"ResponsesResponse.output_text.delta\",\"delta\":\"hi\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"ResponsesResponse.completed\",\"response\":{\"model\":\"m\",\"status\":\"completed\",\"usage\":{\"input_tokens\":9,\"output_tokens\":3,\"total_tokens\":12}}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+	client := New("test-key")
+	client.BaseURL = server.URL
+
+	events, err := client.Stream(context.Background(), sdk.Request{Model: "m"})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var usage sdk.Usage
+	for event := range events {
+		if event.Type == sdk.EventError {
+			t.Fatalf("stream error: %v", event.Err)
+		}
+		if event.Type == sdk.EventDone && event.Response != nil {
+			usage = event.Response.Usage
+		}
+	}
+	if usage.InputTokens != 9 || usage.OutputTokens != 3 {
+		t.Fatalf("usage = %+v, want the counts on the completed event", usage)
+	}
+}
+
+func TestStreamRequestAsksForUsage(t *testing.T) {
+	if opts, ok := BuildChatRequest(sdk.Request{Model: "m", Stream: true})["stream_options"].(map[string]any); !ok || opts["include_usage"] != true {
+		t.Fatal("a streamed chat request must ask for usage")
+	}
+	if _, ok := BuildChatRequest(sdk.Request{Model: "m"})["stream_options"]; ok {
+		t.Fatal("a non-streamed chat request must not ask for stream options")
+	}
+}

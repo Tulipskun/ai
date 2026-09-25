@@ -301,6 +301,15 @@ func (c *Client) streamResponses(ctx context.Context, req sdk.Request, sid strin
 				Name      string `json:"name"`
 				Arguments string `json:"arguments"`
 			} `json:"item"`
+			Response struct {
+				Model  string `json:"model"`
+				Status string `json:"status"`
+				Usage  struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+					TotalTokens  int `json:"total_tokens"`
+				} `json:"usage"`
+			} `json:"response"`
 		}
 		if json.Unmarshal(data, &e) != nil {
 			return nil
@@ -323,7 +332,17 @@ func (c *Client) streamResponses(ctx context.Context, req sdk.Request, sid strin
 			}
 		case "response.completed":
 			mark()
-			ch <- sdk.Event{Type: sdk.EventDone}
+			// The closing event carries the token counts, so a streamed turn
+			// reports the same usage a non-streamed one does.
+			ch <- sdk.Event{Type: sdk.EventDone, Response: &sdk.Response{
+				Model:        e.Response.Model,
+				FinishReason: e.Response.Status,
+				Usage: sdk.Usage{
+					InputTokens:  e.Response.Usage.InputTokens,
+					OutputTokens: e.Response.Usage.OutputTokens,
+					TotalTokens:  e.Response.Usage.TotalTokens,
+				},
+			}}
 		}
 		return nil
 	})
@@ -334,12 +353,18 @@ func (c *Client) streamChat(ctx context.Context, req sdk.Request, sid string, ch
 		id, name, args string
 	}
 	tools := map[int]*toolState{}
+	// Zen reports the token counts in a trailing chunk that carries only
+	// `usage`, after the closing choice. The closing `done` goes out first (the
+	// turn may continue with tool calls), and the real counts follow on a second
+	// `done`, which is the one the agent keeps.
+	var usage sdk.Usage
+	doneSent := false
 	mark := func() {
 		if emitted != nil {
 			*emitted = true
 		}
 	}
-	return internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/chat/completions", c.headers(sid), buildChatRequest(req), func(data []byte) error {
+	err := internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/chat/completions", c.headers(sid), buildChatRequest(req), func(data []byte) error {
 		var e struct {
 			Choices []struct {
 				Delta struct {
@@ -355,9 +380,21 @@ func (c *Client) streamChat(ctx context.Context, req sdk.Request, sid string, ch
 				} `json:"delta"`
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
+			Usage *struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			} `json:"usage"`
 		}
 		if json.Unmarshal(data, &e) != nil {
 			return nil
+		}
+		if e.Usage != nil {
+			usage = sdk.Usage{
+				InputTokens:  e.Usage.PromptTokens,
+				OutputTokens: e.Usage.CompletionTokens,
+				TotalTokens:  e.Usage.TotalTokens,
+			}
 		}
 		for _, choice := range e.Choices {
 			if choice.Delta.Content != "" {
@@ -378,7 +415,7 @@ func (c *Client) streamChat(ctx context.Context, req sdk.Request, sid string, ch
 				}
 				st.args += call.Function.Arguments
 			}
-			if choice.FinishReason != "" {
+			if choice.FinishReason == "tool_calls" {
 				for _, st := range tools {
 					if st.name != "" {
 						mark()
@@ -386,12 +423,28 @@ func (c *Client) streamChat(ctx context.Context, req sdk.Request, sid string, ch
 					}
 				}
 				tools = map[int]*toolState{}
+			}
+			if choice.FinishReason != "" {
+				doneSent = true
 				mark()
 				ch <- sdk.Event{Type: sdk.EventDone}
 			}
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	// The token counts ride out on their own `done` so a turn that continues
+	// with tool calls is not closed twice for the same stream.
+	if usage != (sdk.Usage{}) {
+		mark()
+		ch <- sdk.Event{Type: sdk.EventDone, Response: &sdk.Response{Usage: usage}}
+	} else if !doneSent {
+		mark()
+		ch <- sdk.Event{Type: sdk.EventDone}
+	}
+	return nil
 }
 
 func (c *Client) http() *http.Client {

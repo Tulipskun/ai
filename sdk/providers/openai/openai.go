@@ -156,7 +156,17 @@ func BuildResponsesRequest(req sdk.Request) map[string]any {
 	if req.ThinkingLevel != "" && req.ThinkingLevel != sdk.ThinkingNone {
 		b["reasoning"] = map[string]any{"effort": string(req.ThinkingLevel)}
 	}
+	addStreamUsage(b, req.Stream)
 	return b
+}
+
+// addStreamUsage asks for the token counts on a streamed answer. Without it the
+// usage only ever arrives on a non-streamed completion, and a phone that shows
+// tokens per second would have nothing to count.
+func addStreamUsage(b map[string]any, stream bool) {
+	if stream {
+		b["stream_options"] = map[string]any{"include_usage": true}
+	}
 }
 func build(req sdk.Request) map[string]any { return BuildResponsesRequest(req) }
 func BuildChatRequest(req sdk.Request) map[string]any {
@@ -203,6 +213,7 @@ func BuildChatRequest(req sdk.Request) map[string]any {
 	if req.MaxOutputTokens > 0 {
 		b["max_tokens"] = req.MaxOutputTokens
 	}
+	addStreamUsage(b, req.Stream)
 	return b
 }
 func buildChat(req sdk.Request) map[string]any { return BuildChatRequest(req) }
@@ -345,6 +356,18 @@ func (c *Client) streamResponses(ctx context.Context, req sdk.Request, ch chan<-
 				Name      string `json:"name"`
 				Arguments string `json:"arguments"`
 			} `json:"item"`
+			Response struct {
+				Model  string `json:"model"`
+				Status string `json:"status"`
+				Usage  struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+					TotalTokens  int `json:"total_tokens"`
+					InputDetails struct {
+						Cached int `json:"cached_tokens"`
+					} `json:"input_tokens_details"`
+				} `json:"usage"`
+			} `json:"response"`
 		}
 		if json.Unmarshal(data, &e) != nil {
 			return nil
@@ -367,7 +390,19 @@ func (c *Client) streamResponses(ctx context.Context, req sdk.Request, ch chan<-
 			}
 		case "ResponsesResponse.completed":
 			*emitted++
-			ch <- sdk.Event{Type: sdk.EventDone}
+			// The finished response carries the token counts, so a streamed turn
+			// reports the same usage a non-streamed one does.
+			usage := sdk.Usage{
+				InputTokens:     e.Response.Usage.InputTokens,
+				OutputTokens:    e.Response.Usage.OutputTokens,
+				TotalTokens:     e.Response.Usage.TotalTokens,
+				CacheReadTokens: e.Response.Usage.InputDetails.Cached,
+			}
+			finished := sdk.Response{
+				Provider: "openai", Model: e.Response.Model, FinishReason: e.Response.Status,
+				Usage: usage, Cache: sdk.CacheInfo{Layer: "provider", Hit: usage.CacheReadTokens > 0},
+			}
+			ch <- sdk.Event{Type: sdk.EventDone, Response: &finished}
 		}
 		return nil
 	})
@@ -378,7 +413,18 @@ func (c *Client) streamResponses(ctx context.Context, req sdk.Request, ch chan<-
 func (c *Client) streamChat(ctx context.Context, req sdk.Request, ch chan<- sdk.Event, emitted *int) error {
 	calls := map[int]*sdk.ToolCall{}
 	var order []int
-	return internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/chat/completions", c.headers(), buildChat(req), func(data []byte) error {
+	// A gateway sends the token counts in a trailing chunk that carries only
+	// `usage`, after the choices are done. It is kept here so the closing event
+	// can carry the real numbers instead of an estimate.
+	var usage sdk.Usage
+	reason, toolTurn := "", false
+	finish := func(reason string) sdk.Event {
+		return sdk.Event{Type: sdk.EventDone, Response: &sdk.Response{
+			Provider: "openai", FinishReason: reason,
+			Usage: usage, Cache: sdk.CacheInfo{Layer: "provider", Hit: usage.CacheReadTokens > 0},
+		}}
+	}
+	err := internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/chat/completions", c.headers(), buildChat(req), func(data []byte) error {
 		var e struct {
 			Choices []struct {
 				Delta struct {
@@ -394,8 +440,27 @@ func (c *Client) streamChat(ctx context.Context, req sdk.Request, ch chan<- sdk.
 				} `json:"delta"`
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
+			Usage *struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+				PromptDetails    struct {
+					Cached int `json:"cached_tokens"`
+				} `json:"prompt_tokens_details"`
+			} `json:"usage"`
 		}
-		if json.Unmarshal(data, &e) != nil || len(e.Choices) == 0 {
+		if json.Unmarshal(data, &e) != nil {
+			return nil
+		}
+		if e.Usage != nil {
+			usage = sdk.Usage{
+				InputTokens:     e.Usage.PromptTokens,
+				OutputTokens:    e.Usage.CompletionTokens,
+				TotalTokens:     e.Usage.TotalTokens,
+				CacheReadTokens: e.Usage.PromptDetails.Cached,
+			}
+		}
+		if len(e.Choices) == 0 {
 			return nil
 		}
 		choice := e.Choices[0]
@@ -424,14 +489,22 @@ func (c *Client) streamChat(ctx context.Context, req sdk.Request, ch chan<- sdk.
 				*emitted++
 				ch <- sdk.Event{Type: sdk.EventToolCall, ToolCall: &call}
 			}
+			toolTurn = true
 			return nil
 		}
 		if choice.FinishReason != "" {
-			*emitted++
-			ch <- sdk.Event{Type: sdk.EventDone}
+			reason = choice.FinishReason
 		}
 		return nil
 	})
+	if err != nil || toolTurn {
+		return err
+	}
+	// The token counts arrive in the chunk after the closing choice, so `done`
+	// is emitted once the stream is over and the real numbers are in hand.
+	*emitted++
+	ch <- finish(reason)
+	return nil
 }
 
 func (c *Client) http() *http.Client {

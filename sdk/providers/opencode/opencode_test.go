@@ -319,3 +319,56 @@ func TestShouldTryChatFallsBackOn503(t *testing.T) {
 		t.Fatal("401 must not fall back")
 	}
 }
+
+// A streamed turn must report the same token counts a non-streamed one does:
+// Zen sends them in a trailing chunk that carries only `usage`.
+func TestStreamReportsTokenUsageFromTheTrailingChunk(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/responses" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":7,\"total_tokens\":127}}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	c := New("k")
+	c.BaseURL = srv.URL
+	ch, err := c.Stream(context.Background(), sdk.Request{Model: "m", SessionID: "stream-usage"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var usage sdk.Usage
+	for ev := range ch {
+		if ev.Type == sdk.EventError {
+			t.Fatal(ev.Err)
+		}
+		if ev.Type == sdk.EventDone && ev.Response != nil {
+			usage = ev.Response.Usage
+		}
+	}
+	if usage.InputTokens != 120 || usage.OutputTokens != 7 {
+		t.Fatalf("usage = %+v, want the counts Zen sent in the trailing chunk", usage)
+	}
+}
+
+func TestChatRequestAsksForUsageOnAStream(t *testing.T) {
+	body := buildChatRequest(sdk.Request{Model: "m", Stream: true, MaxOutputTokens: 8, Tools: probeToolsForTest()})
+	opts, ok := body["stream_options"].(map[string]any)
+	if !ok || opts["include_usage"] != true {
+		t.Fatalf("stream_options = %v, want include_usage", body["stream_options"])
+	}
+	if body["tool_choice"] != "auto" {
+		t.Fatalf("tool_choice = %v, want auto when tools are sent", body["tool_choice"])
+	}
+	if body["max_tokens"] != 8 {
+		t.Fatalf("max_tokens = %v, want the caller's budget", body["max_tokens"])
+	}
+}
+
+func probeToolsForTest() []sdk.Tool {
+	return []sdk.Tool{{Name: "bash", Description: "run", InputSchema: map[string]any{"type": "object"}}}
+}

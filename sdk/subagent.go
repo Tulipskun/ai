@@ -738,6 +738,39 @@ func (m *subAgentManager) stop(ctx context.Context, parent *Session, id string) 
 	return m.await(ctx, job), nil
 }
 
+// RequestStop asks for one job to stop without waiting for it, and reports
+// whether there was something to stop. The phone needs this shape: a stop button
+// must answer immediately, and the job's own final report (status stopped, with
+// the work it did manage) is what tells the phone it really ended. A job that is
+// not running is not an error, for the same reason a finished turn is not.
+func (m *subAgentManager) RequestStop(parentID, id string) error {
+	if m == nil {
+		return errors.New("sdk: sub-agent is not configured")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("sdk: sub-agent job id is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job := m.jobs[id]
+	if job == nil {
+		return errors.New("sdk: sub-agent job not found: " + id)
+	}
+	if parentID != "" && job.parent != nil && job.parent.ID() != parentID {
+		return errors.New("sdk: sub-agent job not found: " + id)
+	}
+	if job.status != "running" {
+		return nil
+	}
+	// The report is left undelivered on purpose: the phone's row is waiting for
+	// it, and it is what says the worker really stopped. The tool path
+	// (`stop`) does the opposite because it hands the report back inline.
+	job.stopRequested = true
+	job.cancel()
+	return nil
+}
+
 func (m *subAgentManager) Accept(parent *Session, id, verification string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

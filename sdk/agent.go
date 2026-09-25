@@ -91,6 +91,17 @@ func (a *Agent) wasInterrupted(sessionID string) bool {
 	return a.interrupted[sessionID]
 }
 
+// StopSubAgent asks one sub agent job to stop, without stopping the turn that
+// delegated to it. The phone shows one row per sub agent and one stop button per
+// row, so the request has to name the job; an unknown job or one that already
+// ended is reported back instead of silently doing nothing.
+func (a *Agent) StopSubAgent(parentSessionID, jobID string) error {
+	if a == nil {
+		return errors.New("sdk: agent is not configured")
+	}
+	return a.subAgentManager().RequestStop(parentSessionID, jobID)
+}
+
 func (a *Agent) beginInterrupt(ctx context.Context, sessionID string) (context.Context, func()) {
 	turnCtx, cancel := context.WithCancel(ctx)
 	if sessionID == "" {

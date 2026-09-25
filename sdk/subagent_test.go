@@ -336,3 +336,56 @@ func TestSubAgentInheritsParentWorkspace(t *testing.T) {
 		t.Fatalf("worker requirements not loaded from parent workspace: %s", req.SystemPrompt)
 	}
 }
+
+// The phone stops one worker by its job id, without waiting for it to wind down
+// and without touching the turn that delegated to it.
+func TestRequestStopSubAgentStopsOneJobByID(t *testing.T) {
+	provider := &subAgentBlockingProvider{started: make(chan struct{})}
+	r, events := orchestrationRunner(t, provider)
+	if _, err := r.Delegate(context.Background(), "long task"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start")
+	}
+	r.manager.mu.RLock()
+	var jobID string
+	for id := range r.manager.jobs {
+		jobID = id
+		break
+	}
+	r.manager.mu.RUnlock()
+	if jobID == "" {
+		t.Fatal("no job was registered")
+	}
+	if err := r.manager.RequestStop(r.parent.ID(), jobID); err != nil {
+		t.Fatalf("RequestStop: %v", err)
+	}
+	final := awaitReport(t, events, "final")
+	if final.JobID != jobID || !strings.Contains(final.Status, "stopped") {
+		t.Fatalf("final report = %+v, want job %s stopped", final, jobID)
+	}
+	// A second press is not an error: the job is already gone.
+	if err := r.manager.RequestStop(r.parent.ID(), jobID); err != nil {
+		t.Fatalf("stopping a finished job must be accepted, got %v", err)
+	}
+	if err := r.manager.RequestStop(r.parent.ID(), "sa-does-not-exist"); err == nil {
+		t.Fatal("an unknown job must be reported, not silently accepted")
+	}
+	// A job belonging to another chat is not this chat's to stop.
+	if _, err := r.Delegate(context.Background(), "another task"); err == nil {
+		if err := r.manager.RequestStop("other-chat", jobID); err == nil {
+			t.Fatal("a job from another chat must not be stoppable")
+		}
+	}
+}
+
+// The agent's own hook is what the daemon hands the phone's cancel frame.
+func TestStopSubAgentReportsUnknownJob(t *testing.T) {
+	agent := &Agent{}
+	if err := agent.StopSubAgent("s1", "sa-nope"); err == nil {
+		t.Fatal("an agent with no sub agent manager must report the job as unknown")
+	}
+}

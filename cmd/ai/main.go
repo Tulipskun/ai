@@ -235,6 +235,9 @@ func run(ctx context.Context) error {
 		mobileRT.transport.ReportTurnError(input.SessionID, turnErrorMessage(err))
 	}}
 	mobileRT.transport.SetCancel(func(sessionID string) bool { return loop.CancelTurn(sessionID) })
+	// The phone's per-row stop: one sub agent stops without ending the turn that
+	// delegated to it (REQ-048(11)).
+	mobileRT.transport.SetCancelSubAgent(agent.StopSubAgent)
 	return loop.Run(ctx)
 }
 

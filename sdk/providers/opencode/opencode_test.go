@@ -468,3 +468,50 @@ func TestEmptyResponsesStreamFallsBackThenFails(t *testing.T) {
 		t.Errorf("endpoints tried = %v, want /responses then /chat/completions", paths)
 	}
 }
+
+// Instruction files ride in the system message as "Instructions from:" blocks,
+// the way the OpenCode client puts them there, and nowhere else.
+func TestInstructionFilesJoinTheSystemMessage(t *testing.T) {
+	b := buildChatRequest(sdk.Request{
+		Model:        "mimo-v2.5-free",
+		SystemPrompt: "You are a coding agent.",
+		Instructions: []sdk.Instruction{
+			{Path: "/root/.config/opencode/AGENTS.md", Text: "global rules\n"},
+			{Path: "/work/repo/AGENTS.md", Text: "project rules\n"},
+			{Path: "/work/repo/EMPTY.md", Text: "  \n"},
+		},
+	})
+	messages, _ := b["messages"].([]any)
+	if len(messages) == 0 {
+		t.Fatal("no system message in the request")
+	}
+	first, _ := messages[0].(map[string]any)
+	system, _ := first["content"].(string)
+	if !strings.HasPrefix(system, "You are a coding agent.") {
+		t.Errorf("the system prompt is no longer first: %.60q", system)
+	}
+	global := strings.Index(system, "Instructions from: /root/.config/opencode/AGENTS.md")
+	project := strings.Index(system, "Instructions from: /work/repo/AGENTS.md")
+	if global < 0 || project < 0 {
+		t.Fatalf("an instruction file is missing:\n%s", system)
+	}
+	if global > project {
+		t.Error("the global file came after the project one; the client puts it first")
+	}
+	if !strings.Contains(system, "global rules") || !strings.Contains(system, "project rules") {
+		t.Error("the file text did not come along")
+	}
+	if strings.Contains(system, "EMPTY.md") {
+		t.Error("an empty instruction file was sent")
+	}
+}
+
+// A request without instruction files is exactly what it was before.
+func TestNoInstructionFilesLeavesTheSystemPromptAlone(t *testing.T) {
+	b := buildChatRequest(sdk.Request{Model: "m", SystemPrompt: "just this"})
+	messages, _ := b["messages"].([]any)
+	first, _ := messages[0].(map[string]any)
+	if system, _ := first["content"].(string); system != "just this" {
+		t.Fatalf("system message = %q", system)
+	}
+}

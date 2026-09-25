@@ -307,6 +307,31 @@ func toolNameBack(name string, tools []sdk.Tool) string {
 	return name
 }
 
+// withInstructions appends the instruction files the way the OpenCode client
+// puts them in: a heading naming the file, then the file as it is, inside the
+// same system message. Measured on 2026-09-26, the free tier does not look at
+// any of this — a 43-character system prompt with the client's tool set is
+// served — so this is how the agent learns the project's rules, not a way
+// around the 403.
+func withInstructions(req sdk.Request) string {
+	if len(req.Instructions) == 0 {
+		return req.SystemPrompt
+	}
+	var b strings.Builder
+	b.WriteString(req.SystemPrompt)
+	for _, file := range req.Instructions {
+		text := strings.TrimRight(strings.TrimSpace(file.Text), "\n")
+		if text == "" {
+			continue
+		}
+		b.WriteString("\n\nInstructions from: ")
+		b.WriteString(file.Path)
+		b.WriteString("\n")
+		b.WriteString(text)
+	}
+	return b.String()
+}
+
 // buildChatRequest mirrors what the OpenCode client sends to
 // /chat/completions: the same messages and tools plus tool_choice, the token
 // budget and stream_options. Zen's free tier rejects a request that is missing
@@ -314,6 +339,7 @@ func toolNameBack(name string, tools []sdk.Tool) string {
 func buildChatRequest(req sdk.Request) map[string]any {
 	agent := req
 	agent.Tools = clientTools(req.Tools)
+	agent.SystemPrompt = withInstructions(req)
 	b := openai.BuildChatRequest(agent)
 	if len(req.Tools) > 0 {
 		b["tool_choice"] = "auto"
@@ -334,6 +360,7 @@ func buildChatRequest(req sdk.Request) map[string]any {
 func buildResponsesRequest(req sdk.Request) map[string]any {
 	agent := req
 	agent.Tools = clientTools(req.Tools)
+	agent.SystemPrompt = withInstructions(req)
 	b := openai.BuildResponsesRequest(agent)
 	sys, _ := b["instructions"].(string)
 	delete(b, "instructions")

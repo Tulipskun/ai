@@ -58,10 +58,20 @@ const (
 	ThinkingHigh   ThinkingLevel = "high"
 )
 
+// Instruction is one instruction file handed to the provider, the way the
+// OpenCode client hands over AGENTS.md: the path it came from and the text.
+// Only the OpenCode adapter renders it (as an "Instructions from:" block);
+// other providers see the system prompt alone, as before.
+type Instruction struct {
+	Path string
+	Text string
+}
+
 type Request struct {
 	Provider        ProviderID    `json:"provider,omitempty"`
 	SessionID       string        `json:"session_id,omitempty"`
 	SystemPrompt    string        `json:"system_prompt,omitempty"`
+	Instructions    []Instruction `json:"instructions,omitempty"`
 	Messages        []Turn        `json:"messages,omitempty"`
 	Tools           []Tool        `json:"tools,omitempty"`
 	Model           string        `json:"model"`

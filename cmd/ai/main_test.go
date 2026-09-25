@@ -114,3 +114,41 @@ func TestDefaultSystemPromptShortCircuitsNonTasks(t *testing.T) {
 		}
 	}
 }
+
+// The instruction files are found the way the client finds them: the global one
+// first, then AGENTS.md from the working directory upwards.
+func TestInstructionFilesFollowTheClientOrder(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	global := filepath.Join(root, ".config", "opencode", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Join(repo, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(global), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, text := range map[string]string{
+		global:                           "global rules",
+		filepath.Join(root, "AGENTS.md"): "rules above the workspace",
+		filepath.Join(repo, "AGENTS.md"): "project rules",
+	} {
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("AI_WORKSPACE", repo)
+	t.Setenv("HOME", root)
+
+	var got []string
+	for _, f := range instructionFiles() {
+		got = append(got, f.Path+"="+f.Text)
+	}
+	want := []string{
+		global + "=global rules",
+		filepath.Join(repo, "AGENTS.md") + "=project rules",
+		filepath.Join(root, "AGENTS.md") + "=rules above the workspace",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("instruction files:\n got %v\nwant %v", got, want)
+	}
+}

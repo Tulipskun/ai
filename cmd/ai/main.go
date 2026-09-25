@@ -225,7 +225,12 @@ func run(ctx context.Context) error {
 	loop = &sdk.HarnessLoop{Agent: agent, Source: sdk.ChannelInputSource{Inputs: inputs}, ResolveSession: sessions.Resolve, BuildRequest: func(context.Context, sdk.Input, *sdk.Session) (sdk.Request, error) {
 		// Stream every turn: the phone renders deltas as they arrive, and a
 		// provider that cannot stream still answers through the same path.
-		return sdk.Request{SystemPrompt: systemPrompt(agent), MaxOutputTokens: maxOutputTokens, Stream: true}, nil
+		return sdk.Request{
+			SystemPrompt:    systemPrompt(agent),
+			Instructions:    instructionFiles(),
+			MaxOutputTokens: maxOutputTokens,
+			Stream:          true,
+		}, nil
 	}, Displays: displays, DisplayTimeout: 10 * time.Second, OnTurnError: func(input sdk.Input, err error) {
 		if errors.Is(err, context.Canceled) {
 			log.Printf("turn stopped by the phone source=%s session=%s", input.Source, input.SessionID)
@@ -321,6 +326,47 @@ func systemPrompt(agent *sdk.Agent) string {
 		}
 	}
 	return base
+}
+
+// instructionFiles are the project's instruction files, found the way the
+// OpenCode client finds them: the global one first, then AGENTS.md from the
+// working directory upwards. Only the OpenCode adapter sends them on; every
+// other provider keeps the system prompt alone.
+func instructionFiles() []sdk.Instruction {
+	var out []sdk.Instruction
+	add := func(path string) {
+		raw, err := os.ReadFile(path)
+		if err != nil || len(raw) == 0 {
+			return
+		}
+		// A rules file that grew into a novel costs the same input tokens on
+		// every turn, so the tail is dropped and said out loud in the log.
+		const maxBytes = 64 * 1024
+		if len(raw) > maxBytes {
+			log.Printf("instructions: %s is %d bytes, using the first %d", path, len(raw), maxBytes)
+			raw = raw[:maxBytes]
+		}
+		out = append(out, sdk.Instruction{Path: path, Text: string(raw)})
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		add(filepath.Join(home, ".config", "opencode", "AGENTS.md"))
+	}
+	dir, err := resolveWorkspace()
+	if err != nil || dir == "" {
+		return out
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	for {
+		add(filepath.Join(dir, "AGENTS.md"))
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return out
 }
 
 func systemPromptSource() string {

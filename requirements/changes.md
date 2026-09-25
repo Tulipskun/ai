@@ -1026,3 +1026,25 @@ space-bunny) — `jev-1.13-free` ไม่มี upstream แล้ว (503 Endp
 endpoint); จริงบนมือถือ: เลือก `nemotron-3-ultra-free` แล้วได้ `pong` พร้อม footer
 `Opencode · nemotron-3-ultra-free · 51 token (↑2269) · 4.0s · 12.6 tok/s`
 Status: accepted
+
+## CHANGE-076: ไฟล์คำสั่งโปรเจคต์เข้า request เฉพาะ provider opencode
+New: `sdk.Request` มี `Instructions []Instruction` เพิ่ม ปกติ adapter อื่นไม่สนใจ
+(ได้ system prompt เหมือนเดิม) ส่วน `sdk/providers/opencode` เอาไปต่อท้าย system
+message ในรูปแบบเดียวกับ client จริง คือบรรทัด `Instructions from: <พาธ>` แล้วตามด้วย
+เนื้อไฟล์ทั้งไฟล์ และ daemon หาไฟล์ตามลำดับของ client: global
+(`~/.config/opencode/AGENTS.md`) ก่อน แล้ว `AGENTS.md` จาก workspace ไล่ขึ้นไป (ตัดที่
+64KB พร้อม log)
+วัดเมื่อ 2026-09-26 ว่า block นี้ **ไม่เกี่ยวกับ 403**: system prompt ของเรา+block,
+system prompt อย่างเดียว, และ prompt สั้น 43 ตัวอักษร ผ่านทั้งสามแบบ เงื่อนไขของ
+free tier คือชื่อเครื่องมือของ client เท่านั้น (CHANGE-074) จึงเป็นการทำให้ agent
+ทำตามกติกาโปรเจคต์ ไม่ใช่การหลบ 403
+Reason: ผู้ใช้ถามว่าต้องแก้ตาม client 100% ไหม — คำตอบคือไม่ และอยากได้พฤติกรรม
+เหมือน client เฉพาะ provider ที่เข้มสุด
+Impact: sdk/types.go (Instruction, Request.Instructions),
+sdk/providers/opencode/opencode.go (withInstructions + ทั้งสี่ builder),
+sdk/providers/opencode/opencode_test.go, cmd/ai/main.go (instructionFiles),
+cmd/ai/main_test.go, requirements/changes.md
+Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่าน (เทสต์ใหม่
+`TestInstructionFilesJoinTheSystemMessage`, `TestNoInstructionFilesLeavesTheSystemPromptAlone`,
+`TestInstructionFilesFollowTheClientOrder`); วัดสดด้วย curl ต่อ Zen ตามตารางข้างบน
+Status: accepted

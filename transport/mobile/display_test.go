@@ -133,8 +133,8 @@ func TestSubagentTextIsAttributedAndDeltasAreMarkedSub(t *testing.T) {
 				Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "กำลังอ่านไฟล์"}},
 				Usage:   sdk.Usage{InputTokens: 120, OutputTokens: 9}}}})
 	})
-	if len(frames) != 3 {
-		t.Fatalf("frames = %+v, want a sub delta, the final message and a done", frames)
+	if len(frames) != 4 {
+		t.Fatalf("frames = %+v, want a sub delta, the counted answer, the close and the job's end", frames)
 	}
 	if frames[0].Agent != "sub" || frames[0].JobID != "sa-42" || frames[0].Kind != FrameDelta {
 		t.Fatalf("sub frame = %+v", frames[0])
@@ -145,6 +145,10 @@ func TestSubagentTextIsAttributedAndDeltasAreMarkedSub(t *testing.T) {
 	}
 	if frames[2].Kind != FrameDone || frames[2].JobID != "sa-42" {
 		t.Fatalf("closing frame = %+v", frames[2])
+	}
+	// The last frame is what settles the phone's row for this worker.
+	if frames[3].Kind != FrameDone || frames[3].JobID != "sa-42" || frames[3].Stage != "subagent_completed" {
+		t.Fatalf("job end frame = %+v, want the worker's terminal state", frames[3])
 	}
 }
 
@@ -215,5 +219,22 @@ func TestCancelledTraceBecomesTheStopFrame(t *testing.T) {
 	})
 	if len(frames) != 1 || frames[0].Kind != FrameDone || frames[0].Stage != "cancelled" {
 		t.Fatalf("frames = %+v, want a single done frame marked cancelled", frames)
+	}
+}
+
+// A sub agent that was stopped ends with a cancelled provider error. The phone
+// must read that as one worker stopping, not as the whole turn stopping.
+func TestStoppedSubAgentEndsOnlyItsOwnRow(t *testing.T) {
+	tr := newDisplayTransport()
+	meta := map[string]string{"trace_actor": "subagent", "trace_job_id": "sa-9"}
+	frames := capture(t, tr, func() {
+		_ = tr.Display(context.Background(), sdk.Output{Source: SourceName, SessionID: "s1", Metadata: meta,
+			Trace: &sdk.TraceEvent{Stage: sdk.TraceError, Err: fmt.Errorf("chat/completions: %w", context.Canceled)}})
+	})
+	if len(frames) != 1 {
+		t.Fatalf("frames = %+v, want one frame", frames)
+	}
+	if frames[0].Kind != FrameDone || frames[0].Stage != "subagent_stopped" || frames[0].JobID != "sa-9" {
+		t.Fatalf("frame = %+v, want the stopped worker named by its job", frames[0])
 	}
 }

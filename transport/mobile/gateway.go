@@ -171,18 +171,6 @@ func (t *Transport) SetCancel(cancel func(string) bool) {
 	t.cfg.CancelTurn = cancel
 }
 
-// SubAgentTerminal reports that one sub agent job reached its end state, so the
-// phone can settle that row instead of leaving it spinning. The stage names the
-// outcome: completed, stopped or failed.
-func (t *Transport) SubAgentTerminal(sessionID, jobID, stage string) {
-	if t == nil || sessionID == "" || jobID == "" || stage == "" {
-		return
-	}
-	t.broadcast(sessionID, Outbound{
-		Kind: FrameDone, SessionID: sessionID, Role: "system", JobID: jobID, Stage: "subagent_" + stage,
-	})
-}
-
 // SetCancelSubAgent attaches the per-sub-agent stop hook. A cancel frame that
 // names a job stops that worker only; without it the frame keeps its old
 // meaning and stops the whole turn.
@@ -330,6 +318,15 @@ func (t *Transport) displayTrace(output sdk.Output) error {
 		return nil
 
 	case sdk.TraceResponse:
+		if jobID != "" {
+			// A worker's turn ended: the phone's row for that job is done. The
+			// answer itself (if any) is handled by the same path as the main
+			// agent's, and this frame only carries the end state.
+			defer t.broadcast(output.SessionID, Outbound{
+				Kind: FrameDone, SessionID: output.SessionID, Role: "system", Agent: agent,
+				JobID: jobID, Stage: "subagent_completed",
+			})
+		}
 		text := responseText(trace.Response)
 		if text == "" {
 			t.broadcast(output.SessionID, Outbound{Kind: FrameDone, SessionID: output.SessionID, JobID: jobID})
@@ -360,9 +357,16 @@ func (t *Transport) displayTrace(output sdk.Output) error {
 	case sdk.TraceError:
 		if trace.Err != nil && errors.Is(trace.Err, context.Canceled) {
 			// The phone asked to stop. A raw "context canceled" provider error
-			// would read as a failure, so report it as the stop it was.
+			// would read as a failure, so report it as the stop it was — and a
+			// stopped sub agent ends here too, named by its job, so the phone
+			// settles that row instead of ending the whole turn on screen.
+			stage := "cancelled"
+			if jobID != "" {
+				stage = "subagent_stopped"
+			}
 			t.broadcast(output.SessionID, Outbound{
-				Kind: FrameDone, SessionID: output.SessionID, Role: "system", Stage: "cancelled",
+				Kind: FrameDone, SessionID: output.SessionID, Role: "system", Agent: agent,
+				JobID: jobID, Stage: stage,
 			})
 			return nil
 		}
@@ -373,7 +377,15 @@ func (t *Transport) displayTrace(output sdk.Output) error {
 		if text == "" {
 			text = sdk.TraceMessage(trace)
 		}
-		t.broadcast(output.SessionID, Outbound{Kind: FrameError, SessionID: output.SessionID, Text: text})
+		t.broadcast(output.SessionID, Outbound{
+			Kind: FrameError, SessionID: output.SessionID, Agent: agent, JobID: jobID, Text: text,
+		})
+		if jobID != "" {
+			t.broadcast(output.SessionID, Outbound{
+				Kind: FrameDone, SessionID: output.SessionID, Role: "system", Agent: agent,
+				JobID: jobID, Stage: "subagent_failed",
+			})
+		}
 		return nil
 
 	case sdk.TraceToolCall, sdk.TraceToolRunning:

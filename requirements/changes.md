@@ -1048,3 +1048,16 @@ Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่าน (เ�
 `TestInstructionFilesJoinTheSystemMessage`, `TestNoInstructionFilesLeavesTheSystemPromptAlone`,
 `TestInstructionFilesFollowTheClientOrder`); วัดสดด้วย curl ต่อ Zen ตามตารางข้างบน
 Status: accepted
+
+CHANGE-077
+
+Date: 2026-09-26
+Type: add
+Request: จัดหมวด provider/model ต่อ session/global, ยืนยันการจัดการ key, แสดง token/cache/streaming/tool/reasoning ให้ถูกต้อง และทำ explicit unpin ของแชท
+Conflict: none (ทำให้ REQ-048 และ D-012 ชัดเจนขึ้น)
+Previous: PATCH แชทรับเฉพาะ provider/model ที่ไม่ว่าง ทำให้ไม่มีวิธีล้าง pin กลับไปใช้ค่าเริ่มต้นสากล; เฟรมมือถือมีเฉพาะ input/output tokens ไม่มี cache; reasoning เป็นเพียงสถานะคงที่โดยไม่มีเวลาที่บันทึก; tool result ไม่มีเวลาที่บันทึก
+New: `ModelChoice.Clear` + `PATCH /api/sessions/:id {"clear_model":true}` ล้าง route ของแชทใน D1 และลืม session ที่แคชไว้เพื่อใช้ค่าเริ่มต้นสากลใน turn ถัดไป; เฟรม `message` มี `cache_read_tokens/cache_write_tokens`; เฟรม reasoning มี `reasoning_ms` จาก timestamp ที่บันทึกโดยไม่ส่งเนื้อหา reasoning; เฟรม tool result/call มี `tool_duration_ms`; `TurnMeta`/`TurnRow` เก็บ cache; `EnsureTurnFooter` เติมคอลัมน์ cache ให้ฐานเก่า
+Reason: แยกขอบเขต session/global ให้ชัด ป้องกัน unpin ที่ตีความผิด และทำให้ footer/cache/streaming/tool/reasoning ตรงกับค่าที่ provider/daemon บันทึกจริง
+Impact: transport/mobile/history.go, transport/mobile/gateway.go, transport/mobile/display_test.go, transport/mobile/history_test.go, cmd/ai/mobile.go, runtime/session_manager.go (+Forget), runtime/session_manager_test.go, runtime/d1store/client.go (+cache + ensure), runtime/d1store tests/fake, sdk/providers/opencode (parse cache usage)
+Validation: `go test ./transport/mobile ./runtime/d1store ./runtime ./cmd/ai ./sdk/providers/opencode -count=1`; `go test ./... -count=1`; `git diff --check`
+Status: accepted

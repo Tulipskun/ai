@@ -81,6 +81,16 @@ type Outbound struct {
 	ClientMsgID  string          `json:"client_msg_id,omitempty"`
 	InputTokens  int             `json:"input_tokens,omitempty"`
 	OutputTokens int             `json:"output_tokens,omitempty"`
+	// CacheReadTokens and CacheWriteTokens are the provider's cached usage when
+	// it reports them. They are footer data, not live estimates.
+	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	// ReasoningMs is the elapsed thinking time recorded for the reasoning event
+	// that produced this transient status. Raw reasoning text is never sent.
+	ReasoningMs int64 `json:"reasoning_ms,omitempty"`
+	// ToolDurationMs is the recorded elapsed time for one tool call/result, from
+	// the provider request that produced it until the tool event arrived.
+	ToolDurationMs int64 `json:"tool_duration_ms,omitempty"`
 	// Model and DurationMs are what the phone puts in the footer of this one
 	// message. They are read off the terminal trace rather than the chat's
 	// configured route, so the footer names the model that actually answered
@@ -292,17 +302,19 @@ func (t *Transport) Display(ctx context.Context, output sdk.Output) error {
 		return nil
 	}
 	frame := Outbound{
-		Kind:         FrameMessage,
-		SessionID:    output.SessionID,
-		Role:         "model",
-		Agent:        agentFor(output),
-		JobID:        output.Metadata[jobMetadataKey],
-		Text:         text,
-		Content:      []ContentPart{{Type: "text", Text: text}},
-		InputTokens:  output.Response.Usage.InputTokens,
-		OutputTokens: output.Response.Usage.OutputTokens,
-		Model:        output.Response.Model,
-		DurationMs:   turnDurationMs(nil),
+		Kind:             FrameMessage,
+		SessionID:        output.SessionID,
+		Role:             "model",
+		Agent:            agentFor(output),
+		JobID:            output.Metadata[jobMetadataKey],
+		Text:             text,
+		Content:          []ContentPart{{Type: "text", Text: text}},
+		InputTokens:      output.Response.Usage.InputTokens,
+		OutputTokens:     output.Response.Usage.OutputTokens,
+		CacheReadTokens:  output.Response.Usage.CacheReadTokens,
+		CacheWriteTokens: output.Response.Usage.CacheWriteTokens,
+		Model:            output.Response.Model,
+		DurationMs:       turnDurationMs(nil),
 	}
 	t.broadcast(output.SessionID, frame)
 	if frame.InputTokens > 0 || frame.OutputTokens > 0 {
@@ -324,6 +336,7 @@ func (t *Transport) displayTrace(output sdk.Output) error {
 			t.broadcast(output.SessionID, Outbound{
 				Kind: FrameTrace, SessionID: output.SessionID, Role: "system", Agent: agent,
 				JobID: jobID, Stage: string(sdk.TraceResponseText), Text: "thinking",
+				ReasoningMs: trace.TotalElapsed().Milliseconds(),
 			})
 		}
 		return nil
@@ -427,6 +440,7 @@ func (t *Transport) displayTrace(output sdk.Output) error {
 		t.broadcast(output.SessionID, Outbound{
 			Kind: FrameTrace, SessionID: output.SessionID, Role: "system", Agent: agent,
 			JobID: jobID, Stage: stage, Text: call.Name, ToolCall: call,
+			ToolDurationMs: trace.TotalElapsed().Milliseconds(),
 		})
 		return nil
 
@@ -443,6 +457,7 @@ func (t *Transport) displayTrace(output sdk.Output) error {
 		t.broadcast(output.SessionID, Outbound{
 			Kind: FrameTrace, SessionID: output.SessionID, Role: "system", Agent: agent,
 			JobID: jobID, Stage: string(sdk.TraceToolResult), Text: view.Text, ToolCall: call, ToolResult: view,
+			ToolDurationMs: trace.TotalElapsed().Milliseconds(),
 		})
 		return nil
 
@@ -492,6 +507,8 @@ func (t *Transport) sendAnswer(output sdk.Output, agent, jobID, text string, clo
 	if output.Trace != nil && output.Trace.Response != nil {
 		frame.InputTokens = output.Trace.Response.Usage.InputTokens
 		frame.OutputTokens = output.Trace.Response.Usage.OutputTokens
+		frame.CacheReadTokens = output.Trace.Response.Usage.CacheReadTokens
+		frame.CacheWriteTokens = output.Trace.Response.Usage.CacheWriteTokens
 		frame.Model = output.Trace.Response.Model
 	}
 	frame.DurationMs = turnDurationMs(output.Trace)

@@ -419,7 +419,8 @@ func TestModelTurnKeepsItsFooter(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := c.AppendModelTurn(ctx, "s1", "main", "", "pong", TurnMeta{
-		Model: "nemotron-3-ultra-free", InputTokens: 2269, OutputTokens: 51, DurationMs: 4000,
+		Model: "nemotron-3-ultra-free", InputTokens: 2269, OutputTokens: 51,
+		CacheRead: 1800, CacheWrite: 12, DurationMs: 4000,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +433,8 @@ func TestModelTurnKeepsItsFooter(t *testing.T) {
 	}
 	answer := turns[1]
 	if answer.Model != "nemotron-3-ultra-free" || answer.InputTokens != 2269 ||
-		answer.OutputTokens != 51 || answer.DurationMs != 4000 {
+		answer.OutputTokens != 51 || answer.CacheRead != 1800 || answer.CacheWrite != 12 ||
+		answer.DurationMs != 4000 {
 		t.Fatalf("footer lost on the way back: %+v", answer)
 	}
 	if turns[0].Model != "" {
@@ -449,13 +451,13 @@ func TestEnsureTurnFooterAddsColumnsOnce(t *testing.T) {
 	if err := c.EnsureTurnFooter(ctx); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if len(fake.extraTurnColumns) != 4 {
-		t.Fatalf("added %v, want the four footer columns", fake.extraTurnColumns)
+	if len(fake.extraTurnColumns) != 6 {
+		t.Fatalf("added %v, want the six footer columns", fake.extraTurnColumns)
 	}
 	if err := c.EnsureTurnFooter(ctx); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
-	if len(fake.extraTurnColumns) != 4 {
+	if len(fake.extraTurnColumns) != 6 {
 		t.Fatalf("a second run added %v again", fake.extraTurnColumns)
 	}
 }

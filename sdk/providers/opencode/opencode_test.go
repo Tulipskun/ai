@@ -331,7 +331,7 @@ func TestStreamReportsTokenUsageFromTheTrailingChunk(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
-		fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":7,\"total_tokens\":127}}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":7,\"total_tokens\":127,\"prompt_tokens_details\":{\"cached_tokens\":80}}}\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer srv.Close()
@@ -350,8 +350,34 @@ func TestStreamReportsTokenUsageFromTheTrailingChunk(t *testing.T) {
 			usage = ev.Response.Usage
 		}
 	}
-	if usage.InputTokens != 120 || usage.OutputTokens != 7 {
-		t.Fatalf("usage = %+v, want the counts Zen sent in the trailing chunk", usage)
+	if usage.InputTokens != 120 || usage.OutputTokens != 7 || usage.CacheReadTokens != 80 {
+		t.Fatalf("usage = %+v, want the counts and cached prompt tokens Zen sent in the trailing chunk", usage)
+	}
+}
+
+func TestStreamResponsesReportsCachedUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"model\":\"m\",\"status\":\"completed\",\"usage\":{\"input_tokens\":90,\"output_tokens\":3,\"total_tokens\":93,\"input_token_details\":{\"cached_tokens\":25}}}}\n\n")
+	}))
+	defer srv.Close()
+	c := New("k")
+	c.BaseURL = srv.URL
+	ch, err := c.Stream(context.Background(), sdk.Request{Model: "m", SessionID: "stream-responses-cache"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var usage sdk.Usage
+	for ev := range ch {
+		if ev.Type == sdk.EventError {
+			t.Fatal(ev.Err)
+		}
+		if ev.Type == sdk.EventDone && ev.Response != nil {
+			usage = ev.Response.Usage
+		}
+	}
+	if usage.InputTokens != 90 || usage.OutputTokens != 3 || usage.CacheReadTokens != 25 {
+		t.Fatalf("usage = %+v, want the Responses usage including cached input", usage)
 	}
 }
 

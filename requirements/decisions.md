@@ -24,3 +24,15 @@ DEC-005 — Main Agent เป็น senior ที่อ่านโค้ด/บ
   fallback operator channel: a phone becomes the only way to talk to the
   harness, so `GET /api/node` + the tunnel URL must stay reliable, and config
   changes go through D1 rather than a local command.
+
+- D-012 (2026-09-26) — Mobile scope and display integrity: a chat may pin an
+  explicit provider/model route, while a blank session route follows the global
+  agent defaults; unpinning is an explicit `clear_model` operation that also
+  resets the live cached session, not a silent empty PATCH. Provider keys are
+  write-only and can only be added, replaced wholesale, or removed by position
+  after confirmation; existing key values can never be edited in place because
+  they are never returned. Live display may show estimates marked `≈`, stored
+  answers must carry provider-reported input/output/cache and daemon-measured
+  duration, tool rows must carry name/status/args and duration, and raw
+  reasoning is only a transient thinking indicator: it is never stored or
+  transcribed.

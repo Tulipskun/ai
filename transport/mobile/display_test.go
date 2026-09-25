@@ -162,6 +162,38 @@ func TestReasoningBecomesAThinkingLineNotAMessage(t *testing.T) {
 	}
 }
 
+func TestReasoningReportsRecordedTimeWithoutItsText(t *testing.T) {
+	tr := newDisplayTransport()
+	frames := capture(t, tr, func() {
+		_ = tr.Display(context.Background(), sdk.Output{Source: SourceName, SessionID: "s1",
+			Trace: &sdk.TraceEvent{Stage: sdk.TraceResponseText, Text: "secret chain of thought",
+				RequestStartedMs: 1_700_000_000_000, AtMs: 1_700_000_001_500}})
+	})
+	if len(frames) != 1 {
+		t.Fatalf("frames = %+v, want one thinking trace", frames)
+	}
+	if frames[0].Text != "thinking" || frames[0].ReasoningMs != 1500 {
+		t.Fatalf("frame = %+v, want fixed thinking text and 1500ms", frames[0])
+	}
+}
+
+func TestToolResultReportsRecordedDuration(t *testing.T) {
+	tr := newDisplayTransport()
+	frames := capture(t, tr, func() {
+		_ = tr.Display(context.Background(), sdk.Output{Source: SourceName, SessionID: "s1",
+			Trace: &sdk.TraceEvent{Stage: sdk.TraceToolResult,
+				ToolCall:         &sdk.ToolCall{ID: "c1", Name: "bash", Arguments: "{}"},
+				ToolResult:       &sdk.ToolResult{ID: "c1", Content: "ok"},
+				RequestStartedMs: 1_700_000_000_000, AtMs: 1_700_000_002_250}})
+	})
+	if len(frames) != 1 || frames[0].Kind != FrameTrace || frames[0].Stage != string(sdk.TraceToolResult) {
+		t.Fatalf("frames = %+v, want one tool-result trace", frames)
+	}
+	if frames[0].ToolDurationMs != 2250 {
+		t.Fatalf("tool duration = %dms, want 2250ms", frames[0].ToolDurationMs)
+	}
+}
+
 func TestTraceErrorBecomesAnErrorFrame(t *testing.T) {
 	tr := newDisplayTransport()
 	frames := capture(t, tr, func() {
@@ -272,7 +304,7 @@ func TestAnswerFrameCarriesItsFooter(t *testing.T) {
 				Response: &sdk.Response{
 					Model:   "nemotron-3-ultra-free",
 					Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "pong"}},
-					Usage:   sdk.Usage{InputTokens: 2269, OutputTokens: 51},
+					Usage:   sdk.Usage{InputTokens: 2269, OutputTokens: 51, CacheReadTokens: 1800, CacheWriteTokens: 12},
 				},
 				RequestStartedMs: 1_700_000_000_000,
 				AtMs:             1_700_000_004_000,
@@ -290,6 +322,9 @@ func TestAnswerFrameCarriesItsFooter(t *testing.T) {
 	}
 	if answer.InputTokens != 2269 || answer.OutputTokens != 51 {
 		t.Errorf("counts = %d/%d, want 2269/51", answer.InputTokens, answer.OutputTokens)
+	}
+	if answer.CacheReadTokens != 1800 || answer.CacheWriteTokens != 12 {
+		t.Errorf("cache = %d/%d, want 1800/12", answer.CacheReadTokens, answer.CacheWriteTokens)
 	}
 	if answer.DurationMs != 4000 {
 		t.Errorf("duration = %dms, want 4000ms", answer.DurationMs)

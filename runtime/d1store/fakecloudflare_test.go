@@ -239,7 +239,7 @@ func (f *fakeCloudflare) exec(sql string, params []string) ([]map[string]any, in
 		name = strings.Fields(name)[0]
 		f.extraTurnColumns = append(f.extraTurnColumns, name)
 		return nil, 1, 0, nil
-	case strings.HasPrefix(s, "INSERT INTO turns(session_id, seq, role, agent, job_id, text, created_at, model, input_tokens, output_tokens, duration_ms) SELECT"):
+	case strings.HasPrefix(s, "INSERT INTO turns(session_id, seq, role, agent, job_id, text, created_at, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, duration_ms) SELECT"):
 		sessionID, role, agent, jobID, text := params[0], params[2], params[3], params[4], params[5]
 		seq := f.nextTurn
 		f.nextTurn++
@@ -248,10 +248,11 @@ func (f *fakeCloudflare) exec(sql string, params []string) ([]map[string]any, in
 			"id": id, "session_id": sessionID, "seq": seq, "role": role,
 			"agent": agent, "job_id": jobID, "text": text, "created_at": seq,
 			"model": params[6], "input_tokens": fakeInt(params[7]), "output_tokens": fakeInt(params[8]),
-			"duration_ms": fakeInt(params[9]),
+			"cache_read_tokens": fakeInt(params[9]), "cache_write_tokens": fakeInt(params[10]),
+			"duration_ms": fakeInt(params[11]),
 		})
 		return nil, 1, id, nil
-	case strings.HasPrefix(s, "SELECT seq, role, agent, job_id, text, created_at, model, input_tokens, output_tokens, duration_ms FROM turns"):
+	case strings.HasPrefix(s, "SELECT seq, role, agent, job_id, text, created_at, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, duration_ms FROM turns"):
 		before := params[1]
 		var limit int
 		fmt.Sscan(params[2], &limit)
@@ -268,7 +269,8 @@ func (f *fakeCloudflare) exec(sql string, params []string) ([]map[string]any, in
 				"seq": turn["seq"], "role": turn["role"], "agent": turn["agent"],
 				"job_id": turn["job_id"], "text": turn["text"], "created_at": turn["created_at"],
 				"model": turn["model"], "input_tokens": turn["input_tokens"],
-				"output_tokens": turn["output_tokens"], "duration_ms": turn["duration_ms"],
+				"output_tokens": turn["output_tokens"], "cache_read_tokens": turn["cache_read_tokens"],
+				"cache_write_tokens": turn["cache_write_tokens"], "duration_ms": turn["duration_ms"],
 			})
 			if len(rows) == limit {
 				break

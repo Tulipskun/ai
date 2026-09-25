@@ -297,3 +297,26 @@ func TestPatchingASessionSetsTheProviderAndModel(t *testing.T) {
 		t.Fatalf("PATCH title = %d, title = %q", rec.Code, store.sessions["work-1"].Title)
 	}
 }
+
+func TestPatchingASessionCanClearItsModelPin(t *testing.T) {
+	store := newFakeHistory()
+	store.sessions["work-2"] = SessionRow{ID: "work-2", Title: "เดิม"}
+	models := &fakeModels{choices: map[string]ModelChoice{"work-2": {Provider: "p", Model: "m"}}}
+	cache := &ramCache{}
+	cache.Adopt("cf-token")
+	handler := NewHistoryHandler(store, NewGate(GateConfig{Verify: allowVerifier{}, Cache: cache}), models)
+
+	rec := historyRequest(t, handler, http.MethodPatch, "/api/sessions/work-2", "cf-token",
+		`{"clear_model":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH clear = %d: %s", rec.Code, rec.Body)
+	}
+	if got := models.choices["work-2"]; !got.Clear || got.Provider != "" || got.Model != "" {
+		t.Fatalf("stored choice = %+v, want an explicit clear", got)
+	}
+	// A title-only PATCH after that still cannot be mistaken for a clear or a pin.
+	if rec := historyRequest(t, handler, http.MethodPatch, "/api/sessions/work-2", "cf-token",
+		`{"title":"เปลี่ยนชื่อ"}`); rec.Code != http.StatusOK {
+		t.Fatalf("PATCH title = %d: %s", rec.Code, rec.Body)
+	}
+}

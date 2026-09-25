@@ -130,6 +130,18 @@ func (m modelStore) SetSessionModel(ctx context.Context, sessionID string, choic
 	if m.router == nil || m.client == nil {
 		return mobiletransport.SessionRow{}, errors.New("runtime: model routing is not available")
 	}
+	if choice.Clear {
+		// Explicitly follow the global agent defaults again. The D1 pin is
+		// removed and the cached live session is forgotten, so the next turn
+		// cannot keep using the old route from memory.
+		if err := m.client.SetSessionRoute(ctx, sessionID, "", ""); err != nil {
+			return mobiletransport.SessionRow{}, err
+		}
+		if m.sessions != nil {
+			m.sessions.Forget(sessionID)
+		}
+		return m.sessionRow(ctx, sessionID)
+	}
 	provider := sdk.ProviderID(choice.Provider)
 	model := choice.Model
 	if model == "" && provider == "" {
@@ -272,6 +284,7 @@ func (h historyStore) Turns(ctx context.Context, sessionID string, beforeSeq int
 			Seq: row.Seq, Role: row.Role, Agent: row.Agent, JobID: row.JobID,
 			Text: row.Text, CreatedAt: row.CreatedAt, Model: row.Model,
 			InputTokens: row.InputTokens, OutputTokens: row.OutputTokens,
+			CacheRead: row.CacheRead, CacheWrite: row.CacheWrite,
 			DurationMs: row.DurationMs,
 		})
 	}
@@ -398,13 +411,13 @@ func (m *mobileRuntime) PublishOutput(ctx context.Context, output sdk.Output) {
 	}
 	jobID := output.Metadata["mobile_job_id"]
 	// The footer is read off the terminal trace: the model that answered, the
-	// counts it reported and how long it took (AX-095).
+	// counts it reported (including cached usage) and how long it took (AX-095).
 	var meta d1store.TurnMeta
+	usage := output.Response.Usage
 	if output.Trace != nil {
 		if output.Trace.Response != nil {
 			meta.Model = output.Trace.Response.Model
-			meta.InputTokens = output.Trace.Response.Usage.InputTokens
-			meta.OutputTokens = output.Trace.Response.Usage.OutputTokens
+			usage = output.Trace.Response.Usage
 		}
 		if output.Trace.RequestStartedMs > 0 && output.Trace.AtMs >= output.Trace.RequestStartedMs {
 			meta.DurationMs = output.Trace.AtMs - output.Trace.RequestStartedMs
@@ -412,6 +425,10 @@ func (m *mobileRuntime) PublishOutput(ctx context.Context, output sdk.Output) {
 			meta.DurationMs = output.Trace.Elapsed.Milliseconds()
 		}
 	}
+	meta.InputTokens = usage.InputTokens
+	meta.OutputTokens = usage.OutputTokens
+	meta.CacheRead = usage.CacheReadTokens
+	meta.CacheWrite = usage.CacheWriteTokens
 	if _, err := m.client.AppendModelTurn(ctx, output.SessionID, "main", jobID, text, meta); err != nil {
 		log.Printf("mobile: mirror turn to D1 session=%s: %v", output.SessionID, err)
 		m.turns.forget(key)

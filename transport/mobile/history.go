@@ -31,6 +31,8 @@ type TurnRow struct {
 	Model        string `json:"model,omitempty"`
 	InputTokens  int    `json:"input_tokens,omitempty"`
 	OutputTokens int    `json:"output_tokens,omitempty"`
+	CacheRead    int    `json:"cache_read_tokens,omitempty"`
+	CacheWrite   int    `json:"cache_write_tokens,omitempty"`
 	DurationMs   int64  `json:"duration_ms,omitempty"`
 }
 
@@ -57,10 +59,12 @@ type ProviderView struct {
 	Models       []ModelView `json:"models"`
 }
 
-// ModelChoice is the provider and model a chat runs on.
+// ModelChoice is the provider and model a chat runs on. Clear removes an
+// explicit session pin and returns the chat to the global agent defaults.
 type ModelChoice struct {
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
+	Clear    bool   `json:"clear_model,omitempty"`
 }
 
 // ModelStore is the live half of provider configuration: what the runtime can
@@ -225,16 +229,17 @@ func serveSessionItem(w http.ResponseWriter, r *http.Request, store HistoryStore
 	switch r.Method {
 	case http.MethodPatch:
 		var body struct {
-			Title    string `json:"title"`
-			Model    string `json:"model"`
-			Provider string `json:"provider"`
+			Title      string `json:"title"`
+			Model      string `json:"model"`
+			Provider   string `json:"provider"`
+			ClearModel bool   `json:"clear_model"`
 		}
 		if err := decodeBody(r, &body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
 			return
 		}
-		choice := ModelChoice{Provider: strings.TrimSpace(body.Provider), Model: strings.TrimSpace(body.Model)}
-		if models != nil && (choice.Provider != "" || choice.Model != "") {
+		choice := ModelChoice{Provider: strings.TrimSpace(body.Provider), Model: strings.TrimSpace(body.Model), Clear: body.ClearModel}
+		if models != nil && (body.ClearModel || choice.Provider != "" || choice.Model != "") {
 			row, err := models.SetSessionModel(r.Context(), id, choice)
 			if err != nil {
 				writeModelError(w, err)

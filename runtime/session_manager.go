@@ -237,6 +237,28 @@ func (m *SessionManager) ListSessions(limit int) ([]sdk.SessionInfo, error) {
 	}
 	return sdk.ListSessionsInDir(m.dir, limit)
 }
+
+// Forget drops one live chat from the in-memory cache and closes it, so the
+// next turn reopens that session from the current defaults. Clearing a session
+// route calls this after removing the D1 pin: the old provider/model must not
+// survive in a cached object.
+func (m *SessionManager) Forget(id string) {
+	if m == nil || id == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	elem, ok := m.sessions[id]
+	if !ok {
+		return
+	}
+	if entry, ok := elem.Value.(*sessionCacheEntry); ok && entry.session != nil {
+		_ = entry.session.Close()
+	}
+	delete(m.sessions, id)
+	m.lru.Remove(elem)
+}
+
 func (m *SessionManager) Close() error {
 	if m == nil {
 		return nil

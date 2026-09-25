@@ -109,3 +109,23 @@ func TestSessionManagerIgnoresAStoredProviderItCannotRouteTo(t *testing.T) {
 		t.Fatalf("provider = %q, want the boot default for an unknown provider", got)
 	}
 }
+
+func TestSessionManagerForgetReopensTheNextTurnFromDefaults(t *testing.T) {
+	manager := NewSessionManager(t.TempDir()+"/sessions.db", sdk.SessionConfig{Provider: "boot", Model: "m"}, sdk.NewKeyPool("boot-key"))
+	first, err := manager.Resolve(context.Background(), sdk.Input{SessionID: "work-10"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.Forget("work-10")
+	manager.Forget("")
+	second, err := manager.Resolve(context.Background(), sdk.Input{SessionID: "work-10"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("forgetting a session must not return the cached object")
+	}
+	if got := second.Config().Provider; got != "boot" {
+		t.Fatalf("provider = %q, want the current default after forget", got)
+	}
+}

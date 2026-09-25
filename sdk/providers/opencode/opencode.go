@@ -459,6 +459,9 @@ func (c *Client) streamResponses(ctx context.Context, req sdk.Request, sid strin
 					InputTokens  int `json:"input_tokens"`
 					OutputTokens int `json:"output_tokens"`
 					TotalTokens  int `json:"total_tokens"`
+					InputDetails struct {
+						Cached int `json:"cached_tokens"`
+					} `json:"input_token_details"`
 				} `json:"usage"`
 			} `json:"response"`
 		}
@@ -490,9 +493,10 @@ func (c *Client) streamResponses(ctx context.Context, req sdk.Request, sid strin
 				Model:        e.Response.Model,
 				FinishReason: e.Response.Status,
 				Usage: sdk.Usage{
-					InputTokens:  e.Response.Usage.InputTokens,
-					OutputTokens: e.Response.Usage.OutputTokens,
-					TotalTokens:  e.Response.Usage.TotalTokens,
+					InputTokens:     e.Response.Usage.InputTokens,
+					OutputTokens:    e.Response.Usage.OutputTokens,
+					TotalTokens:     e.Response.Usage.TotalTokens,
+					CacheReadTokens: e.Response.Usage.InputDetails.Cached,
 				},
 			}}
 		}
@@ -546,6 +550,9 @@ func (c *Client) streamChat(ctx context.Context, req sdk.Request, sid string, ch
 				PromptTokens     int `json:"prompt_tokens"`
 				CompletionTokens int `json:"completion_tokens"`
 				TotalTokens      int `json:"total_tokens"`
+				PromptDetails    struct {
+					Cached int `json:"cached_tokens"`
+				} `json:"prompt_tokens_details"`
 			} `json:"usage"`
 		}
 		if json.Unmarshal(data, &e) != nil {
@@ -553,9 +560,10 @@ func (c *Client) streamChat(ctx context.Context, req sdk.Request, sid string, ch
 		}
 		if e.Usage != nil {
 			usage = sdk.Usage{
-				InputTokens:  e.Usage.PromptTokens,
-				OutputTokens: e.Usage.CompletionTokens,
-				TotalTokens:  e.Usage.TotalTokens,
+				InputTokens:     e.Usage.PromptTokens,
+				OutputTokens:    e.Usage.CompletionTokens,
+				TotalTokens:     e.Usage.TotalTokens,
+				CacheReadTokens: e.Usage.PromptDetails.Cached,
 			}
 		}
 		for _, choice := range e.Choices {

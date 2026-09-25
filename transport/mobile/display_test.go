@@ -55,15 +55,18 @@ func responseTrace(stage sdk.TraceStage, text string) sdk.Output {
 	}
 }
 
-func TestStreamedTextBecomesDeltasAndTheTerminalOnlyCloses(t *testing.T) {
+// A streamed answer arrives as deltas; the closing frame carries the whole
+// answer with what the provider charged, because that is the only frame with
+// token counts, and then the turn closes.
+func TestStreamedTextBecomesDeltasAndTheTerminalCarriesTheUsage(t *testing.T) {
 	tr := newDisplayTransport()
 	frames := capture(t, tr, func() {
 		_ = tr.Display(context.Background(), textTrace(sdk.TraceResponseContent, "สวัส"))
 		_ = tr.Display(context.Background(), textTrace(sdk.TraceResponseContent, "ดี"))
 		_ = tr.Display(context.Background(), responseTrace(sdk.TraceResponse, "สวัสดี"))
 	})
-	if len(frames) != 3 {
-		t.Fatalf("frames = %+v, want two deltas and a done", frames)
+	if len(frames) != 4 {
+		t.Fatalf("frames = %+v, want two deltas, the counted answer and a done", frames)
 	}
 	if frames[0].Kind != FrameDelta || frames[0].Text != "สวัส" || frames[0].Role != "model" {
 		t.Fatalf("first frame = %+v, want a model delta", frames[0])
@@ -71,8 +74,12 @@ func TestStreamedTextBecomesDeltasAndTheTerminalOnlyCloses(t *testing.T) {
 	if frames[1].Kind != FrameDelta || frames[1].Text != "ดี" {
 		t.Fatalf("second frame = %+v, want the next delta", frames[1])
 	}
-	if frames[2].Kind != FrameDone {
-		t.Fatalf("last frame = %+v, want done without repeating the answer", frames[2])
+	if frames[2].Kind != FrameMessage || frames[2].Text != "สวัสดี" ||
+		frames[2].InputTokens != 12 || frames[2].OutputTokens != 34 {
+		t.Fatalf("closing answer = %+v, want the whole text and its usage", frames[2])
+	}
+	if frames[3].Kind != FrameDone {
+		t.Fatalf("last frame = %+v, want done after the counted answer", frames[3])
 	}
 }
 
@@ -112,6 +119,9 @@ func TestToolStagesCarryTheCallAndTheResult(t *testing.T) {
 	}
 }
 
+// A streamed sub agent answers with a delta, then the authoritative message that
+// carries what the turn cost, then the frame that closes it. The final message is
+// what puts real token counts on the phone's footer instead of an estimate.
 func TestSubagentTextIsAttributedAndDeltasAreMarkedSub(t *testing.T) {
 	tr := newDisplayTransport()
 	meta := map[string]string{"trace_actor": "subagent", "trace_job_id": "sa-42"}
@@ -120,13 +130,21 @@ func TestSubagentTextIsAttributedAndDeltasAreMarkedSub(t *testing.T) {
 			Trace: &sdk.TraceEvent{Stage: sdk.TraceResponseContent, Text: "กำลังอ่านไฟล์"}})
 		_ = tr.Display(context.Background(), sdk.Output{Source: SourceName, SessionID: "s1", Metadata: meta,
 			Trace: &sdk.TraceEvent{Stage: sdk.TraceResponse, Response: &sdk.Response{
-				Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "กำลังอ่านไฟล์"}}}}})
+				Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "กำลังอ่านไฟล์"}},
+				Usage:   sdk.Usage{InputTokens: 120, OutputTokens: 9}}}})
 	})
-	if len(frames) != 2 {
-		t.Fatalf("frames = %+v, want a sub delta and a done", frames)
+	if len(frames) != 3 {
+		t.Fatalf("frames = %+v, want a sub delta, the final message and a done", frames)
 	}
 	if frames[0].Agent != "sub" || frames[0].JobID != "sa-42" || frames[0].Kind != FrameDelta {
 		t.Fatalf("sub frame = %+v", frames[0])
+	}
+	if frames[1].Kind != FrameMessage || frames[1].JobID != "sa-42" ||
+		frames[1].InputTokens != 120 || frames[1].OutputTokens != 9 {
+		t.Fatalf("final message = %+v, want the sub agent's token counts", frames[1])
+	}
+	if frames[2].Kind != FrameDone || frames[2].JobID != "sa-42" {
+		t.Fatalf("closing frame = %+v", frames[2])
 	}
 }
 

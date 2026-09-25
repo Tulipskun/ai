@@ -278,6 +278,9 @@ func (t *Transport) Display(ctx context.Context, output sdk.Output) error {
 		OutputTokens: output.Response.Usage.OutputTokens,
 	}
 	t.broadcast(output.SessionID, frame)
+	if frame.InputTokens > 0 || frame.OutputTokens > 0 {
+		t.markCounted(output.SessionID, frame.Agent, frame.JobID)
+	}
 	t.broadcast(output.SessionID, Outbound{Kind: FrameDone, SessionID: output.SessionID, JobID: frame.JobID})
 	return nil
 }
@@ -320,13 +323,23 @@ func (t *Transport) displayTrace(output sdk.Output) error {
 			t.broadcast(output.SessionID, Outbound{Kind: FrameDone, SessionID: output.SessionID, JobID: jobID})
 			return nil
 		}
-		// Deltas, or a whole message a moment ago, already reached the phone:
-		// the terminal event only closes the turn. Otherwise the answer arrives
-		// here for the first time and goes out now.
+		// Deltas, or a whole message a moment ago, already reached the phone.
+		// The terminal event closes the turn — unless the phone never got the
+		// token counts, which only the closing message frame carries. Deltas
+		// alone would leave the footer estimating forever, so in that case the
+		// authoritative text goes out once more with the real numbers.
 		if t.answered(output.SessionID, agent, jobID) {
+			counted := t.counted(output.SessionID, agent, jobID)
 			t.clearTurn(output.SessionID, agent, jobID)
-			t.broadcast(output.SessionID, Outbound{Kind: FrameDone, SessionID: output.SessionID, JobID: jobID})
-			return nil
+			usage := trace.Response.Usage
+			if trace.Response == nil {
+				usage = output.Response.Usage
+			}
+			if counted || (usage.InputTokens == 0 && usage.OutputTokens == 0) {
+				t.broadcast(output.SessionID, Outbound{Kind: FrameDone, SessionID: output.SessionID, JobID: jobID})
+				return nil
+			}
+			return t.sendAnswer(output, agent, jobID, text, true)
 		}
 		t.sendAnswer(output, agent, jobID, text, true)
 		t.clearTurn(output.SessionID, agent, jobID)
@@ -418,6 +431,9 @@ func (t *Transport) sendAnswer(output sdk.Output, agent, jobID, text string, clo
 	}
 	t.broadcast(output.SessionID, frame)
 	t.markAnswered(output.SessionID, agent, jobID)
+	if frame.InputTokens > 0 || frame.OutputTokens > 0 {
+		t.markCounted(output.SessionID, agent, jobID)
+	}
 	if closeTurn {
 		t.broadcast(output.SessionID, Outbound{Kind: FrameDone, SessionID: output.SessionID, JobID: jobID})
 	}
@@ -506,6 +522,9 @@ func traceJobID(output sdk.Output) string {
 type turnProgress struct {
 	streamed bool
 	answered bool
+	// counted records that a message frame already carried this turn's token
+	// counts, so the terminal event does not send the same answer twice.
+	counted bool
 }
 
 func (t *Transport) turn(sessionID, agent, jobID string) *turnProgress {
@@ -535,6 +554,21 @@ func (t *Transport) markAnswered(sessionID, agent, jobID string) {
 	t.streamMu.Lock()
 	state.answered = true
 	t.streamMu.Unlock()
+}
+
+// markCounted remembers that the phone already has this turn's token counts.
+func (t *Transport) markCounted(sessionID, agent, jobID string) {
+	state := t.turn(sessionID, agent, jobID)
+	t.streamMu.Lock()
+	state.counted = true
+	t.streamMu.Unlock()
+}
+
+func (t *Transport) counted(sessionID, agent, jobID string) bool {
+	state := t.turn(sessionID, agent, jobID)
+	t.streamMu.Lock()
+	defer t.streamMu.Unlock()
+	return state.counted
 }
 
 func (t *Transport) answered(sessionID, agent, jobID string) bool {

@@ -65,6 +65,32 @@ func TestRateLimitDetection(t *testing.T) {
 	}
 }
 
+// A refused key or a refused client is an answer the provider repeats, so a turn
+// must report it instead of retrying it (OpenCode Zen answers a free-tier
+// request from outside its own client with 403 and counts every retry).
+func TestPolicyRefusalIsNotRetried(t *testing.T) {
+	for _, status := range []int{401, 403} {
+		err := retryTestError{status: status}
+		if !isPolicyRefusal(err) {
+			t.Fatalf("%d was not detected as a policy refusal", status)
+		}
+		if retryableAgentError(context.Background(), err) {
+			t.Fatalf("%d was retried, want the turn to report it", status)
+		}
+	}
+	for _, status := range []int{429, 500, 502} {
+		if isPolicyRefusal(retryTestError{status: status}) {
+			t.Fatalf("%d was treated as a policy refusal", status)
+		}
+	}
+	if !retryableAgentError(context.Background(), retryTestError{status: 500}) {
+		t.Fatal("500 must stay retryable")
+	}
+	if isPolicyRefusal(errors.New("plain failure")) {
+		t.Fatal("an error without a status was treated as a policy refusal")
+	}
+}
+
 func TestWaitRetryHonorsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -138,3 +140,69 @@ func TestAdminSettingsRoundTrip(t *testing.T) {
 		t.Fatal("settings should serialise")
 	}
 }
+
+// The probe records the model that answered, and a key change forgets it: a new
+// pool has not been tested yet, so the phone must not keep the old default.
+func TestProbeVerdictLifecycle(t *testing.T) {
+	store, _ := adminFixture(t)
+	if got := store.WorkingModel("Opencode"); got != "" {
+		t.Fatalf("nothing probed yet, but working model = %q", got)
+	}
+	store.probedModel["Opencode"] = "space-bunny-free"
+	if got := store.WorkingModel("Opencode"); got != "space-bunny-free" {
+		t.Fatalf("working model = %q", got)
+	}
+	store.forgetStatus("Opencode")
+	if got := store.WorkingModel("Opencode"); got != "" {
+		t.Fatalf("changing the key pool must forget the verdict, got %q", got)
+	}
+	if tools := probeTool(); len(tools) == 0 || tools[0].Name == "" || tools[0].InputSchema == nil {
+		t.Fatalf("a health check must carry tools, got %+v", tools)
+	}
+}
+
+// A health check starts with the model that answered last time: a gateway can
+// serve one model and refuse another, and model #1 of the catalogue is not
+// evidence about the provider.
+func TestProbeStartsWithTheModelThatAnsweredLast(t *testing.T) {
+	models := []sdk.Model{{ID: "first"}, {ID: "working"}, {ID: "third"}}
+	ordered := probeOrder(models, "working")
+	if len(ordered) != 3 || ordered[0].ID != "working" {
+		t.Fatalf("probe order = %+v, want the working model first", ordered)
+	}
+	if ordered[1].ID != "first" || ordered[2].ID != "third" {
+		t.Fatalf("probe order = %+v, want the catalogue order after the working model", ordered)
+	}
+	if got := probeOrder(models, ""); len(got) != 3 || got[0].ID != "first" {
+		t.Fatalf("without a known model the catalogue order must stand, got %+v", got)
+	}
+	if got := probeOrder(models, "gone"); len(got) != 3 || got[0].ID != "first" {
+		t.Fatalf("a model that left the catalogue must not be probed, got %+v", got)
+	}
+}
+
+// A refusal the provider will repeat is reported as such and stops the walk:
+// asking the next model spends the same quota for the same answer.
+func TestProbeNamesARepeatedRefusal(t *testing.T) {
+	for status, want := range map[int]string{401: "key", 403: "free tier", 429: "โควตา"} {
+		_, ok := refusalMessage(&statusError{status: status})
+		if !ok {
+			t.Fatalf("status %d was not recognised as a refusal", status)
+		}
+		msg, _ := refusalMessage(&statusError{status: status})
+		if !strings.Contains(msg.Error(), want) {
+			t.Fatalf("status %d message = %q, want it to mention %q", status, msg, want)
+		}
+	}
+	if _, ok := refusalMessage(&statusError{status: 503}); ok {
+		t.Fatal("503 is not a refusal: the next model is still worth a try")
+	}
+	if _, ok := refusalMessage(errors.New("boom")); ok {
+		t.Fatal("an error without a status must not be reported as a refusal")
+	}
+}
+
+type statusError struct{ status int }
+
+func (e *statusError) Error() string       { return "http status" }
+func (e *statusError) HTTPStatusCode() int { return e.status }

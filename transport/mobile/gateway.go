@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -770,9 +772,15 @@ func (t *Transport) StartHTTP(ctx context.Context, listen string) (func(), error
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
 	server := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	// Bind before the tunnel goes up: a daemon that cannot listen must fail here
+	// instead of publishing a URL that answers 502 while logging "ready".
+	ln, err := net.Listen("tcp", listen)
+	if err != nil {
+		return nil, fmt.Errorf("mobile: listen %s: %w", listen, err)
+	}
 	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("mobile: listen %s: %v", listen, err)
+		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+			log.Printf("mobile: serve %s: %v", listen, err)
 		}
 	}()
 	stopServer := func() {

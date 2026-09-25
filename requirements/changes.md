@@ -901,3 +901,42 @@ Reason: การรอคิวคือ UX ที่แย่: ปุ่มเ
 Impact: transport/mobile/admin.go (AdminStore.RefreshProvider + route `/api/providers/{id}/refresh`), transport/mobile/admin_test.go (fake), cmd/ai/admin_store.go (RefreshProvider), requirements/functional.md (REQ-048(8)), requirements/changes.md; ฝั่งแอป AX-089
 Validation: `go build ./...`, `go vet ./...`, `go test ./cmd/ai/... ./transport/mobile/...` ผ่าน
 Status: accepted
+
+CHANGE-069
+
+Date: 2026-09-25
+Type: change
+Request: "ทำต่อให้เสร็จ" — ทุกโมเดลที่ใช้ได้ในตัว opencode ต้องใช้ได้จากมือถือด้วย และห้ามยิง request มั่ว
+Conflict: REQ-048(1) กำหนดให้ probe ยิงจริงเพื่อดูเหตุผล — แต่การเดินทดสอบทีละโมเดลแล้ว retry ซ้ำ ๆ ทำให้ผู้ให้บริการที่จำกัดโควตาปฏิเสธตัวเอง และ REQ-048(6) รายงานเหตุผลจริง — แต่ agent retry error ทุกชนิดรวมถึงคำตอบที่จะไม่เปลี่ยน
+Previous: `adminStore.probe` เดินโมเดล 3 ตัวแรกตามลำดับแคตตาล็อกเสมอ (ไม่รู้ว่าโมเดลไหนเคยตอบ) และเดินต่อแม้เจอ 401/403/429; `Agent.retryableAgentError` retry ทุก error ที่ไม่ใช่ cancel/deadline จึงเคยยิงซ้ำ 7 ครั้งต่อ turn บนคำตอบ 403 FreeTierError; `ProviderStatus` ไม่มีบอกว่าโมเดลไหนตอบได้จริง
+New: probe เริ่มจาก `probedModel` ของ provider นั้น (`probeOrder`) แล้วค่อยไล่แคตตาล็อก, เขียนผลผ่าน `setProbedModel` ภายใต้ lock เดียวกับผู้อ่าน, หยุดทันทีเมื่อเจอคำตอบที่จะซ้ำ (`refusalMessage`: 401/403/429 พร้อมข้อความไทยบอกว่าเป็นการปฏิเสธ/โควตาหมด), และเปิดเผยโมเดลที่ตอบได้เป็น `ProviderStatus.WorkingModel` (ใช้เป็น `default_model` ของ `GET /api/models`); `Agent.retryableAgentError` ไม่ retry 401/403 (`isPolicyRefusal`) เพราะเป็นคำตอบจาก provider ไม่ใช่อาการชั่วคราว
+Reason: วัดจริงกับ OpenCode Zen: free tier ตอบ 200 ได้ 8 จาก 9 โมเดล แต่ปฏิเสธ (403 FreeTierError) ทันทีเมื่อคำขอถูกนับเต็มโควตา และทุกครั้งที่ถูกปฏิเสธก็กินโควตาเพิ่ม — health check ที่ถามต่อและ turn ที่ retry ทำให้ผู้ใช้กู้ provider ที่ใช้ได้จริงไม่ได้เลย
+Impact: cmd/ai/admin_store.go (probe, probeOrder, setProbedModel, refusalMessage), cmd/ai/admin_store_test.go, sdk/agent.go (isPolicyRefusal), sdk/retry_test.go, transport/mobile/admin.go (WorkingModel), cmd/ai/mobile.go (default_model), requirements/functional.md (REQ-048(9)); ฝั่งแอป AX-090 แสดง `working_model`
+Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่าน; วัดกับ Zen ตรง ๆ: ตอนที่ยังมีโควตา 8 จาก 9 โมเดลตอบ (`jev-1.13-free` ใช้ไม่ได้ทุก endpoint) และเมื่อคำขอถูกนับเต็มโควตาจะเป็น 403 FreeTierError ทุกครั้งจนกว่าจะฟื้น — จริงบนมือถือ: กด "ทดสอบ" ที่ Opencode แล้วขึ้น "ผู้ให้บริการปฏิเสธคำขอนี้ (403) — เช่น free tier ที่ใช้ได้เฉพาะในตัว client ของผู้ให้บริการ" โดยยิง 1 คำขอแทน 3 และ `working_model` แสดงจริงที่ AgentRouter (`deepseek-v4-flash`) กับ NousResearch (`inclusionai/ling-3.0-flash-sante:free`)
+Status: accepted
+
+CHANGE-070
+
+Date: 2026-09-25
+Type: fix
+Request: ผู้ใช้กด "ทดสอบใหม่" แล้วหน้าจอขึ้น "ทุก provider ใช้งานได้" ทั้งที่รายการ provider หายไปทั้งหมด
+Conflict: REQ-048(1)/(8) ต้องให้เหตุผลจริงจาก provider — การรอ provider ทีละตัวจนนานเกิน read timeout ของมือถือทำให้ฝั่งแอปได้รายการว่าง แล้วสรุปว่า "ทุกตัวใช้ได้" ซึ่งเป็นคำตอบที่ไม่จริง
+Previous: `RefreshProviders` วิ่ง discovery + probe ของ provider ทีละตัวแบบไม่จำกัดเวลา (6 ตัว × โมเดลสูงสุด 3 ตัว) — ผ่าน Cloudflare quick tunnel คำขอจะโดนตัดก่อนตอบ
+New: `RefreshProviders` เปิด goroutine ต่อ provider ภายใต้ `probeConcurrency = 4` และ `check()` ครอบทั้ง discovery+probe ด้วย `probeBudget = 25s`; `RefreshProvider` (ปุ่มทดสอบ provider เดี่ยว) ใช้งบเวลาเดียวกัน
+Reason: ผู้ใช้กดปุ่มเดียวแล้วต้องได้คำตอบของทุก provider ภายในเวลาที่ tunnel รอได้ ไม่ใช่รอจน request ตายแล้วเห็นคำตอบปลอม
+Impact: cmd/ai/admin_store.go (RefreshProviders, RefreshProvider, check, probeConcurrency, probeBudget), requirements/functional.md (REQ-048(10)); ฝั่งแอป AX-091 (ไม่ล้างรายการเมื่อโหลดไม่สำเร็จ + ห้ามสรุปว่า "ทุก provider ใช้งานได้" ตอนรายการว่าง + ยกดอก timeout ของ REST ให้รอ provider check ได้จริง)
+Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่าน; จริงบนมือถือ: กด "ทดสอบใหม่" แล้วรายการ provider ไม่หายและข้อความตรงกับสิ่งที่ daemon ตอบ
+Status: accepted
+
+CHANGE-071
+
+Date: 2026-09-25
+Type: fix
+Request: ผู้ใช้เจอ daemon ที่ตอบ 502 ทั้งที่ log บอกว่า ready และเจอเหตุผล provider ที่ถูกปฏิเสธที่ไม่มีที่ไหนเก็บ
+Conflict: REQ-046(3)/REQ-048(1) — daemon ที่ bind ไม่ได้ยังเปิด tunnel และตอบ 502 ทั้งที่รายงานว่า ready ทำให้ผู้ใช้ตาม URL ที่ไม่มี daemon อยู่จริง และ error ของ admin write หายไปทั้งที่มือถือเห็นแค่ข้อความสั้น
+Previous: `StartHTTP` เรียก `server.ListenAndServe()` ใน goroutine (พอร์ตไม่ว่างก็แค่ log) แล้วเปิด tunnel ต่อทันที; `admin.go` ตอบ error ของ add/remove/keys/refresh ด้วยข้อความอย่างเดียวโดยไม่ log
+New: `StartHTTP` bind ด้วย `net.Listen` ก่อน แล้วค่อยเปิด tunnel — ถ้า bind ไม่ได้คืน error ที่บอกว่าฟังไม่ได้ (`transport/mobile/listen_test.go`); ทุก admin write ที่ล้มเหลว log หนึ่งบรรทัดผ่าน `writeAdminError` และเคสที่ body เป็น key ถูกถามผิดรูป log เฉพาะรูปร่าง (ขนาด byte, จำนวน quote, จำนวน brace) ไม่ใช่ค่าใน key
+Reason: สิ่งที่ผู้ใช้เจอต้องมีที่อยู่บนเครื่องที่เป็นเจ้าของ state และ daemon ต้องไม่ประกาศว่าพร้อมเมื่อมันฟังไม่ได้
+Impact: transport/mobile/gateway.go (StartHTTP), transport/mobile/listen_test.go (ใหม่), transport/mobile/admin.go (writeAdminError + log รูปร่าง body), requirements/changes.md
+Validation: `go build ./...`, `go vet ./...`, `go test ./transport/mobile/...` ผ่าน; จริงบนเครื่องจริง: restart daemon ทั้งหมดแล้ว URL ใหม่ตอบ `/healthz` 200 และทุก provider write ที่ล้มเหลวมีบรรทัด `admin ...` ใน log
+Status: accepted

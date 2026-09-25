@@ -1,8 +1,11 @@
 package mobile
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -19,7 +22,9 @@ type ProviderStatus struct {
 	ModelCount int    `json:"model_count"`
 	Reachable  bool   `json:"reachable"`
 	Probed     bool   `json:"probed"`
-	LastError  string `json:"last_error,omitempty"`
+	// WorkingModel is the model that answered the last successful probe.
+	WorkingModel string `json:"working_model,omitempty"`
+	LastError    string `json:"last_error,omitempty"`
 }
 
 // AgentSettings is what the main agent and the sub agent each run on.
@@ -133,10 +138,17 @@ func adminAddProvider(w http.ResponseWriter, r *http.Request, store AdminStore) 
 	}
 	view, err := store.AddProvider(r.Context(), spec)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeAdminError(w, "add "+spec.ID, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// writeAdminError answers with the reason and logs it once. Without the log a
+// failed phone-side edit is invisible on the machine that owns the state.
+func writeAdminError(w http.ResponseWriter, what string, err error) {
+	log.Printf("admin %s: %v", what, err)
+	writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 }
 
 func adminProviderItem(w http.ResponseWriter, r *http.Request, store AdminStore, rest string) {
@@ -151,7 +163,7 @@ func adminProviderItem(w http.ResponseWriter, r *http.Request, store AdminStore,
 		// do to one as a whole.
 		if r.Method == http.MethodDelete {
 			if err := store.RemoveProvider(r.Context(), id); err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				writeAdminError(w, "remove "+id, err)
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id})
@@ -163,13 +175,21 @@ func adminProviderItem(w http.ResponseWriter, r *http.Request, store AdminStore,
 	switch {
 	case parts[1] == "keys" && r.Method == http.MethodPost:
 		var change KeyChange
-		if err := json.NewDecoder(r.Body).Decode(&change); err != nil {
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+		if err != nil {
+			writeAdminError(w, "keys "+id, err)
+			return
+		}
+		if err := json.Unmarshal(raw, &change); err != nil {
+			// The shape, never the content: a key is in this body.
+			log.Printf("admin: keys %s: bad request: %v (body %d bytes, %d quotes, %d braces)",
+				id, err, len(raw), bytes.Count(raw, []byte{'"'}), bytes.Count(raw, []byte{'{', '}'}))
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
 			return
 		}
 		view, err := store.UpdateKeys(r.Context(), id, change)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeAdminError(w, "keys "+id, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, view)
@@ -178,7 +198,7 @@ func adminProviderItem(w http.ResponseWriter, r *http.Request, store AdminStore,
 		// fixing a dead key needs that answer now.
 		view, err := store.RefreshProvider(r.Context(), id)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeAdminError(w, "refresh "+id, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, view)
@@ -195,7 +215,7 @@ func adminSaveSettings(w http.ResponseWriter, r *http.Request, store AdminStore)
 	}
 	saved, err := store.SaveSettings(r.Context(), settings)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeAdminError(w, "settings", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, saved)

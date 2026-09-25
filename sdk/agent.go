@@ -601,12 +601,30 @@ func retryableAgentError(ctx context.Context, err error) bool {
 	if isLoopControlFatal(err) {
 		return false
 	}
+	// A refused key or a refused client is an answer, not a hiccup: the same
+	// request gets the same answer. OpenCode Zen answers a free-tier request
+	// that arrives from outside its own client with 403 FreeTierError, and every
+	// retry spends quota the tier is already refusing.
+	if isPolicyRefusal(err) {
+		return false
+	}
 	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
 
 func isRateLimitError(err error) bool {
 	statusErr, ok := err.(HTTPStatusError)
 	return ok && statusErr.HTTPStatusCode() == 429
+}
+
+// isPolicyRefusal reports a verdict the provider will repeat: 401 says the key
+// is not accepted, 403 says this client or tier is not allowed. Neither becomes
+// true by asking again right away, so a turn reports it instead of retrying.
+func isPolicyRefusal(err error) bool {
+	var statusErr HTTPStatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	return statusErr.HTTPStatusCode() == 401 || statusErr.HTTPStatusCode() == 403
 }
 
 type retryBackoff struct{ consecutive int }

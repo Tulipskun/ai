@@ -91,6 +91,9 @@ type modelStore struct {
 	router   *sdk.Router
 	client   *d1store.Client
 	sessions *runtime.SessionManager
+	// workingModel is the admin store's verified model per provider, so the
+	// phone's pickers default to a model that is known to answer.
+	workingModel func(sdk.ProviderID) string
 }
 
 func (m modelStore) Providers(context.Context) ([]mobiletransport.ProviderView, error) {
@@ -109,6 +112,14 @@ func (m modelStore) Providers(context.Context) ([]mobiletransport.ProviderView, 
 		}
 		if len(view.Models) > 0 {
 			view.DefaultModel = view.Models[0].ID
+			if m.workingModel != nil {
+				for _, model := range view.Models {
+					if model.ID == m.workingModel(id) {
+						view.DefaultModel = model.ID
+						break
+					}
+				}
+			}
 		}
 		out = append(out, view)
 	}

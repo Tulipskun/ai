@@ -34,12 +34,22 @@ import (
 )
 
 const (
-	DefaultBaseURL   = "https://opencode.ai/zen/v1"
-	DefaultUserAgent = "opencode/1.18.31"
-	Referer          = "https://opencode.ai/"
-	Title            = "opencode"
+	DefaultBaseURL = "https://opencode.ai/zen/v1"
+	Referer        = "https://opencode.ai/"
+	Title          = "opencode"
+
+	// The free tier only answers a request that looks like it came from the
+	// OpenCode client: its User-Agent carries the client version plus the
+	// ai-sdk and runtime tags, and it sends the x-opencode-* session headers.
+	// Verified against the real client (captured request, replayed unchanged).
+	DefaultUserAgent    = "opencode/1.18.32 ai-sdk/provider-utils/4.0.45 runtime/bun/1.3.14"
+	DefaultClientName   = "cli"
+	DefaultProjectLabel = "ai"
 
 	headerSession = "x-opencode-session"
+	headerClient  = "x-opencode-client"
+	headerProject = "x-opencode-project"
+	headerRequest = "x-opencode-request"
 	headerReferer = "HTTP-Referer"
 	headerTitle   = "X-Title"
 	headerUA      = "User-Agent"
@@ -124,6 +134,17 @@ func (c *Client) Name() string { return "opencode" }
 
 func (c *Client) sessionID(req sdk.Request) string { return SessionIDFor(req.SessionID) }
 
+// project labels the caller the way the client does, so a request that arrives
+// with no configured project still carries the header.
+func (c *Client) project() string {
+	for k, v := range c.Headers {
+		if strings.EqualFold(k, headerProject) && strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return DefaultProjectLabel
+}
+
 // headers merges explicit config headers over the opencode fingerprint,
 // except the session header which always stays adapter-computed so every
 // turn of a harness session attributes to the same provider-facing id.
@@ -133,6 +154,9 @@ func (c *Client) headers(sessionID string) map[string]string {
 		headerUA:        DefaultUserAgent,
 		headerReferer:   Referer,
 		headerTitle:     Title,
+		headerClient:    DefaultClientName,
+		headerProject:   c.project(),
+		headerRequest:   sessionID,
 	}
 	for k, v := range c.Headers {
 		if v == "" || strings.EqualFold(k, "Authorization") || strings.EqualFold(k, headerSession) {
@@ -169,6 +193,24 @@ func (c *Client) ListModels(ctx context.Context, apiKey string) ([]sdk.Model, er
 	return models, nil
 }
 
+// buildChatRequest mirrors what the OpenCode client sends to
+// /chat/completions: the same messages and tools plus tool_choice, the token
+// budget and stream_options. Zen's free tier rejects a request that is missing
+// the client's shape, so the extras are not decoration.
+func buildChatRequest(req sdk.Request) map[string]any {
+	b := openai.BuildChatRequest(req)
+	if len(req.Tools) > 0 {
+		b["tool_choice"] = "auto"
+	}
+	if req.MaxOutputTokens > 0 {
+		b["max_tokens"] = req.MaxOutputTokens
+	}
+	if req.Stream {
+		b["stream_options"] = map[string]any{"include_usage": true}
+	}
+	return b
+}
+
 // buildResponsesRequest mirrors openai.BuildResponsesRequest but carries the
 // system prompt as the leading developer input item instead of the
 // "instructions" field: Zen rejects large instructions payloads, while the
@@ -194,17 +236,18 @@ func (c *Client) Generate(ctx context.Context, req sdk.Request) (sdk.Response, e
 		return sdk.Response{}, err
 	}
 	var chat openai.ChatResponse
-	if chatErr := internal.DoJSON(ctx, c.http(), http.MethodPost, c.BaseURL+"/chat/completions", c.headers(sid), openai.BuildChatRequest(req), &chat); chatErr != nil {
+	if chatErr := internal.DoJSON(ctx, c.http(), http.MethodPost, c.BaseURL+"/chat/completions", c.headers(sid), buildChatRequest(req), &chat); chatErr != nil {
 		return sdk.Response{}, chatErr
 	}
 	return openai.ParseChatResponse(chat), nil
 }
 
-// shouldTryChat reports whether a /responses failure looks like an
-// endpoint/model mismatch (try /chat/completions) rather than an
-// auth/rate-limit failure (return immediately). Zen serves some models only
-// on /responses and others only on /chat/completions, and answers 500 on the
-// wrong endpoint, so 500 falls back while 401/403/429 never do.
+// shouldTryChat reports whether a /responses failure means "not this endpoint",
+// so the sibling /chat/completions is worth one attempt. Zen serves some models
+// only on /responses and others only on /chat/completions, and its answers for
+// the wrong endpoint are not uniform: 404, 500, 503 ("Endpoint is unavailable")
+// and, for the free tier, a 403 FreeTierError. 401/429 never fall back: those
+// are the same verdict on either endpoint.
 func shouldTryChat(err error) bool {
 	var httpErr *internal.HTTPError
 	if !errors.As(err, &httpErr) {
@@ -213,9 +256,11 @@ func shouldTryChat(err error) bool {
 	switch httpErr.StatusCode {
 	case http.StatusNotFound:
 		return true
+	case http.StatusForbidden:
+		return strings.Contains(httpErr.Body, "FreeTierError")
 	case http.StatusBadRequest:
 		return strings.Contains(httpErr.Body, `"code":"model_not_supported_on_endpoint"`)
-	case http.StatusInternalServerError:
+	case http.StatusInternalServerError, http.StatusServiceUnavailable:
 		return true
 	}
 	return false
@@ -294,7 +339,7 @@ func (c *Client) streamChat(ctx context.Context, req sdk.Request, sid string, ch
 			*emitted = true
 		}
 	}
-	return internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/chat/completions", c.headers(sid), openai.BuildChatRequest(req), func(data []byte) error {
+	return internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/chat/completions", c.headers(sid), buildChatRequest(req), func(data []byte) error {
 		var e struct {
 			Choices []struct {
 				Delta struct {

@@ -191,6 +191,9 @@ func run(ctx context.Context) error {
 	// hydrates from, so a restart keeps the choices.
 	admin := newAdminStore(state, mobileRT.client, providerManager, &providerFile, sessions, agent,
 		sdk.SessionConfig{Provider: sdk.ProviderID(providerID), Model: modelID})
+	// The catalogue's default model is the one a health check actually got an
+	// answer from, so the phone does not hand the user a model the key refuses.
+	models.workingModel = admin.WorkingModel
 	mobileRT.transport.SetAdminStore(admin)
 	sessions.SetSessionDefaults(func(ctx context.Context, sessionID string) (sdk.ProviderID, string, bool) {
 		choice, ok, err := models.SessionModel(ctx, sessionID)

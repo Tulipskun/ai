@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai/sdk/providers/internal"
 )
 
 var sessionFormat = regexp.MustCompile(`^ses_f[0-9a-f]{8}ffe[A-Za-z0-9]{14}$`)
@@ -300,4 +301,21 @@ func TestResponsesBodyUsesDeveloperInput(t *testing.T) {
 
 func newResponsesBodyRequest() sdk.Request {
 	return sdk.Request{Model: "m", SystemPrompt: "sys", Messages: []sdk.Turn{{Role: sdk.RoleUser, Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "hi"}}}}}
+}
+
+// Zen answers 503 "Endpoint is unavailable" for a model it serves only on
+// /chat/completions; that must fall back instead of failing the turn.
+func TestShouldTryChatFallsBackOn503(t *testing.T) {
+	if !shouldTryChat(&internal.HTTPError{StatusCode: 503, Body: `{"error":{"message":"Upstream request failed: Endpoint is unavailable."}}`}) {
+		t.Fatal("503 must fall back to /chat/completions")
+	}
+	// Zen answers "not this endpoint" on the free tier with a 403 FreeTierError
+	// for models it only serves on /chat/completions, so that one does fall back.
+	if !shouldTryChat(&internal.HTTPError{StatusCode: 403, Body: `{"error":{"type":"FreeTierError"}}`}) {
+		t.Fatal("403 FreeTierError must fall back to /chat/completions")
+	}
+	// A real auth failure is the same verdict on either endpoint: do not retry.
+	if shouldTryChat(&internal.HTTPError{StatusCode: 401, Body: `{"error":{"type":"AuthError"}}`}) {
+		t.Fatal("401 must not fall back")
+	}
 }

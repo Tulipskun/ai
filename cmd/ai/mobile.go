@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Tulipskun/ai/runtime"
 	"github.com/Tulipskun/ai/runtime/d1store"
@@ -37,6 +38,14 @@ type mobileRuntime struct {
 	sessions *runtime.SessionManager
 
 	turns turnMirror
+
+	// mirrorGates serializes one session's D1 mirrors so rows always land
+	// user-before-answer. The user mirror runs in a goroutine while the turn
+	// runs; without the gate a fast turn's answer can steal the lower seq and
+	// the phone (which numbers its pending row from its own counter) drops the
+	// answer on a seq collision it can never recover from.
+	mirrorMu    sync.Mutex
+	mirrorGates map[string]chan struct{}
 }
 
 type runtimeMobileConfig struct {
@@ -410,6 +419,11 @@ func (m *mobileRuntime) PublishOutput(ctx context.Context, output sdk.Output) {
 		return
 	}
 	jobID := output.Metadata["mobile_job_id"]
+	// Wait for this turn's user row first: D1 numbers rows MAX+1, so an answer
+	// that lands before its user row steals the lower seq and scrambles the
+	// order every client reconstructs. On timeout the answer still goes out
+	// (and says so in the log) rather than holding the turn hostage to D1.
+	m.waitUserMirror(output.SessionID)
 	// The footer is read off the terminal trace: the model that answered, the
 	// counts it reported (including cached usage) and how long it took (AX-095).
 	var meta d1store.TurnMeta
@@ -478,7 +492,39 @@ func (m *mobileRuntime) mirrorUserTurn(input sdk.Input) func(context.Context) er
 		return nil
 	}
 	return func(ctx context.Context) error {
-		return m.client.AppendTurn(ctx, input.SessionID, "user", "user", "", text)
+		gate := make(chan struct{})
+		m.mirrorMu.Lock()
+		if m.mirrorGates == nil {
+			m.mirrorGates = map[string]chan struct{}{}
+		}
+		m.mirrorGates[input.SessionID] = gate
+		m.mirrorMu.Unlock()
+		err := m.client.AppendTurn(ctx, input.SessionID, "user", "user", "", text)
+		m.mirrorMu.Lock()
+		if m.mirrorGates[input.SessionID] == gate {
+			delete(m.mirrorGates, input.SessionID)
+		}
+		m.mirrorMu.Unlock()
+		close(gate)
+		return err
+	}
+}
+
+// waitUserMirror blocks until this session's user row has landed, so the
+// answer mirror that follows cannot take its seq. A newer turn replaces the
+// gate, so waiting on a stale one is impossible: PublishOutput always reads
+// the current gate after the turn that produced it.
+func (m *mobileRuntime) waitUserMirror(sessionID string) {
+	m.mirrorMu.Lock()
+	gate := m.mirrorGates[sessionID]
+	m.mirrorMu.Unlock()
+	if gate == nil {
+		return
+	}
+	select {
+	case <-gate:
+	case <-time.After(30 * time.Second):
+		log.Printf("mobile: user mirror still pending for session=%s; mirroring answer anyway", sessionID)
 	}
 }
 

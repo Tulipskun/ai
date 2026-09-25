@@ -372,3 +372,99 @@ func TestChatRequestAsksForUsageOnAStream(t *testing.T) {
 func probeToolsForTest() []sdk.Tool {
 	return []sdk.Tool{{Name: "bash", Description: "run", InputSchema: map[string]any{"type": "object"}}}
 }
+
+// The free tier refuses requests that do not carry the client's own tool names,
+// so the adapter presents the client's tool set.
+func TestRequestPresentsTheClientToolSet(t *testing.T) {
+	b := buildChatRequest(sdk.Request{
+		Model: "mimo-v2.5-free",
+		Tools: []sdk.Tool{
+			{Name: "bash", InputSchema: map[string]any{"type": "object"}},
+			{Name: "read_file", InputSchema: map[string]any{"type": "object"}},
+			{Name: "os_screenshot"},
+		},
+	})
+	tools, _ := b["tools"].([]any)
+	if len(tools) != len(clientToolNames) {
+		t.Fatalf("tool set has %d tools, want the client's %d", len(tools), len(clientToolNames))
+	}
+	got := map[string]string{}
+	for _, entry := range tools {
+		tool, _ := entry.(map[string]any)
+		fn, _ := tool["function"].(map[string]any)
+		name, _ := fn["name"].(string)
+		raw, _ := json.Marshal(fn["parameters"])
+		got[name] = string(raw)
+	}
+	for _, want := range clientToolNames {
+		if _, ok := got[want]; !ok {
+			t.Errorf("tool %q missing from the request", want)
+		}
+	}
+	if !strings.Contains(got["bash"], `"object"`) {
+		t.Error("the session's own bash schema was not carried over")
+	}
+}
+
+// A call that comes back under a client name is executed as the session's tool.
+func TestToolCallNamesMapBackToTheSession(t *testing.T) {
+	tools := []sdk.Tool{{Name: "bash"}, {Name: "read_file"}, {Name: "search_files"}}
+	for _, tc := range []struct{ client, want string }{
+		{"bash", "bash"},
+		{"read", "read_file"},
+		{"grep", "search_files"},
+		{"todowrite", ""},
+		{"websearch", ""},
+	} {
+		if got := oursToolForName(tc.client, tools); got != tc.want {
+			t.Errorf("oursToolForName(%q) = %q, want %q", tc.client, got, tc.want)
+		}
+		// A call the session cannot run keeps the provider's own name, so the
+		// agent can report it as unknown instead of silently dropping it.
+		wantBack := tc.want
+		if wantBack == "" {
+			wantBack = tc.client
+		}
+		if got := toolNameBack(tc.client, tools); got != wantBack {
+			t.Errorf("toolNameBack(%q) = %q, want %q", tc.client, got, wantBack)
+		}
+	}
+}
+
+// Zen closes some turns with an empty 200 stream; that must surface as a
+// failure, and the other endpoint gets a chance first.
+func TestEmptyResponsesStreamFallsBackThenFails(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if r.URL.Path == "/chat/completions" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"type":"server_error","message":"Upstream request failed"}}`))
+			return
+		}
+		flusher, _ := w.(http.Flusher)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer srv.Close()
+	client := New("k")
+	client.BaseURL = srv.URL
+	ch, err := client.Stream(context.Background(), sdk.Request{Model: "muse-spark-1.2-contributor-free", Messages: []sdk.Turn{{Role: sdk.RoleUser, Content: []sdk.ContentPart{{Type: sdk.ContentText, Text: "ping"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got error
+	for ev := range ch {
+		if ev.Type == sdk.EventError {
+			got = ev.Err
+		}
+	}
+	if got == nil {
+		t.Fatal("an empty turn was reported as a successful one")
+	}
+	if len(paths) != 2 || paths[0] != "/responses" || paths[1] != "/chat/completions" {
+		t.Errorf("endpoints tried = %v, want /responses then /chat/completions", paths)
+	}
+}

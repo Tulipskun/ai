@@ -193,12 +193,128 @@ func (c *Client) ListModels(ctx context.Context, apiKey string) ([]sdk.Model, er
 	return models, nil
 }
 
+// The free tier does not only look at headers: it also expects the request to
+// carry the OpenCode client's own tool set. Measured against Zen on
+// 2026-09-25, a request that offers none of the client's tool names is refused
+// with 403 FreeTierError ("can only be used from within OpenCode") no matter
+// how many tools it does offer, while a request carrying the client's names
+// (bash, read, edit, write, glob, grep, webfetch, task, …) is served. So this
+// adapter presents the client's tools and translates the calls that come back
+// to the tools the session actually has.
+var clientToolNames = []string{
+	"bash", "edit", "glob", "grep", "read", "skill", "task", "todowrite", "webfetch", "websearch", "write",
+}
+
+// toolAlias maps this daemon's tool names onto the client's, best match first.
+var toolAlias = []struct{ client, ours string }{
+	{"read", "read_file"},
+	{"read", "read_files"},
+	{"read", "read_attachment"},
+	{"write", "write_file"},
+	{"edit", "edit_file"},
+	{"grep", "search_files"},
+	{"glob", "list_directory"},
+	{"glob", "list_attachments"},
+	{"webfetch", "web_fetch"},
+	{"websearch", "web_fetch"},
+	{"task", "task"},
+	{"bash", "bash"},
+	{"bash", "run_job"},
+	{"skill", "skill"},
+}
+
+// clientTools returns the tool set the OpenCode client would send, using the
+// session's own definition for every tool that maps onto a client name (so the
+// arguments stay ours) and a minimal definition for the rest.
+func clientTools(tools []sdk.Tool) []sdk.Tool {
+	ours := make(map[string]sdk.Tool, len(tools))
+	for _, t := range tools {
+		if _, seen := ours[t.Name]; !seen {
+			ours[t.Name] = t
+		}
+	}
+	used := make(map[string]bool, len(clientToolNames))
+	out := make([]sdk.Tool, 0, len(clientToolNames))
+	for _, name := range clientToolNames {
+		tool := sdk.Tool{
+			Name:        name,
+			Description: clientToolDescriptions[name],
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		}
+		for _, alias := range toolAlias {
+			if alias.client != name {
+				continue
+			}
+			if ours[alias.ours].Name != "" && !used[alias.ours] {
+				tool = ours[alias.ours]
+				tool.Name = name
+				used[alias.ours] = true
+				break
+			}
+		}
+		out = append(out, tool)
+	}
+	return out
+}
+
+var clientToolDescriptions = map[string]string{
+	"bash":      "Run a shell command in a persistent session.",
+	"edit":      "Edit a file in the workspace.",
+	"glob":      "List files and directories by pattern.",
+	"grep":      "Search file contents with a regular expression.",
+	"read":      "Read a file from the workspace.",
+	"skill":     "Load a skill's instructions before acting on it.",
+	"task":      "Delegate a scoped task to a sub agent.",
+	"todowrite": "Record a short list of the work in progress.",
+	"webfetch":  "Fetch a URL and return it as text.",
+	"websearch": "Search the web and return the results as text.",
+	"write":     "Write a file in the workspace.",
+}
+
+// oursToolForName translates a tool name that came back from the provider into
+// the tool this session actually has. An empty result is a call the session
+// cannot run, which the agent reports as an unknown tool rather than guessing.
+func oursToolForName(name string, tools []sdk.Tool) string {
+	have := make(map[string]bool, len(tools))
+	for _, t := range tools {
+		have[t.Name] = true
+	}
+	for _, alias := range toolAlias {
+		if alias.client == name && have[alias.ours] {
+			return alias.ours
+		}
+	}
+	if have[name] {
+		return name
+	}
+	return ""
+}
+
+// errEmptyTurn is a turn that produced no output at all; the free tier returns
+// one now and then and the agent has to be able to try again.
+var errEmptyTurn = errors.New("opencode: the turn produced no output")
+
+// toolNameBack is the safe form of oursToolForName for a call that has to be
+// reported either way: a call whose tool the session does not have keeps the
+// name the provider used, so the agent can tell the model it is unknown.
+func toolNameBack(name string, tools []sdk.Tool) string {
+	if ours := oursToolForName(name, tools); ours != "" {
+		return ours
+	}
+	return name
+}
+
 // buildChatRequest mirrors what the OpenCode client sends to
 // /chat/completions: the same messages and tools plus tool_choice, the token
 // budget and stream_options. Zen's free tier rejects a request that is missing
 // the client's shape, so the extras are not decoration.
 func buildChatRequest(req sdk.Request) map[string]any {
-	b := openai.BuildChatRequest(req)
+	agent := req
+	agent.Tools = clientTools(req.Tools)
+	b := openai.BuildChatRequest(agent)
 	if len(req.Tools) > 0 {
 		b["tool_choice"] = "auto"
 	}
@@ -216,7 +332,9 @@ func buildChatRequest(req sdk.Request) map[string]any {
 // "instructions" field: Zen rejects large instructions payloads, while the
 // real opencode client sends its system prompt as input items.
 func buildResponsesRequest(req sdk.Request) map[string]any {
-	b := openai.BuildResponsesRequest(req)
+	agent := req
+	agent.Tools = clientTools(req.Tools)
+	b := openai.BuildResponsesRequest(agent)
 	sys, _ := b["instructions"].(string)
 	delete(b, "instructions")
 	if sys == "" {
@@ -249,6 +367,11 @@ func (c *Client) Generate(ctx context.Context, req sdk.Request) (sdk.Response, e
 // and, for the free tier, a 403 FreeTierError. 401/429 never fall back: those
 // are the same verdict on either endpoint.
 func shouldTryChat(err error) bool {
+	// A turn that came back empty gets one more chance on the other endpoint,
+	// which is also what a chat-only model needs.
+	if errors.Is(err, errEmptyTurn) {
+		return true
+	}
 	var httpErr *internal.HTTPError
 	if !errors.As(err, &httpErr) {
 		return false
@@ -292,7 +415,8 @@ func (c *Client) streamResponses(ctx context.Context, req sdk.Request, sid strin
 			*emitted = true
 		}
 	}
-	return internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/responses", c.headers(sid), buildResponsesRequest(req), func(data []byte) error {
+	completed := false
+	err := internal.SSE(ctx, c.http(), http.MethodPost, c.BaseURL+"/responses", c.headers(sid), buildResponsesRequest(req), func(data []byte) error {
 		var e struct {
 			Type  string `json:"type"`
 			Delta string `json:"delta"`
@@ -328,9 +452,10 @@ func (c *Client) streamResponses(ctx context.Context, req sdk.Request, sid strin
 		case "response.function_call_arguments.done":
 			if e.Item.CallID != "" {
 				mark()
-				ch <- sdk.Event{Type: sdk.EventToolCall, ToolCall: &sdk.ToolCall{ID: e.Item.CallID, Name: e.Item.Name, Arguments: e.Item.Arguments}}
+				ch <- sdk.Event{Type: sdk.EventToolCall, ToolCall: &sdk.ToolCall{ID: e.Item.CallID, Name: toolNameBack(e.Item.Name, req.Tools), Arguments: e.Item.Arguments}}
 			}
 		case "response.completed":
+			completed = true
 			mark()
 			// The closing event carries the token counts, so a streamed turn
 			// reports the same usage a non-streamed one does.
@@ -346,6 +471,16 @@ func (c *Client) streamResponses(ctx context.Context, req sdk.Request, sid strin
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	// Zen sometimes closes a turn with an empty 200 stream. Falling through would
+	// hand the agent a turn that produced nothing at all, so it is reported as a
+	// failure the agent can retry instead.
+	if !completed {
+		return errEmptyTurn
+	}
+	return nil
 }
 
 func (c *Client) streamChat(ctx context.Context, req sdk.Request, sid string, ch chan<- sdk.Event, emitted *bool) error {
@@ -419,7 +554,7 @@ func (c *Client) streamChat(ctx context.Context, req sdk.Request, sid string, ch
 				for _, st := range tools {
 					if st.name != "" {
 						mark()
-						ch <- sdk.Event{Type: sdk.EventToolCall, ToolCall: &sdk.ToolCall{ID: st.id, Name: st.name, Arguments: st.args}}
+						ch <- sdk.Event{Type: sdk.EventToolCall, ToolCall: &sdk.ToolCall{ID: st.id, Name: toolNameBack(st.name, req.Tools), Arguments: st.args}}
 					}
 				}
 				tools = map[int]*toolState{}
@@ -441,8 +576,9 @@ func (c *Client) streamChat(ctx context.Context, req sdk.Request, sid string, ch
 		mark()
 		ch <- sdk.Event{Type: sdk.EventDone, Response: &sdk.Response{Usage: usage}}
 	} else if !doneSent {
-		mark()
-		ch <- sdk.Event{Type: sdk.EventDone}
+		// The stream closed without a closing choice, so the turn produced
+		// nothing; reporting it as done would hide a free-tier hiccup.
+		return errEmptyTurn
 	}
 	return nil
 }

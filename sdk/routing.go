@@ -178,7 +178,7 @@ func (r *Router) Resolve(provider ProviderID, model string) (ModelRoute, error) 
 	if providerOK {
 		return ModelRoute{}, fmt.Errorf("sdk: model catalogue for provider=%q has not been refreshed", provider)
 	}
-	return ModelRoute{}, fmt.Errorf("sdk: no route for provider=%q model=%q", model, provider)
+	return ModelRoute{}, fmt.Errorf("sdk: no route for provider=%q model=%q", provider, model)
 }
 
 type PlanStep struct {

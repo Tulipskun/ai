@@ -1090,3 +1090,24 @@ Impact: cmd/ai/admin_store.go (RefreshRoutesFromDisk), cmd/ai/mobile.go (hook + 
 cmd/ai/main.go (ต่อ hook), cmd/ai/admin_store_test.go, requirements/changes.md
 Validation: `TestRefreshRoutesFromDiskPicksUpStoredDefaults`; `go test ./cmd/ai -count=1`
 Status: accepted
+
+CHANGE-081
+
+Date: 2026-09-26
+Type: revise
+Request: turn จบ (`turn ok`) แต่ thread ไม่ขึ้นคำตอบ ทั้งที่ D1 มีแถวคำตอบครบ
+Conflict: REQ-046(5) (ทุก turn ที่จบต้องเขียนเข้า D1 ตามลำดับ เพื่อให้ประวัติบนมือถือเรียงถูก)
+Previous: user mirror วิ่งใน goroutine แข่งกับ answer mirror; D1 นับ seq แบบ MAX+1
+ทำให้ answer ของ turn ที่เร็วแย่ง seq ที่ต่ำกว่าได้ และไม่มี log บอกเลยว่าแต่ละ mirror
+ได้ seq อะไร
+New: `mobileRuntime` มี gate ต่อ session ให้ answer mirror รอ user mirror ของ turn
+เดียวกันก่อน (เกิน 30 วิไปต่อพร้อม log); log ทั้งสอง mirror พร้อม session/seq (และ
+model/token/เวลา สำหรับ answer); log ตอน announce เพิ่ม database UUID
+Reason: ลำดับแถวใน D1 ต้องเป็น user-ก่อน-answer เสมอ ไม่ใช่แค่ส่วนใหญ่ และเวลา
+debug ต้องเห็น seq ที่ D1 ให้จริง ไม่ใช่เดา
+Impact: cmd/ai/mobile.go (mirrorGates, waitUserMirror, mirror logging),
+cmd/ai/mobile_turn_mirror_test.go, requirements/changes.md
+Validation: `TestWaitUserMirrorWaitsForTheGate`; `go test ./... -count=1`; จริงบนมือถือ:
+log ขึ้น `mirrored user turn session=warm4 seq=7` แล้ว `mirrored answer ... seq=8`
+ตามลำดับ
+Status: accepted

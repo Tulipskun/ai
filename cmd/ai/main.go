@@ -183,6 +183,9 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if mobileRT == nil {
+		return errors.New("mobile runtime is not configured")
+	}
 	models := modelStore{router: rt.Router, client: mobileRT.client, sessions: sessions}
 	mobileRT.sessions = sessions
 	mobileRT.transport.SetModelStore(models)

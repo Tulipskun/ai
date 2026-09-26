@@ -65,11 +65,16 @@ type runtimeMobileConfig struct {
 }
 
 func newMobileRuntime(stateRoot, sessionDir string, cfg runtimeMobileConfig, reloadProviders func(context.Context) error) (*mobileRuntime, error) {
-	if strings.TrimSpace(cfg.cloudflareAPI) == "" {
-		return nil, nil
+	api := strings.TrimSpace(cfg.cloudflareAPI)
+	if api == "" {
+		// REQ-046(3): the daemon owns no credential; the Cloudflare token
+		// arrives with the phone's handshake. An empty override means the
+		// default API base, not "no D1" — returning (nil, nil) here used to
+		// crash the caller with a nil dereference on secretless boot.
+		api = d1store.DefaultAPIBase
 	}
 	tokens := d1store.NewMemoryToken()
-	client := d1store.NewClient(cfg.cloudflareAPI, tokens.Get)
+	client := d1store.NewClient(api, tokens.Get)
 	client.SetDatabaseName(cfg.d1Database)
 	rt := &mobileRuntime{
 		client:          client,

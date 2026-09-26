@@ -1124,3 +1124,16 @@ Reason: โค้ดย้ายไปยิง Cloudflare API ตรงตั�
 Impact: transport/mobile/auth.go (package doc, Verifier/TokenCache doc), README.md (gateway/state bullets, config/entry.json block, D1 state keys), requirements/functional.md (REQ-047 ประโยคการค้นหา), requirements/changes.md — ไม่มีโค้ดที่รันเปลี่ยน, ไม่แตะ transport อื่น, ไม่แตะ core loop
 Validation: `go build ./...`; `go vet ./...`; `go test ./... -count=1`; ตรวจว่า README ไม่มี `worker_base` และ auth.go ไม่มี "verified against the Worker"
 Status: accepted
+
+CHANGE-083
+
+Date: 2026-09-26
+Type: fix
+Request: รัน daemon บน Kaggle (CPU, ไม่มี secret ตอนบูต) แล้วโปรเซสล้มด้วย SIGSEGV ที่ `cmd/ai/main.go:186` ทันที
+Conflict: REQ-046(3) กำหนดว่า daemon ไม่มี credential ของตัวเอง — บูตเปล่าได้ แล้วรอ Cloudflare token จาก handshake ของมือถือ; แต่ `newMobileRuntime` คืน `(nil, nil)` เมื่อ `cloudflare_api` ว่าง แล้ว caller deref `mobileRT.client` ทันที จึงบูตเปล่าไม่ได้เลย
+Previous: `cmd/ai/mobile.go` — `if cloudflare_api == "" { return nil, nil }`; `cmd/ai/main.go:186` ใช้ `mobileRT.client` โดยไม่ตรวจ nil
+New: `cloudflare_api` ที่ว่างหมายถึงใช้ `d1store.DefaultAPIBase` (override ของ discovery ตาม CHANGE-082) — `newMobileRuntime` สร้าง runtime + client ได้เสมอ; `main.go` มี nil guard กัน crash ซ้ำ (`mobile runtime is not configured`); `config/entry.json` บนเครื่องรันจึงไม่ต้องมี secret ใด ๆ
+Reason: ทางเดียวที่ daemon จะรันบนเครื่องเปล่า (Kaggle/CI/เครื่องใหม่) คือบูตแบบไม่มี credential ตามสเปก — crash นี้ปิดทางนั้นทั้งหมด ทั้งที่ client/transport รองรับ token จากมือถืออยู่แล้ว
+Impact: cmd/ai/mobile.go (default API base), cmd/ai/main.go (nil guard), cmd/ai/main_test.go (`TestNewMobileRuntimeBootsWithoutCloudflareAPIOverride`), requirements/changes.md — ไม่แตะ transport, sdk, D1 schema
+Validation: `TestNewMobileRuntimeBootsWithoutCloudflareAPIOverride`; `go test ./... -count=1`; บูต binary จริงด้วย HOME เปล่า + entry.json ที่ไม่มี `cloudflare_api` ได้ `mobile: quick tunnel public URL` + `ai daemon ready` ไม่มี panic; Kaggle kernel `kyomusen/aixodia` Phase A/B
+Status: accepted

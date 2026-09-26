@@ -152,3 +152,16 @@ func TestInstructionFilesFollowTheClientOrder(t *testing.T) {
 		t.Fatalf("instruction files:\n got %v\nwant %v", got, want)
 	}
 }
+
+func TestNewMobileRuntimeBootsWithoutCloudflareAPIOverride(t *testing.T) {
+	rt, err := newMobileRuntime(t.TempDir(), t.TempDir(), runtimeMobileConfig{
+		d1Database: "aixodia",
+		listen:     "127.0.0.1:0",
+	}, func(context.Context) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt == nil || rt.client == nil {
+		t.Fatal("secretless boot must build a runtime, not (nil, nil) (REQ-046(3))")
+	}
+}

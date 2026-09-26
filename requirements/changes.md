@@ -1137,3 +1137,16 @@ Reason: ทางเดียวที่ daemon จะรันบนเคร�
 Impact: cmd/ai-engine/mobile.go (default API base), cmd/ai-engine/main.go (nil guard), cmd/ai-engine/main_test.go (`TestNewMobileRuntimeBootsWithoutCloudflareAPIOverride`), requirements/changes.md — ไม่แตะ transport, sdk, D1 schema
 Validation: `TestNewMobileRuntimeBootsWithoutCloudflareAPIOverride`; `go test ./... -count=1`; บูต binary จริงด้วย HOME เปล่า + entry.json ที่ไม่มี `cloudflare_api` ได้ `mobile: quick tunnel public URL` + `ai daemon ready` ไม่มี panic; Kaggle kernel `kyomusen/aixodia` Phase A/B
 Status: accepted
+
+CHANGE-084
+
+Date: 2026-09-26
+Type: fix
+Request: "แอพบัคการแสดงผล ข้อความขึ้นมาแว็บหนึ่งแล้วหาย" — คำตอบ stream ขึ้นมาแล้วหายไป
+Conflict: REQ-046(5) กำหนดว่า answer ต้องถูก mirror ลง D1 เพื่อให้แอป rebuild thread ได้; แต่ลำดับการทำงานผิด
+Previous: `PublishOutput` เรียก `Display` (ส่ง FrameMessage + FrameDone ให้แอป) ก่อน `AppendModelTurn` (mirror ลง D1)
+New: สลับลำดับ — `AppendModelTurn` เขียน D1 ก่อน แล้วค่อย `Display` ส่ง done frame ให้แอป
+Reason: แอป `onTurnDone` ล้าง `liveText` (คำตอบที่ stream มา) แล้ว `refresh()` อ่าน D1 ทันที; ถ้า D1 ยังไม่มี answer (เพราะ Display ก่อน mirror) คำตอบที่ stream มาจะหายชั่วคราวจนกว่า mirror จะถึง D1 — race condition
+Impact: cmd/ai-engine/mobile.go (PublishOutput ordering), requirements/changes.md — ไม่แตะ app, transport contract, D1 schema
+Validation: `go test ./... -count=1`; ตรวจสอบว่าการ mirror เกิดขึ้นก่อน Display ใน code
+Status: accepted

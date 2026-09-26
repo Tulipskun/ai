@@ -406,15 +406,14 @@ func (m *mobileRuntime) PushState(ctx context.Context) {
 	}
 }
 
-// PublishOutput sends one finished turn to the phones watching that session and
-// mirrors it into D1 in order, so the phone can rebuild the thread after the
-// app was closed (REQ-046(5)).
+// PublishOutput mirrors a finished turn into D1 and then sends it to the
+// phones watching that session, so the phone can rebuild the thread after the
+// app was closed (REQ-046(5)). D1 is written FIRST: the phone refreshes
+// from D1 the moment the done frame arrives, so a display-before-mirror order
+// makes the streamed answer vanish for a race window (AXCH-025).
 func (m *mobileRuntime) PublishOutput(ctx context.Context, output sdk.Output) {
 	if m == nil || m.transport == nil {
 		return
-	}
-	if err := m.transport.Display(ctx, output); err != nil {
-		log.Printf("mobile: display source=%s session=%s: %v", output.Source, output.SessionID, err)
 	}
 	if output.Trace != nil && strings.EqualFold(output.Metadata["trace_actor"], "subagent") {
 		return
@@ -460,9 +459,12 @@ func (m *mobileRuntime) PublishOutput(ctx context.Context, output sdk.Output) {
 	if err != nil {
 		log.Printf("mobile: mirror turn to D1 session=%s: %v", output.SessionID, err)
 		m.turns.forget(key)
-	} else {
-		log.Printf("mobile: mirrored answer session=%s seq=%d model=%s in=%d out=%d ms=%d",
-			output.SessionID, seq, meta.Model, meta.InputTokens, meta.OutputTokens, meta.DurationMs)
+		return
+	}
+	log.Printf("mobile: mirrored answer session=%s seq=%d model=%s in=%d out=%d ms=%d",
+		output.SessionID, seq, meta.Model, meta.InputTokens, meta.OutputTokens, meta.DurationMs)
+	if err := m.transport.Display(ctx, output); err != nil {
+		log.Printf("mobile: display source=%s session=%s: %v", output.Source, output.SessionID, err)
 	}
 }
 

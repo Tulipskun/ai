@@ -451,9 +451,13 @@ func (m *mobileRuntime) PublishOutput(ctx context.Context, output sdk.Output) {
 	meta.OutputTokens = usage.OutputTokens
 	meta.CacheRead = usage.CacheReadTokens
 	meta.CacheWrite = usage.CacheWriteTokens
-	if _, err := m.client.AppendModelTurn(ctx, output.SessionID, "main", jobID, text, meta); err != nil {
+	seq, err := m.client.AppendModelTurn(ctx, output.SessionID, "main", jobID, text, meta)
+	if err != nil {
 		log.Printf("mobile: mirror turn to D1 session=%s: %v", output.SessionID, err)
 		m.turns.forget(key)
+	} else {
+		log.Printf("mobile: mirrored answer session=%s seq=%d model=%s in=%d out=%d ms=%d",
+			output.SessionID, seq, meta.Model, meta.InputTokens, meta.OutputTokens, meta.DurationMs)
 	}
 }
 
@@ -507,14 +511,18 @@ func (m *mobileRuntime) mirrorUserTurn(input sdk.Input) func(context.Context) er
 		}
 		m.mirrorGates[input.SessionID] = gate
 		m.mirrorMu.Unlock()
-		err := m.client.AppendTurn(ctx, input.SessionID, "user", "user", "", text)
+		seq, err := m.client.AppendTurnAt(ctx, input.SessionID, "user", "user", "", text)
 		m.mirrorMu.Lock()
 		if m.mirrorGates[input.SessionID] == gate {
 			delete(m.mirrorGates, input.SessionID)
 		}
 		m.mirrorMu.Unlock()
 		close(gate)
-		return err
+		if err != nil {
+			return err
+		}
+		log.Printf("mobile: mirrored user turn session=%s seq=%d", input.SessionID, seq)
+		return nil
 	}
 }
 

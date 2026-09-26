@@ -91,7 +91,7 @@ func newMobileRuntime(stateRoot, sessionDir string, cfg runtimeMobileConfig, rel
 		History:      historyStore{client: client},
 		Announce: func(ctx context.Context, publicURL string) error {
 			if target, ok := client.ResolvedTarget(); ok {
-				log.Printf("mobile: announcing tunnel to D1 account=%s database=%s", target.AccountID, target.Name)
+				log.Printf("mobile: announcing tunnel to D1 account=%s database=%s (%s)", target.AccountID, target.Name, target.DatabaseID)
 			}
 			return client.Heartbeat(ctx, publicURL, rt.transport.Version())
 		},

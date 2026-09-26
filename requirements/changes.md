@@ -1111,3 +1111,16 @@ Validation: `TestWaitUserMirrorWaitsForTheGate`; `go test ./... -count=1`; จ�
 log ขึ้น `mirrored user turn session=warm4 seq=7` แล้ว `mirrored answer ... seq=8`
 ตามลำดับ
 Status: accepted
+
+CHANGE-082
+
+Date: 2026-09-26
+Type: revise
+Request: "ฉันไม่ได้ต้องการใช้ cloudflare worker แต่จะยิง api อ่าน/เขียน โดยตรง" — ฝั่ง client ตัด Cloudflare Worker ออก แล้วยิง D1 ผ่าน Cloudflare REST API ตรง (Tulipskun/AIxodia AXCH-023, D-011)
+Conflict: REQ-046(2)(3) และ REQ-047 อธิบายว่าการตรวจ token เกิดกับ Worker (`GET /api/ping`) และจุดเข้าถึงถูกค้นหาจาก `GET /api/node` บน Worker; README.md ระบุ config `worker_base` ที่ไม่มีอยู่ในโค้ด
+Previous: transport/mobile/auth.go เขียนว่า token ถูก "verified against the Worker (GET /api/ping)" และ README.md ระบุ `worker_base` พร้อมบอกว่า provider/system/session มาจาก `/api/state/...` ผ่าน Worker
+New: เอกสารและคอมเมนต์ตรงกับโค้ดที่รันจริง — token ถูกตรวจกับ Cloudflare (`GET /user/tokens/verify`) แล้วใช้ token นั้นยิง Cloudflare API ต่อ; ไม่มี `worker_base` ใน config (`cloudflare_api`/`d1_database` เป็นเพียง override ของ discovery เท่านั้น); runtime state อยู่ใน D1 เป็นแถว `state` (`config:provider`, `config:system`, `config:attachment`, `config:browser`, `sessions/<id>`); client ค้นหา tunnel URL ได้สองทางที่ให้ค่าเดียวกัน คือ `GET /api/node` ที่ daemon เสิร์จเอง หรืออ่านแถว `nodes` ใน D1 ที่ daemon เขียน heartbeat เอง
+Reason: โค้ดย้ายไปยิง Cloudflare API ตรงตั้งแต่ REQ-046(3)/CHANGE-058 แล้ว แต่เอกสารยังบอกว่ามี Worker เป็นทั้งผู้ตรวจ token และทางเข้าถึง ทำให้ผู้ปฏิบัติตั้งค่า `worker_base` ที่ไม่มีอยู่จริง และเข้าใจผิดว่าต้องมี Worker ก่อนจึงจะใช้ D1 ได้
+Impact: transport/mobile/auth.go (package doc, Verifier/TokenCache doc), README.md (gateway/state bullets, config/entry.json block, D1 state keys), requirements/functional.md (REQ-047 ประโยคการค้นหา), requirements/changes.md — ไม่มีโค้ดที่รันเปลี่ยน, ไม่แตะ transport อื่น, ไม่แตะ core loop
+Validation: `go build ./...`; `go vet ./...`; `go test ./... -count=1`; ตรวจว่า README ไม่มี `worker_base` และ auth.go ไม่มี "verified against the Worker"
+Status: accepted

@@ -7,9 +7,9 @@
 //
 //  1. the daemon is only reachable through a random Cloudflare quick-tunnel
 //     hostname, so nothing is published;
-//  2. the phone sends the D1 access token in the WebSocket handshake header
-//     `Authorization: Bearer <token>`, which is verified against the Worker
-//     (GET /api/ping) BEFORE the socket is upgraded.
+//  2. the phone sends its Cloudflare API token in the WebSocket handshake header
+//     `Authorization: Bearer <token>`, which is verified against Cloudflare
+//     (GET /user/tokens/verify) BEFORE the socket is upgraded (REQ-046(2)).
 //
 // A missing header is 401 and is not counted. A wrong token is 401 and counted:
 // five failures lock that client address for 30s, then 60/120/240/300s. A
@@ -32,13 +32,13 @@ import (
 	"time"
 )
 
-// Verifier answers "is this D1 token good?".
+// Verifier answers "is this Cloudflare API token good?".
 type Verifier interface {
 	VerifyToken(ctx context.Context, token string) error
 }
 
 // TokenCache is the RAM copy of the one token a phone has already handed over.
-// A token that matches it is trusted without another Worker round trip, so a
+// A token that matches it is trusted without another Cloudflare round trip, so a
 // verified phone keeps working while the Worker is briefly unreachable and the
 // daemon still owns nothing on disk (REQ-046(3), CON-012).
 type TokenCache interface {

@@ -18,13 +18,14 @@ hand over on restart.
 ## Gateway and state
 
 - **One ingress**: `transport/mobile` listens on localhost and publishes itself
-  with `cloudflared tunnel --url …`; the phone discovers the URL through
-  `GET /api/node` on the Worker.
+  with `cloudflared tunnel --url …`. The daemon writes the random URL into the
+  D1 `nodes` row as its own heartbeat — and answers `GET /api/node` with the same
+  values — so a client can find it through either route.
 - **Two-step access** (REQ-046): the unguessable tunnel hostname, then
-  `Authorization: Bearer <D1 token>` on the WebSocket handshake, verified
-  against the Worker before the socket is upgraded. Missing header → 401; five
-  wrong tokens → 429 and a progressive lockout (30 → 60 → 120 → 240 → 300s);
-  Worker unreachable → 503, fail closed.
+  `Authorization: Bearer <Cloudflare API token>` on the WebSocket handshake,
+  verified against Cloudflare (`GET /user/tokens/verify`) before the socket is
+  upgraded. Missing header → 401; five wrong tokens → 429 and a progressive
+  lockout (30 → 60 → 120 → 240 → 300s); Cloudflare unreachable → 503, fail closed.
 - **Stateless** (CON-012): `runtime/d1store` pulls `config:*` and
   `sessions/<id>` from D1 into the state root after the first verified
   connection and pushes changes back. Local files stay a cache, so wiping
@@ -38,7 +39,8 @@ hand over on restart.
 {
   "mobile": {
     "enabled": true,
-    "worker_base": "https://aixodia.<subdomain>.workers.dev",
+    "cloudflare_api": "",
+    "d1_database": "",
     "listen": "127.0.0.1:18789",
     "tunnel": true,
     "cloudflared": "cloudflared",
@@ -48,9 +50,14 @@ hand over on restart.
 }
 ```
 
-Provider keys, the system prompt and session history are **not** configured
-here — they come from D1 (`/api/state/config:provider`, `/api/state/config:system`,
-`/api/state/sessions/<id>`). The token is never written to a file.
+Provider keys, the system prompt and session history are **not** configured here
+— they live in D1 as `state` rows (`config:provider`, `config:system`,
+`config:attachment`, `config:browser`, `sessions/<id>`) and are pulled in once the
+first verified phone connects. There is no `worker_base` any more: the daemon
+calls the Cloudflare API directly (`https://api.cloudflare.com/client/v4`) and
+discovers the account and the database from the phone's token, so the empty
+`cloudflare_api`/`d1_database` above exist only to override that discovery. The
+token is never written to a file.
 
 ## CI
 

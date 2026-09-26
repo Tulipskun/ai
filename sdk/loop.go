@@ -20,6 +20,10 @@ type HarnessLoop struct {
 	Displays       []Display
 	DisplayTimeout time.Duration
 	OnTurnError    func(Input, error)
+	// ApplySessionConfig, when set, is called with the session id before a
+	// turn runs, so the agent's sub-agent config can follow the per-session
+	// pin instead of only the global defaults (ACP session config pattern).
+	ApplySessionConfig func(sessionID string)
 
 	sessionLocks sync.Map
 	turns        sync.Map // session id -> cancel func of the turn in flight
@@ -172,6 +176,11 @@ func (h *HarnessLoop) Entry(ctx context.Context, input Input) error {
 	}
 	ctx = WithSessionID(ctx, session.ID())
 	ctx = context.WithValue(ctx, lifecycleInputKey{}, cloneInputRoute(input))
+	// Per-session agent config (sub-agent pin) takes precedence over the
+	// global defaults for this turn only (ACP session config pattern).
+	if h.ApplySessionConfig != nil {
+		h.ApplySessionConfig(session.ID())
+	}
 	var resp Response
 	if h.Agent != nil {
 		resp, err = h.Agent.RunTurnWithTraceAndEntry(ctx, session, input.Turn, req, dispatchTrace, h.Entry)

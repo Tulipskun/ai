@@ -235,13 +235,25 @@ func run(ctx context.Context) error {
 			MaxOutputTokens: maxOutputTokens,
 			Stream:          true,
 		}, nil
-	}, Displays: displays, DisplayTimeout: 10 * time.Second, OnTurnError: func(input sdk.Input, err error) {
+		}, Displays: displays, DisplayTimeout: 10 * time.Second, OnTurnError: func(input sdk.Input, err error) {
 		if errors.Is(err, context.Canceled) {
 			log.Printf("turn stopped by the phone source=%s session=%s", input.Source, input.SessionID)
 			return
 		}
 		log.Printf("turn failed source=%s session=%s: %v", input.Source, input.SessionID, err)
 		mobileRT.transport.ReportTurnError(input.SessionID, turnErrorMessage(err))
+	}, ApplySessionConfig: func(sessionID string) {
+		// Per-session sub-agent override wins for this turn only (ACP session
+		// config pattern): resolve the session pin, else fall back to the
+		// global agent defaults the admin store already loaded.
+		cfg, err := models.ResolveAgentConfig(context.Background(), sessionID)
+		if err != nil {
+			log.Printf("mobile: resolve agent config for %s: %v", sessionID, err)
+			return
+		}
+		agent.SubAgentConfig.Provider = cfg.SubProvider
+		agent.SubAgentConfig.Model = cfg.SubModel
+		agent.SubAgentConfig.Enabled = cfg.SubEnabled
 	}}
 	mobileRT.transport.SetCancel(func(sessionID string) bool { return loop.CancelTurn(sessionID) })
 	// The phone's per-row stop: one sub agent stops without ending the turn that

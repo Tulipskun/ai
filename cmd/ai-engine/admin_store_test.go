@@ -10,10 +10,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Tulipskun/ai/runtime"
-	"github.com/Tulipskun/ai/runtime/d1store"
-	"github.com/Tulipskun/ai/sdk"
-	mobiletransport "github.com/Tulipskun/ai/transport/mobile"
+	"github.com/Tulipskun/ai-engine/runtime"
+	"github.com/Tulipskun/ai-engine/runtime/d1store"
+	"github.com/Tulipskun/ai-engine/sdk"
+	mobiletransport "github.com/Tulipskun/ai-engine/transport/mobile"
 )
 
 // A provider that answers the health probe, so the admin surface can be exercised

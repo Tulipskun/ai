@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Tulipskun/ai/sdk"
-	"github.com/Tulipskun/ai/sdk/providers/openai"
+	"github.com/Tulipskun/ai-engine/sdk"
+	"github.com/Tulipskun/ai-engine/sdk/providers/openai"
 )
 
 func TestBuildFromOpenAIMatchesBuild(t *testing.T) {

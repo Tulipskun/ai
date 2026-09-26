@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Tulipskun/ai/sdk"
-	"github.com/Tulipskun/ai/sdk/providers/opencode"
+	"github.com/Tulipskun/ai-engine/sdk"
+	"github.com/Tulipskun/ai-engine/sdk/providers/opencode"
 )
 
 // TestZenFreeModelsLive asks every free model on the tier for a real turn, with

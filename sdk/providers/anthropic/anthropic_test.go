@@ -1,7 +1,7 @@
 package anthropic
 
 import (
-	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai-engine/sdk"
 	"testing"
 )
 

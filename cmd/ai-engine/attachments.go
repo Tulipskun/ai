@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/Tulipskun/ai/runtime/filestore"
-	"github.com/Tulipskun/ai/tools"
+	"github.com/Tulipskun/ai-engine/runtime/filestore"
+	"github.com/Tulipskun/ai-engine/tools"
 )
 
 // This file owns the runtime wiring of the attachment file store: one store

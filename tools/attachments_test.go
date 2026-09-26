@@ -24,8 +24,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Tulipskun/ai/runtime/filestore"
-	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai-engine/runtime/filestore"
+	"github.com/Tulipskun/ai-engine/sdk"
 )
 
 // The concrete store must keep matching the tool-side interface, so a signature

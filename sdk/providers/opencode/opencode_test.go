@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Tulipskun/ai/sdk"
-	"github.com/Tulipskun/ai/sdk/providers/internal"
+	"github.com/Tulipskun/ai-engine/sdk"
+	"github.com/Tulipskun/ai-engine/sdk/providers/internal"
 )
 
 var sessionFormat = regexp.MustCompile(`^ses_f[0-9a-f]{8}ffe[A-Za-z0-9]{14}$`)

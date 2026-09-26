@@ -28,7 +28,7 @@ Previous: การแยก role และการรักษา prompt conte
 New: REQ-016 จำกัด tools ของ main agent และการ execution โดยตรง; REQ-017 รักษา worker prompt/execution tools โดยไม่แทรก planner tools ในทั้งสองเส้นทาง; REQ-018 รักษา repository/custom context และจัดการ role conflict โดยไม่ลบข้อมูลด้วย heuristic
 Reason: Worker ที่มี execution tools ต้องไม่ถูกสั่งให้ทำงานเป็น planner ที่ไม่มี tools และ main defaults ต้องไม่สั่ง execution โดยตรงหรือทิ้ง repository source of truth
 Impact: SDK agent request composition และ planning prompt composition; SDK worker และ CLI main prompt defaults; focused SDK/CLI regressions รวมถึง real registry tool definitions ไม่มีการเปลี่ยน architecture, configuration, persistence, lifecycle หรือ transport redesign
-Validation: ตรวจ prompt ของ worker และ execution continuation ทั้ง normal/streaming; delegated worker tools และ context จริง; main tool allowlist และ execution rejection ก่อน/หลัง planning; CLI defaults/context tests; `go test ./sdk ./runtime ./cmd/ai ./transport/discord -timeout 2m`; `git diff --check`
+Validation: ตรวจ prompt ของ worker และ execution continuation ทั้ง normal/streaming; delegated worker tools และ context จริง; main tool allowlist และ execution rejection ก่อน/หลัง planning; CLI defaults/context tests; `go test ./sdk ./runtime ./cmd/ai-engine ./transport/discord -timeout 2m`; `git diff --check`
 Status: accepted
 
 CHANGE-002
@@ -41,7 +41,7 @@ Previous: Worker loop completion เคยเลื่อน current plan โด
 New: REQ-019 กำหนดให้การเลื่อนต้องผ่านการ review และ explicit verified acceptance และใช้ event-driven waiting; REQ-020 ผูก operation กับ parent/revision/step และป้องกัน job ซ้อนกัน; REQ-021 รักษา canonical input routing และรายงาน continuation errors
 Reason: blocked report ที่เป็นข้อความไม่ใช่ verified success, งานเก่าต้องไม่เปลี่ยนแผนใหม่ และ mapped session ID ต้องไม่ทำให้ transport routing หาย
 Impact: SDK session plan transitions, sub-agent manager/tools/prompts, Harness lifecycle continuation routing, focused SDK/runtime/CLI/Discord tests ไม่มีการเปลี่ยน transport presentation, configuration หรือ persistence redesign
-Validation: acceptance gating (รวม blocked text), retry/history continuity, stale completion, concurrent overlap, cross-parent denial, completed-plan investigation, metadata/source routing และ continuation errors; `go test ./sdk ./runtime ./cmd/ai ./transport/discord -timeout 2m` และ focused race tests
+Validation: acceptance gating (รวม blocked text), retry/history continuity, stale completion, concurrent overlap, cross-parent denial, completed-plan investigation, metadata/source routing และ continuation errors; `go test ./sdk ./runtime ./cmd/ai-engine ./transport/discord -timeout 2m` และ focused race tests
 Status: accepted
 
 CHANGE-003
@@ -54,7 +54,7 @@ Previous: Discord presentation, argument privacy, pagination และ flush fai
 New: REQ-022 กำหนด response ที่อ่านง่ายและ progress ที่กระชับและไม่เปิดเผยข้อมูลภายใน; REQ-023 กำหนด final/streamed pagination แบบ lossless โดยไม่ replay terminal content; REQ-024 กำหนดการเก็บ buffer, การแสดง failure, การ track page ที่ส่งสำเร็จเพื่อ retry โดยไม่ซ้ำ และ terminal cleanup
 Reason: ผู้ใช้ปลายทางต้องการคำตอบที่อ่านง่ายแทน SDK envelope, execution parameters ต้องไม่รั่วผ่าน progress และ response ที่ยาว มีหลายภาษา หรือมี code ต้องไม่สูญหาย รวมถึงกรณีส่งข้อความล้มเหลว
 Impact: Discord adapter/gateway, paginator ที่อยู่ใน transport และ rendering/routing tests แบบ mock ไม่มีการเปลี่ยน core orchestration, persistence, configuration หรือ transport contract redesign
-Validation: round trip ของ Thai/emoji และ whitespace, fenced code ขนาดยาว, streamed page update/terminal non-duplication, การซ่อน secret arguments, send/edit transition failures และ retry, terminal cleanup, throttling/footer tests เดิม; `go test ./transport/discord -timeout 2m`; `go test ./sdk ./runtime ./cmd/ai ./transport/discord -timeout 2m`; `git diff --check`; ห้ามใช้ live Discord messages หรือ credentials
+Validation: round trip ของ Thai/emoji และ whitespace, fenced code ขนาดยาว, streamed page update/terminal non-duplication, การซ่อน secret arguments, send/edit transition failures และ retry, terminal cleanup, throttling/footer tests เดิม; `go test ./transport/discord -timeout 2m`; `go test ./sdk ./runtime ./cmd/ai-engine ./transport/discord -timeout 2m`; `git diff --check`; ห้ามใช้ live Discord messages หรือ credentials
 Status: accepted
 
 CHANGE-004
@@ -66,7 +66,7 @@ Conflict: REQ-016 และ REQ-019 (REQ-019 เดิมบังคับใ�
 Previous: REQ-016 เมื่อเปิด planning, Main Agent จะได้รับเฉพาะ planning tools และ tools สำหรับ orchestration ของ sub-agent และต้องปฏิเสธ execution call โดยตรง รวมถึงหลังจากบันทึกแผนแล้วด้วย ค่าเริ่มต้นของคำสั่ง Main Agent ต้องมอบหมายการตรวจสอบโปรเจคและการดำเนินงาน แทนการสั่งให้ Main Agent ใช้ worker tools โดยตรง || REQ-019 เมื่อ worker loop จบลง ต้องสร้างเพียงผลลัพธ์เพื่อให้ Main Agent ตรวจสอบ และห้ามรับหรือเลื่อนแผนต่อโดยอัตโนมัติ Main Agent ต้องอ่านผลลัพธ์/ประวัติสุดท้าย ตรวจสอบความสำเร็จ และยอมรับ step ที่บันทึกไว้อย่างชัดเจนผ่าน orchestration ผลลัพธ์ที่ล้มเหลว หยุด หรือยังไม่สมบูรณ์ต้องสามารถ retry ต่อใน worker session เดิมได้ Planner guidance ต้องรอ lifecycle completion event แทนการ polling ซ้ำ ๆ และยังต้องมี explicit status request ให้ใช้ได้
 New: REQ-016 เมื่อเปิด planning, Main Agent จะได้รับเฉพาะ planning tools, tools สำหรับ orchestration ของ sub-agent และ tool สำหรับส่งต่อ opaque file reference (ชื่อ/ชนิด/ขนาด/relative path ภายใน file store) เท่านั้น ไม่ใช่เนื้อหาไฟล์ และต้องปฏิเสธ execution call โดยตรง รวมถึงหลังจากบันทึกแผนแล้วด้วย Main Agent ห้ามได้รับ byte stream, base64, MIME data หรือเนื้อหาภายในไฟล์ผ่านช่องทางใด ๆ รวมถึงผ่าน tool result ของ orchestration ด้วย file reference ต้องถูก resolve โดย worker agent หรือ transport module เท่านั้น ค่าเริ่มต้นของคำสั่ง Main Agent ต้องมอบหมายการตรวจสอบโปรเจคและการดำเนินงาน แทนการสั่งให้ Main Agent ใช้ worker tools โดยตรง || REQ-019 เมื่อ worker loop จบลง ต้องสร้างเพียงผลลัพธ์เพื่อให้ Main Agent ตรวจสอบ และห้ามรับหรือเลื่อนแผนต่อโดยอัตโนมัติ Main Agent ต้องอ่านข้อความสรุปและหลักฐานการตรวจสอบที่ orchestration จัดให้ ตรวจสอบความสำเร็จ และยอมรับ step ที่บันทึกไว้อย่างชัดเจนผ่าน orchestration การ review ของ Main Agent จำกัดอยู่ที่ข้อความสรุป, validation evidence และสถานะ เท่านั้น และไม่นับ raw file content หรือ large binary payload ผลลัพธ์ที่ worker สร้างไฟล์ซึ่ง transport ต้องจัดเก็บให้ส่งต่อเป็น file reference พร้อมชื่อ/ชนิด/ขนาดเท่านั้น ผลลัพธ์ที่ล้มเหลว หยุด หรือยังไม่สมบูรณ์ต้องสามารถ retry ต่อใน worker session เดิมได้ Planner guidance ต้องรอ lifecycle completion event แทนการ polling ซ้ำ ๆ และยังต้องมี explicit status request ให้ใช้ได้ || REQ-025 Transport ที่รับไฟล์ (Discord attachment) ต้องดาวน์โหลดไฟล์นั้นแล้วแปลงเป็น file reference ใน file store และแนบ reference ผ่าน `Input.Metadata` โดยไม่เปลี่ยน canonical Turn/ContentPart contract และต้องคง session routing identity กับ metadata เดิมทั้งหมดไว้ รวมถึง `channel_id` ของต้นทาง ข้อความที่มีเฉพาะ attachment ต้องไม่กลายเป็น turn ว่าง || REQ-026 Worker agent ต้องมี tool สำหรับอ่านไฟล์จาก file store ภายใน root ที่จำกัดด้วย safePath/withinRoot discipline ของ module tool นั้น แล้วสรุปเนื้อหาและสถานะกลับให้ planner ส่วนการส่งไฟล์ออกแบบจริงต้องอยู่ใน transport module เท่านั้น และห้ามส่ง raw bytes หรือ base64 ผ่าน canonical SDK text path || CON-011 File store ของ attachment ต้องอยู่ใต้ state root (`~/.local/share/ai/data/attachments/`) เท่านั้น ไม่ใช่ใน repository/working tree และไม่ใช่ session database; ต้องมีขีดจำกัดขนาดต่อไฟล์/ต่อ session พร้อม TTL cleanup; ห้ามเก็บเนื้อหาไฟล์ใน `data/sessions/` (คง CON-002, CON-003) และ path/limit ต้องกำหนดใน `config/*.json` เท่านั้น (คง CON-001)
 Reason: ผู้ใช้ต้องการส่งไฟล์ให้ bot ผ่าน Discord และรับไฟล์ออกแบบกลับได้ แต่ worker เท่านั้นที่ควรเห็นเนื้อหาไฟล์ การให้ Main Agent อ่าน result/history ดิบตาม REQ-019 เดิมจะทำให้ raw file content หรือ base64 payload เข้าไปค้างใน context และ session history ของ planner ซึ่งขัดกับบทบาท planner และทำให้ context บวม จึงจำกัดการ review ของ Main Agent ไว้ที่สรุป, validation evidence และสถานะ แล้วส่งต่อไฟล์เป็น file reference แบบ opaque ที่ worker หรือ transport เท่านั้นที่ resolve ได้
-Impact: transport/discord (attachment intake จาก event.Message.Attachments ผ่าน ProxyURL ด้วย http.Client ที่ inject ได้, การส่งไฟล์ออกแบบด้วย ChannelMessageSendComplex/MessageSend.Files, การแก้ DisplayTimeout ไม่ให้ฆ่าอัปโหลดไฟล์ใหญ่); module file store ใหม่ใต้ state root พร้อม manifest/ขนาดจำกัด/TTL; tools.Registry เพิ่ม tool อ่านไฟล์ของ worker ภายใต้ safePath/withinRoot; SDK plan tool allowlist, orchestration result shaping และ sub-agent prompt defaults; runtime configuration ใน config/*.json; cmd/ai wiring; เพิ่ม offline tests (mock RoundTripper/httptest) ไม่มีการเปลี่ยน provider contract, session database layout หรือ canonical Turn/ContentPart contract
+Impact: transport/discord (attachment intake จาก event.Message.Attachments ผ่าน ProxyURL ด้วย http.Client ที่ inject ได้, การส่งไฟล์ออกแบบด้วย ChannelMessageSendComplex/MessageSend.Files, การแก้ DisplayTimeout ไม่ให้ฆ่าอัปโหลดไฟล์ใหญ่); module file store ใหม่ใต้ state root พร้อม manifest/ขนาดจำกัด/TTL; tools.Registry เพิ่ม tool อ่านไฟล์ของ worker ภายใต้ safePath/withinRoot; SDK plan tool allowlist, orchestration result shaping และ sub-agent prompt defaults; runtime configuration ใน config/*.json; cmd/ai-engine wiring; เพิ่ม offline tests (mock RoundTripper/httptest) ไม่มีการเปลี่ยน provider contract, session database layout หรือ canonical Turn/ContentPart contract
 Validation: file reference ที่ Main Agent ส่งต่อต้องมีเฉพาะชื่อ/ชนิด/ขนาด/relative path และต้องไม่มีเนื้อหาไฟล์, base64 หรือ MIME data ใน context/history ของ planner; message ที่มีเฉพาะ attachment ต้องไม่กลายเป็น turn ว่าง; channel_id เดิมต้องอยู่ครบหลัง lifecycle continuation; binary (PNG/PDF) ต้องไม่ถูกส่งเป็น raw bytes/base64 เข้า SDK text path; worker อ่านไฟล์ได้เฉพาะภายใน root ของมัน; `go test ./... -timeout 2m`; `go vet ./...`; `bash -n scripts/install.sh`; `bash -n scripts/supervisor.sh`; `git diff --check`; ห้ามใช้ live Discord messages หรือ credentials
 Status: accepted
 
@@ -92,7 +92,7 @@ Conflict: REQ-016 (ค่าเริ่มต้นเดิมบังคั�
 Previous: REQ-016 ค่าเริ่มต้นของคำสั่ง Main Agent ต้องมอบหมายการตรวจสอบโปรเจคและการดำเนินงาน แทนการสั่งให้ Main Agent ใช้ worker tools โดยตรง || REQ-017 ค่าเริ่มต้นของคำสั่ง sub-agent ต้องจำกัดงานให้อยู่ใน scope ที่ได้รับ ห้าม delegation ต่อ และห้ามสื่อสารกับ end user โดยตรง และต้องรายงานสิ่งที่ตรวจพบ/ผลลัพธ์ให้ planner
 New: REQ-016 ความพยายามต้องได้สัดส่วนกับความซับซ้อน: มีขั้นตอน investigation แยกเฉพาะงานที่ต้องใช้ repository context; งานเล็กน้อยที่ไม่ต้องใช้ repository context ใช้แผนขั้นเดียวที่สั้นที่สุดโดยข้าม investigation แยก; แผนทุกขนาดมี step น้อยที่สุดที่ครอบคลุมเป้าหมาย || REQ-017 การตรวจสอบผลต้องใช้วิธีน้อยที่สุดแต่เพียงพอ: คำสั่งเดียวที่พิสูจน์ผลได้ ห้ามทำซ้ำรายการเทียบเท่าเมื่อพิสูจน์ได้แล้ว และห้ามลองสูตรคำสั่งแบบอื่นต่อหลังสำเร็จแล้ว
 Reason: กรณีจริง channel 1549251007995846676 งานสร้าง+ลบไฟล์เดียวเสีย investigation 1 รอบ (8 read-only tools), ตรวจซ้ำด้วย ls/wc/cat/stat หลายรอบ และเสีย 3 calls ไปกับการลองรูปargs ของ run_command ที่รันตรงโดยไม่มี shell; acceptance gating ตาม REQ-019/020 ยังคงเดิม แค่ลดจำนวนรอบที่ไม่จำเป็น
-Impact: sdk/plan_tool.go (planning instruction เพิ่ม proportionality), sdk/subagent.go (worker default prompt เพิ่ม minimal validation), cmd/ai/main.go (default prompt ให้ข้าม investigation เมื่องานไม่ต้องใช้ repo context), tools/registry.go (run_command description เตือนกับดัก direct-exec ไม่มี shell พร้อมตัวอย่าง)
+Impact: sdk/plan_tool.go (planning instruction เพิ่ม proportionality), sdk/subagent.go (worker default prompt เพิ่ม minimal validation), cmd/ai-engine/main.go (default prompt ให้ข้าม investigation เมื่องานไม่ต้องใช้ repo context), tools/registry.go (run_command description เตือนกับดัก direct-exec ไม่มี shell พร้อมตัวอย่าง)
 Validation: ประโยคบังคับเดิมของ prompt/guidance tests ต้องยังอยู่ครบ (poll/event/follow-up/continue/accept/NOT verified success); prompt ใหม่ต้องมีข้อความ proportionality/minimal-check; run_command description ต้องเตือน direct-exec; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
 
@@ -105,7 +105,7 @@ Conflict: none (เพิ่มคำสั่งใหม่ใน Discord modu
 Previous: Discord มีเฉพาะคำสั่ง model/provider/session/stop; การเปิดช่องคุยใหม่ต้องสร้าง channel เองแล้วตั้งค่าโมเดลซ้ำด้วย /model ทุกครั้ง
 New: REQ-027 คำสั่ง /new สร้าง text channel ใน guild เดียวกัน ชื่อ `ai-YYYY-MM-DD-HHMM` คัดลอก provider/model/temperature/thinking/API pool index จาก session ต้นทางไป session ช่องใหม่ แล้วส่งสรุปการตั้งค่าเข้าช่องใหม่; กรณีผิดพลาดตอบ ephemeral ในช่องเดิมโดยไม่สร้าง session ใหม่
 Reason: ผู้ใช้ต้องการแยกบทสนทนาใหม่โดยไม่ต้องตั้งค่าโมเดลซ้ำ และต้องการเห็นทันทีว่าช่องใหม่ใช้การตั้งค่าอะไร
-Impact: transport/discord (handler ใหม่ new_channel.go, gateway dispatch + command registration, แยก summary formatter ใช้ร่วมกับ model settings), cmd/ai (wiring handler); ไม่แตะ sdk core, session persistence, provider contract
+Impact: transport/discord (handler ใหม่ new_channel.go, gateway dispatch + command registration, แยก summary formatter ใช้ร่วมกับ model settings), cmd/ai-engine (wiring handler); ไม่แตะ sdk core, session persistence, provider contract
 Validation: ชื่อช่องต้องตรงรูปแบบวันที่-เวลาและใช้ตัวอักษรที่ Discord อนุญาต; settings ทุก field (รวม key index) ต้องถูกคัดลอกครบ; ข้อความในช่องใหม่ต้องมี provider/model/thinking/temperature/pool; กรณี DM/ไม่มี settings/สร้างช่องล้มเหลวต้อง error แบบ ephemeral และไม่สร้าง session; offline tests ด้วย fake Discord interface เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
 
@@ -118,7 +118,7 @@ Conflict: none (flow เดิมเป็น message-component ที่ไม�
 Previous: /model ตอบกลับเป็น ephemeral message ที่มี provider select menu → เลือกแล้วตอบกลับเป็น ephemeral message ที่มี model select menu แบบแบ่งหน้า (follow-up หลายข้อความเมื่อ model เยอะ) → เลือก model แล้วจึงเปิด modal ขั้นสุดท้าย; มี providerSelectionModal ที่เป็น dead code
 New: /model เปิด modal ขั้นที่ 1 ทันที (provider select + ช่อง filter model แบบ optional) → submit แล้วเปิด modal ขั้นที่ 2 (model select สูงสุด 2 เมนู 50 models + temperature + thinking + API pool รวมไม่เกิน 5 components ตามลิมิต modal) → submit แล้ว apply settings และตอบสรุปแบบ ephemeral; ตัด message-component path และ helpers ที่ตายแล้วออก
 Reason: ลดจำนวนข้อความ ephemeral หลายชั้นและ follow-up แบ่งหน้า เหลือ modal 2 ขั้นตอนเดียวจบ; filter ช่วยเลือก model จาก catalogue ขนาดใหญ่โดยไม่ต้องไล่เมนูยาว
-Impact: transport/discord/model_settings.go (flow + modal builders + submit logic), model_settings_test.go (เขียนใหม่ตาม flow ใหม่); ไม่แตะ gateway dispatch contract, cmd/ai wiring, sdk core
+Impact: transport/discord/model_settings.go (flow + modal builders + submit logic), model_settings_test.go (เขียนใหม่ตาม flow ใหม่); ไม่แตะ gateway dispatch contract, cmd/ai-engine wiring, sdk core
 Validation: modal ขั้นที่ 1 มี provider select ครบ + filter optional; modal ขั้นที่ 2 มี model ไม่เกิน 50 ตัว + temp/thinking/key พร้อมค่าเดิม; filter ตรง/ไม่ตรง/เกินลิมิตต้องจัดการถูก; submit ตรวจ model ใน catalogue + ตรวจ temperature/thinking/key ผิดพลาด; offline tests เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
 
@@ -131,7 +131,7 @@ Conflict: none (ยกระดับความน่าเชื่อถื�
 Previous: /new ตอบ ack ตรงหลังทำงานเสร็จ (สร้าง channel + resolve session + ส่งข้อความ) ถ้าเกิน 3 วินาที interaction จะ failed; /model submit ขั้น 2 และ /session list ตอบตรงหลังโหลด catalogue/อ่านรายการ; มีเพียง /provider submit ที่ defer อยู่แล้ว
 New: REQ-024 คำสั่งที่ใช้เวลาต้อง defer ephemeral ก่อนเริ่มงาน แล้วส่งผลลัพธ์/ข้อผิดพลาดทาง followup; ข้อยกเว้นคือการเปิด modal (ตอบทันทีเพราะ defer แล้วเปิด modal ต่อไม่ได้) — ครอบคลุม /new, /model submit ขั้น 2, /session list; /provider คงพฤติกรรมเดิมแต่ใช้ helper ร่วมกัน
 Reason: งานช้า (สร้าง channel, โหลด catalogue ผ่าน network, เขียน session) เกิน 3 วินาทีได้เมื่อระบบหน่วง ทำให้ผู้ใช้เห็น interaction failed ทั้งที่งานอาจสำเร็จไปแล้ว
-Impact: transport/discord (ไฟล์ใหม่ interactions.go รวม helper defer/followup, new_channel.go, model_settings.go submit ขั้น 2, session_command.go รายการ session, provider_settings.go ใช้ helper ร่วม); ไม่แตะ gateway dispatch contract, cmd/ai wiring, sdk core
+Impact: transport/discord (ไฟล์ใหม่ interactions.go รวม helper defer/followup, new_channel.go, model_settings.go submit ขั้น 2, session_command.go รายการ session, provider_settings.go ใช้ helper ร่วม); ไม่แตะ gateway dispatch contract, cmd/ai-engine wiring, sdk core
 Validation: defer ต้องเกิดก่อนงานช้าเสมอ ผลลัพธ์/error หลัง defer ต้องไปทาง followup (ไม่ใช่ InteractionRespond ซ้ำ); modal-open path ต้องยังตอบทันทีแบบเดิม; offline tests ด้วย fake interaction API เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
 
@@ -144,7 +144,7 @@ Conflict: CHANGE-008 (flow สอง modal ต่อกันทำไม่ไ�
 Previous: CHANGE-008 /model เปิด modal ขั้นที่ 1 (provider+filter) แล้ว submit เปิด modal ขั้นที่ 2 (model+temperature/thinking/pool)
 New: /model เปิด modal เดียวจบ 5 components พอดีลิมิต (provider select, model text input รับ exact ID หรือ unique substring, temperature text, thinking select, API pool text เฉพาะตัวเลข/ว่างคือคงเดิม) → submit แล้ว defer, ตรวจ catalogue, apply, ตอบสรุปทาง followup; gateway ต้อง log interaction handler errors ลง ai.log แทนการกลืนเงียบ
 Reason: Discord API ไม่อนุญาตให้เปิด modal เพื่อตอบ modal submit ("Modals can not be sent when responding to a modal") ทำให้ submit ขั้นที่ 1 ถูกปฏิเสธทุกครั้ง; นอกจากนี้ gateway กลืน error ของ handler เงียบจน ai.log ไม่มีร่องรอย ทำให้วินิจฉัยไม่ได้
-Impact: transport/discord/model_settings.go (modal เดียว + smart model resolution + submit ใหม่), model_settings_test.go, gateway.go (log handler errors); ไม่แตะ cmd/ai wiring, sdk core, canonical contract
+Impact: transport/discord/model_settings.go (modal เดียว + smart model resolution + submit ใหม่), model_settings_test.go, gateway.go (log handler errors); ไม่แตะ cmd/ai-engine wiring, sdk core, canonical contract
 Validation: modal มีครบ 5 fields พร้อม preselect ค่าเดิม; model รับ exact ID และ unique substring, ปฏิเสธชื่อกำกวมพร้อมรายชื่อ และชื่อที่ไม่มีพร้อม error ชัดเจน; key ว่างคง index เดิม; handler error ต้องปรากฏใน log; offline tests เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: superseded by CHANGE-011
 
@@ -157,7 +157,7 @@ Conflict: CHANGE-010 (ยกเลิก modal เดี่ยว; catalogue ข
 Previous: CHANGE-010 /model เปิด modal เดี่ยว (provider select, model text, temperature, thinking, API pool text) แล้ว defer + followup สรุป
 New: /model ตอบข้อความปกติในช่อง (regular message ไม่ใช่ ephemeral เพราะ ephemeral แก้ไขไม่ได้) ที่มี provider select → ทุกขั้นถัดไปใช้ deferred-update + แก้ไขข้อความเดิม (provider → model พร้อมปุ่ม pager Prev/Next → temperature presets → thinking → API pool → สรุป) พร้อมปุ่ม Back ย้อนขั้น; เมนู model แต่ละเมนูใช้ custom ID ของตัวเอง (`model:model:N`) เพราะ Discord reject ข้อความที่ custom ID ซ้ำกัน; settings ทั้งหมด apply ครั้งเดียวตอนยืนยันขั้นสุดท้าย; pending state เก็บ process-local keyed ด้วย channel+user
 Reason: เลือก model จากรายการดีกว่าพิมพ์ชื่อเองเมื่อ catalogue มีหลายร้อย models; ข้อความเดียวที่อัพเดทตลอดลด spam และเห็นสถานะปัจจุบันเสมอ; deferred-update + edit-original เลี่ยง 3s timeout ทุกขั้นโดยไม่มี loading state ค้าง
-Impact: transport/discord/model_settings.go (wizard + pending store + render/step functions), model_settings_test.go, interactions.go (เพิ่ม InteractionResponseEdit ใน interface); ไม่แตะ gateway dispatch, cmd/ai wiring, sdk core, canonical contract
+Impact: transport/discord/model_settings.go (wizard + pending store + render/step functions), model_settings_test.go, interactions.go (เพิ่ม InteractionResponseEdit ใน interface); ไม่แตะ gateway dispatch, cmd/ai-engine wiring, sdk core, canonical contract
 Validation: ทุกขั้นต้อง defer-update ก่อนงานแล้ว edit ข้อความเดิม (ไม่มีข้อความใหม่); pager ครอบคลุม catalogue >125; Back ย้อนขั้นได้; pending หมดอายุ/ข้ามช่องต้อง error ชัดเจน; apply ครั้งเดียวครบทุก field; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
 
@@ -170,7 +170,7 @@ Conflict: CHANGE-011 (ยกเลิก wizard หลายขั้นแบ�
 Previous: CHANGE-011 wizard staged provider→model(pager)→temp→thinking→key→summary apply ครั้งเดียวตอนจบ
 New: REQ-028 panel ข้อความปกติข้อความเดียวแก้ inplace ทุกคลิก (deferred-update + edit-original): ปุ่ม Main/Sub สลับ agent mode ของ session; provider/model select แบ่งหน้าใน options (sentinel `__panel_next__`/`__panel_prev__` เช็คก่อน validate membership); ปุ่ม Thinking วน default→none→low→medium→high, ปุ่ม Temp วน default→0.0→0.1→...→2.0 (label แสดงค่าปัจจุบัน); pool select; เปลี่ยน provider แล้วคง model เดิมถ้ายังอยู่ใน catalogue ไม่เช่นนั้นใช้ตัวแรก; REQ-029 `SessionConfig.AgentMode` persist + `SetAgentMode`, sdk เลือก planning ต่อ session (`sub` = execution tools เต็ม ไม่ wrap planning prompt) แทน global switch อย่างเดียว
 Reason: ควบคุมทุกอย่างจบในข้อความเดียว ไม่ต้องไล่หลายขั้น; catalogue ใหญ่แค่ไหนก็อยู่ใน 5 rows เพราะ page controls อยู่ใน options; agent mode ต่อ channel ไม่ต้องแก้ global config
-Impact: sdk/types.go (AgentMode), sdk/session_settings.go (SetAgentMode), sdk/agent.go (planningFor ต่อ session 4 จุด), transport/discord/model_settings.go (rewrite เป็น panel), model_settings_test.go, transport/discord/new_channel.go (copy agent mode ไปช่องใหม่); ไม่แตะ gateway dispatch, cmd/ai wiring (นอกจาก handler เดิม), canonical contract
+Impact: sdk/types.go (AgentMode), sdk/session_settings.go (SetAgentMode), sdk/agent.go (planningFor ต่อ session 4 จุด), transport/discord/model_settings.go (rewrite เป็น panel), model_settings_test.go, transport/discord/new_channel.go (copy agent mode ไปช่องใหม่); ไม่แตะ gateway dispatch, cmd/ai-engine wiring (นอกจาก handler เดิม), canonical contract
 Validation: panel เปิดด้วย deferred channel message + edit (ข้อความเดียวเสมอ); custom ID ไม่ซ้ำในข้อความ; sentinel ไม่ถูกบันทึกเป็นค่า; nav ครอบคลุม >25 providers/models; cycle thinking/temp ครบทุกลำดับและ persist; provider switch คง/รีเซ็ต model ถูกต้อง; sub session ได้ full tools + prompt ไม่ถูก wrap (stream/non-stream); main คงพฤติกรรมเดิม; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
 
@@ -287,7 +287,7 @@ Conflict: CHANGE-018 (overlay Sub ใน session เดียว ประวั
 Previous: CHANGE-018 main/sub เป็น overlay ใน session เดียว (history เดียว db เดียว)
 New: REQ-030 สอง sessions ต่อ channel (`discord:channel:<id>` planner + `discord:channel:<id>:sub` worker db แยก) settings อยู่ top-level ของแต่ละ session ไม่มี overlay; gateway route ข้อความตามโหมด active บน main session (resolve ล้มเหลวใช้ main); revert setters/effective/pool กลับ top-level ทั้งหมด (คง `AgentMode` + `SetAgentMode` + `planningFor` ราย session); panel resolve สอง sessions สรุปสองบล็อก controls/modal แก้ฝั่ง active เข้า sub ครั้งแรก seed จาก main; `/new` คัดลอกสอง sessions + สรุปสองบล็อก; ยังไม่มีคำสั่งลบ session (นอก scope รอบนี้)
 Reason: ประวัติการคุยต้องแยกกัน main วางแผน sub ทำงาน ไม่ปน; sub session ต้องอยู่ถาวรเรียกซ้ำได้ไม่ผูกกับ job
-Impact: sdk/types.go (ลบ ModeSettings/Sub), sdk/session_settings.go (setters top-level), sdk/routing.go (ลบ subKeys/effective/active pool), sdk/router_client.go, sdk/agent.go, sdk/subagent.go, runtime/session_manager.go (revert re-attach), sdk/mode_settings_test.go (ลบ), sdk/agent_mode_test.go, transport/discord/gateway.go (route ตาม mode), cmd/ai/main.go (wiring), transport/discord/model_settings.go (2 sessions), transport/discord/new_channel.go; ไม่แตะ modal, V2 layout, canonical contract
+Impact: sdk/types.go (ลบ ModeSettings/Sub), sdk/session_settings.go (setters top-level), sdk/routing.go (ลบ subKeys/effective/active pool), sdk/router_client.go, sdk/agent.go, sdk/subagent.go, runtime/session_manager.go (revert re-attach), sdk/mode_settings_test.go (ลบ), sdk/agent_mode_test.go, transport/discord/gateway.go (route ตาม mode), cmd/ai-engine/main.go (wiring), transport/discord/model_settings.go (2 sessions), transport/discord/new_channel.go; ไม่แตะ modal, V2 layout, canonical contract
 Validation: main/sub turn ใช้ session/history/db ของตัวเอง; toggle สลับฝั่ง; seed ครั้งแรก; restart แล้วสองฝั่งกลับมา; panel สรุป/controls ถูกฝั่ง; /new copy ครบ; offline tests ด้วย fake เท่านั้น ห้ามใช้ live Discord; `go test ./transport/discord -timeout 2m`; `go test ./... -timeout 2m`; `go vet ./...`; `git diff --check`
 Status: accepted
 
@@ -326,7 +326,7 @@ Conflict: REQ-017 เดิม, `run_command` ใน registry (command+args sche
 Previous: run_command ต้องแยก command/args หรือมี shell syntax ถึงจะรันแบบ shell; accepted line ค้างเมื่อ response ไม่มี tool; planner prompt ไม่ห้ามการส่งต่อข้อความดิบ;ภาษาของ orchestration ตามผู้ใช้
 New: REQ-035 tool ชื่อ `bash` schema {"command": string, "timeout_ms"?} รันผ่าน bash เสมอ; REQ-036 planner role: วางแผน-เขียน task ภาษาอังกฤษมีบริบท ห้าม relay ดิบ; REQ-037: content ถึง → accepted เดี่ยว = แปลงข้อความเดิมเป็น content (edit), accepted + บรรทัดอื่น = ลบ accepted แล้วส่ง content ข้อความใหม่; worker prompt + delegation guidance ระบุ English-only ระหว่าง agent (REQ-017 แก้)
 Reason: AI พิมพ์ `ls -la /x` ผิดรูปแบบแล้ว fail เสียรอบ; accepted ค้างทำให้ trace เลอะ; relay ดิบทำให้ worker ทำงานไม่ตรงเป้า; TH↔EN สลับกันเปลือง token
-Impact: tools/registry.go + tools/command.go (bash tool, schema, description), tests ใน tools/ และผู้ใช้ชื่อ tool ใน sdk tests, transport/discord actor trace + rendering tests, sdk/plan_tool.go (instructions), sdk/subagent.go (worker prompt + report), cmd/ai/main.go (defaultSystemPrompt); ไม่แตะ db, gateway routing, canonical contract
+Impact: tools/registry.go + tools/command.go (bash tool, schema, description), tests ใน tools/ และผู้ใช้ชื่อ tool ใน sdk tests, transport/discord actor trace + rendering tests, sdk/plan_tool.go (instructions), sdk/subagent.go (worker prompt + report), cmd/ai-engine/main.go (defaultSystemPrompt); ไม่แตะ db, gateway routing, canonical contract
 Validation: bash tool รัน "ls -la /x" ตรง ๆ สำเร็จใน tests; provider accepted เดียวถูก edit เป็น content (ไม่มีข้อความใหม่), กรณีมี tool line อื่น accepted ถูก delete ก่อน content; prompt มี English-only + ห้าม relay; offline tests เท่านั้น; `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
 Status: accepted
 
@@ -430,7 +430,7 @@ Conflict: REQ-016 (main ต้อง delegate/plan ทุกงาน — เพ
 Previous: Main Agent สร้างแผน/delegate แม้แต่คำทักทายที่ไม่มีงาน
 New: REQ-016 เพิ่ม — ข้อความที่ไม่ใช้ tools/context/งาน (greeting/thanks/ack/คำถามตอบตรงได้) ให้ตอบตรงทันที ไม่สร้างแผน ไม่ delegate ไม่ investigate; planning/delegation เริ่มเมื่อมีงานจริงเท่านั้น (prompt ทั้ง defaultSystemPrompt และ planningSystemInstruction)
 Reason: ทักทายแล้วโดน plan+delegate เปลือง, ช้า, และพังตามเมื่อ worker error — ไม่เป็นระบบ
-Impact: cmd/ai/main.go, sdk/plan_tool.go, requirements/functional.md (REQ-016)
+Impact: cmd/ai-engine/main.go, sdk/plan_tool.go, requirements/functional.md (REQ-016)
 Validation: unit (prompt มี short-circuit rule ทั้งสองเส้น); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
 Status: accepted
 
@@ -508,8 +508,8 @@ Conflict: none (extends REQ-010; no Playwright/Node/geckodriver/Marionette)
 Previous: REQ-010 default `browser` was `auto` (Chrome first); daemon boot called `StartBrowser` eagerly, so `ai update` restart opened a headed window even with no browser use
 New: REQ-010 default `browser` is `firefox` (`auto` prefers `firefox`/`firefox-esr` first, incl. absolute paths); daemon boot only prepares a lazy browser client (`PrepareBrowser`, `Lazy:true`, `browser.pid` tracking) — the browser launches on the first browser tool call (`Call`/`ListPages`/`AttachPage` via `ensureStarted`; managed `Start`, attach `Attach`), never on boot or `ai update` alone; headless default stays `false`; `Close` kills the tracked child PID (interrupt, then kill fallback via `killBrowserPID`) and removes `browser.pid`; `stopDaemon` kills the tracked browser child before daemon exit so update/stop never orphans headed windows; manual `StartBrowser` path (eager launch) unchanged for `ai browser start` use
 Reason: `ai update` restart must not pop a headed window; Firefox ESR is the preferred automation browser
-Impact: tools/browser_client.go (lazy gate, PID tracking, firefox-first candidates), tools/browser_attach.go (lazy gates), runtime/runtime.go (PrepareBrowser, eager StartBrowser kept), runtime/browser_config.go (firefox default), cmd/ai/main.go (lazy boot, browser.pid kill on stop, interactive firefox choice), README.md, .config/browser.example.json, requirements/functional.md (REQ-010)
-Validation: `go test ./tools ./runtime ./cmd/ai -count=1` and `go vet ./tools ./runtime ./cmd/ai`
+Impact: tools/browser_client.go (lazy gate, PID tracking, firefox-first candidates), tools/browser_attach.go (lazy gates), runtime/runtime.go (PrepareBrowser, eager StartBrowser kept), runtime/browser_config.go (firefox default), cmd/ai-engine/main.go (lazy boot, browser.pid kill on stop, interactive firefox choice), README.md, .config/browser.example.json, requirements/functional.md (REQ-010)
+Validation: `go test ./tools ./runtime ./cmd/ai-engine -count=1` and `go vet ./tools ./runtime ./cmd/ai-engine`
 Status: accepted
 
 CHANGE-039
@@ -522,7 +522,7 @@ Previous: startFirefox polled /json/version for webSocketDebuggerUrl (always 404
 New: REQ-010 Firefox uses BiDi /session (TCP dial loop up to 15s, single WS upgrade probe to ws://127.0.0.1:port/session expecting 101, session.new id 1 with acceptInsecureCerts true, store endpoint and mark ready); minimal BiDi dispatch covers open/navigate/snapshot/close, others return firefox-bidi-unsupported naming method; Chromium DevToolsActivePort path untouched
 Reason: Past repro proved /json/version is always 404 on Firefox 140 ESR; live BiDi handshake is the only viable path
 Impact: tools/browser_client.go
-Validation: go test ./tools ./runtime ./cmd/ai -count=1 and go vet ./tools ./runtime ./cmd/ai plus live scratch-profile firefox headless WS 101 plus session.new session id
+Validation: go test ./tools ./runtime ./cmd/ai-engine -count=1 and go vet ./tools ./runtime ./cmd/ai-engine plus live scratch-profile firefox headless WS 101 plus session.new session id
 Status: accepted
 
 CHANGE-040
@@ -531,11 +531,11 @@ Date: 2026-09-16
 Type: add
 Request: Implement all-channel turn logging fix now, zero further discovery loops
 Conflict: none (extends failure-only OnTurnError logging; no rotation change)
-Previous: Only OnTurnError in cmd/ai/main.go logged turn failures; success turns in sdk/loop.go Entry were silent and Discord intake for unknown channels was invisible when resolve failed
+Previous: Only OnTurnError in cmd/ai-engine/main.go logged turn failures; success turns in sdk/loop.go Entry were silent and Discord intake for unknown channels was invisible when resolve failed
 New: sdk/loop.go Entry success path logs turn ok source/session/channel (channel_id from Metadata, empty safe); transport/discord/gateway.go normalizeMessage logs discord intake channel/message/author for every non-bot message before session resolve; failure path unchanged; no log rotation change
 Reason: Missing channel turns left no trace in ai.log, so unknown/unresolved channels could not be diagnosed
 Impact: sdk/loop.go, transport/discord/gateway.go, requirements/changes.md
-Validation: go test ./transport/discord ./sdk ./cmd/ai -count=1 and go vet same packages
+Validation: go test ./transport/discord ./sdk ./cmd/ai-engine -count=1 and go vet same packages
 Status: accepted
 
 CHANGE-041
@@ -587,7 +587,7 @@ Previous: REQ-010 `auto` preferred Firefox first (`firefox`/`firefox-esr` before
 New: REQ-010 default `browser` stays `chromium` (`--remote-debugging-pipe`, no loopback TCP listener) and `auto` prefers Chromium first (chromium/chromium-browser, Chrome, Edge candidates before Firefox, incl. absolute paths); Firefox ESR 140 remains selectable via explicit `firefox` config through the BiDi `/session` path; live daemon `config/browser.json` set to `"browser": "chromium"`
 Reason: Chromium pipe is the stable headless control channel without the TCP/DevToolsActivePort race; auto resolution and the live config must match the Chromium default instead of launching Firefox
 Impact: tools/browser_client.go (browserCandidates + browserAbsoluteCandidates auto order), tools/browser_client_test.go (AutoPrefersChromium), README.md, .config/browser.example.json, live ~/.local/share/ai/config/browser.json, requirements/functional.md (REQ-010)
-Validation: go test ./tools ./runtime ./cmd/ai -count=1 and go vet ./tools ./runtime ./cmd/ai
+Validation: go test ./tools ./runtime ./cmd/ai-engine -count=1 and go vet ./tools ./runtime ./cmd/ai-engine
 Status: accepted
 
 CHANGE-045
@@ -651,8 +651,8 @@ Conflict: none (extends update path; no Discord display change, no live config e
 Previous: `ai update [version]` verified checksum and skipped restart when hash unchanged, but stopped the daemon abruptly via stopDaemon (SIGTERM 10s then SIGKILL) with no jobs drain, no handoff record, and no post-restart health check; `tools/jobs.go` load marked any running job across restart as failed ("job manager restarted before the job completed")
 New: REQ-043 — `ai update [--auto] [version]` keeps hash verification and no-restart-if-unchanged; on change it drains (waitForJobsDrain on data/jobs.json up to 15s, graceful stopDaemonForUpdate SIGTERM with 30s drain timeout then SIGKILL fallback), preserves jobs (running across restart loads as interrupted/retryable with command/args/session/output intact, not failed), preserves intake (live transports resume on new daemon, session DBs stay persisted), writes update.handoff.json (old/new version+hash, old pid, drained flag) consumed once on daemon boot (log + remove), verifies new daemon healthy (poll ai.pid up to 30s); --auto reserved for non-interactive self-check (behavior identical, never prompts)
 Reason: Abrupt update drops in-flight turns and orphans background-job bookkeeping; graceful drain plus persisted interrupted state plus verified resume keeps sessions and jobs continuous across binary replace
-Impact: cmd/ai/update.go (graceful path), cmd/ai/update_handoff.go (new: parseUpdateArgs, drain/health/handoff helpers), cmd/ai/command.go (update usage + --auto), cmd/ai/main.go (consumeUpdateHandoff on daemon boot), tools/jobs.go (JobInterrupted + load mapping), requirements/functional.md (REQ-043), requirements/changes.md
-Validation: go test ./cmd/ai ./tools ./sdk ./runtime -count=1 and go vet same packages
+Impact: cmd/ai-engine/update.go (graceful path), cmd/ai-engine/update_handoff.go (new: parseUpdateArgs, drain/health/handoff helpers), cmd/ai-engine/command.go (update usage + --auto), cmd/ai-engine/main.go (consumeUpdateHandoff on daemon boot), tools/jobs.go (JobInterrupted + load mapping), requirements/functional.md (REQ-043), requirements/changes.md
+Validation: go test ./cmd/ai-engine ./tools ./sdk ./runtime -count=1 and go vet same packages
 Status: accepted
 
 CHANGE-050
@@ -664,8 +664,8 @@ Conflict: none (new REQ-044; V2 display, OS tools, update path untouched)
 Previous: Discord gateway had no connection tracking: a dead websocket left the bot offline with no log signal and no repair except a manual daemon restart; scripts/keepalive.sh only watched ai.pid, so a live pid with a dead Discord socket looked healthy forever
 New: REQ-044 — Discord gateway tracks liveness via Ready/Disconnect/Resumed handlers plus last-event timestamp on every MessageCreate/InteractionCreate; Connected() reports the flag; a watchdog goroutine refreshes the discord.heartbeat timestamp file while connected and reopens the session with exponential backoff (5 attempts, 1s doubling) when silence exceeds 3 minutes or the flag is down; daemon passes <state>/discord.heartbeat as the heartbeat path; scripts/keepalive.sh also checks heartbeat freshness (max age 300s, missing file before first Ready is not a failure) and restarts a live-but-stale daemon; V2 display path, pagination, accent colors, routing, OS tools, and update files unchanged
 Reason: The daemon process survives gateway death (pid alive, bot offline); pid-only supervision cannot see it. In-process reopen handles transient socket drops, and keepalive is the outer backstop for wedged gateways.
-Impact: transport/discord/gateway_liveness.go (new: handlers, Connected/LastEventMs, heartbeat file, watchdog, backoff reopen), transport/discord/gateway.go (handler registration, event stamps, Start/Close hooks), transport/discord/gateway_liveness_test.go (new), cmd/ai/main.go (heartbeat path wiring), scripts/keepalive.sh (heartbeat freshness + restart), requirements/functional.md (REQ-044), requirements/changes.md
-Validation: go test ./transport/discord ./cmd/ai ./runtime -count=1 and go vet same packages
+Impact: transport/discord/gateway_liveness.go (new: handlers, Connected/LastEventMs, heartbeat file, watchdog, backoff reopen), transport/discord/gateway.go (handler registration, event stamps, Start/Close hooks), transport/discord/gateway_liveness_test.go (new), cmd/ai-engine/main.go (heartbeat path wiring), scripts/keepalive.sh (heartbeat freshness + restart), requirements/functional.md (REQ-044), requirements/changes.md
+Validation: go test ./transport/discord ./cmd/ai-engine ./runtime -count=1 and go vet same packages
 Status: accepted
 
 CHANGE-051
@@ -703,8 +703,8 @@ Conflict: none (extends REQ-043; hash verify, drain, SIGTERM settle, interrupted
 Previous: `ai update` drained then stopped blue before the replacement was proven (zero-daemon window on a bad build); health check polled live ai.pid only; keepalive.sh restarted on any dead pid/heartbeat with no handover awareness
 New: REQ-043 blue-green — stage verified binary to temp path, start green standby (`daemon --standby`, no Discord intake connect, shadow ai.pid.green + discord.heartbeat.green + update.bluegreen.json) while blue serves; health gates within 60-90s (green pid alive via kill-0, log ready marker, shadow heartbeat fresh <60s, handoff consumed) then SIGTERM blue with existing 30s drain, atomically promote green pid to ai.pid, enable live intake and confirm; rollback on green failure (kill green, delete shadows/phase/staged, keep blue serving + old binary, clear error with log tail), never a zero-daemon window; keepalive.sh handover-aware (skip restart branches while phase active and not cutover-done/expired, watch green pid during probation); standby boot flag, phase/health/rollback helpers, keepalive lock check, and cutover-refusal unit tests
 Reason: A bad build must never take the bot offline; green proves itself before blue stops, and the outer supervisor must not fight the handover
-Impact: cmd/ai/update.go (blue-green orchestration), cmd/ai/update_bluegreen.go (new: phase, gates, standby boot, cutover, rollback), cmd/ai/update_bluegreen_test.go (new), cmd/ai/command.go + cmd/ai/main.go (daemon --standby), scripts/keepalive.sh (handover guard), requirements/functional.md (REQ-043), requirements/changes.md
-Validation: go test ./cmd/ai ./sdk ./tools -count=1 and go vet same
+Impact: cmd/ai-engine/update.go (blue-green orchestration), cmd/ai-engine/update_bluegreen.go (new: phase, gates, standby boot, cutover, rollback), cmd/ai-engine/update_bluegreen_test.go (new), cmd/ai-engine/command.go + cmd/ai-engine/main.go (daemon --standby), scripts/keepalive.sh (handover guard), requirements/functional.md (REQ-043), requirements/changes.md
+Validation: go test ./cmd/ai-engine ./sdk ./tools -count=1 and go vet same
 Status: accepted
 
 CHANGE-054
@@ -716,7 +716,7 @@ Conflict: REQ-016 (main ได้เฉพาะ planning/orchestration/opaque-r
 Previous: Main ไม่มี tools อ่านโค้ดเลย — ต้อง delegate investigation ให้ worker แบบตาบอด แล้วตรวจจาก summary อย่างเดียว; task ที่สั่งเป็น free-text ไม่มี contract
 New: Main = senior — ได้ read-only context tools (read_file/read_files/list_directory/search_files) ผ่าน allowlist ใน planningToolExecutor (Definitions + Execute คู่กัน; write/exec ยัง reject เหมือนเดิม); คิด/ออกแบบ/ตัดสินใจใน main context (serial on thinking); ทุก delegation เป็น contract (Objective, Non-goals, Authority — allowed paths/commands/forbidden, Expected tests, Required evidence, Acceptance criteria); accept ต้องมี verification evidence (spot-check ด้วยการอ่านเองได้). Worker = junior — ทำตาม contract ใน authority เท่านั้น คืน work package + evidence bundle (summary, changed files+reasons, commands, tests+results, limitations) ห้าม delegate ต่อ ห้ามคุยกับ user. Planner read budget (~10 reads/round) + lookupขนานได้เฉพาะ read-only recon ใน requirements/loop-control.md
 Reason: งานวิจัย delegation contracts (Schmalbach 2026: evidence sufficiency +0.83/5) และแนวทาง senior-engineering/agent-delegation — thinking ที่ main + bounded execution ที่ worker ลด telephone-game และทำให้ review ได้จริง
-Impact: sdk/plan_tool.go (allowlist, Execute, planningSystemInstruction), sdk/subagent.go (worker prompt), cmd/ai/main.go (defaultSystemPrompt), sdk tests + cmd/ai tests, requirements/functional.md (REQ-016/019/029/036/045), requirements/loop-control.md, requirements/decisions.md (DEC-005)
+Impact: sdk/plan_tool.go (allowlist, Execute, planningSystemInstruction), sdk/subagent.go (worker prompt), cmd/ai-engine/main.go (defaultSystemPrompt), sdk tests + cmd/ai-engine tests, requirements/functional.md (REQ-016/019/029/036/045), requirements/loop-control.md, requirements/decisions.md (DEC-005)
 Validation: unit (allowlist/read-execute/write-reject/contract keywords); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
 Status: accepted
 
@@ -729,7 +729,7 @@ Conflict: REQ-043 (ยังมี classic replace-and-start branch ตอน da
 Previous: `ai update` มีสอง flow (blue-green ตอน daemon รัน / classic replace-and-start ตอนไม่รัน) + dead helper restartDaemonAfterUpdate + scripts/supervisor.sh (legacy updater) + keepalive.sh ที่ update path ต้องเกรงใจ (dual ownership); standby หมดอายุเหลือ phase orphan (เจอจริงบนเครื่อง); promote ล้มเหลวหลัง blue หยุด = zero-daemon เงียบ ๆ
 New: REQ-043 — update flow เดียวเสมอ (daemon ไม่รันให้ start เป็น blue ก่อนแล้ว handover ตามปกติ); binary `ai` ตัวเดียวทำ stage/standby/gates/stop/promote/confirm/rollback; ลบ scripts/keepalive.sh + scripts/supervisor.sh + stopKeepaliveWatchers + dead helper; cutover เจ้าของเชิงตรรกะเดียว; standby หมดอายุล้าง phase+handoff; promote ล้มเหลวหลัง blue หยุดต้อง emergency live-promote staged green. REQ-044 — automated repair จบที่ watchdog reopen (5x backoff); daemon ตาย/กู้ไม่ขึ้นต้อง `ai start` เอง (tradeoff บันทึกใน spec)
 Reason: update สอง flow + supervisor ภายนอก = สภาพที่ต้องซิงก์กันสองภาษา (Go/bash drift) และช่อง zero-daemon ที่ไม่มีใครเป็นเจ้าของ; single binary + single flow ตัด drift ทิ้งทั้งหมด
-Impact: cmd/ai/update.go (ensureBlueRunning, ลบ dead helper), cmd/ai/update_bluegreen.go (single flow, expiry cleanup, emergency promote), cmd/ai/main.go (ลบ stopKeepaliveWatchers), scripts/ (ลบ 2 ไฟล์), transport/discord/gateway_liveness.go (comments), README/docs, tests, requirements/functional.md (REQ-043/044)
+Impact: cmd/ai-engine/update.go (ensureBlueRunning, ลบ dead helper), cmd/ai-engine/update_bluegreen.go (single flow, expiry cleanup, emergency promote), cmd/ai-engine/main.go (ลบ stopKeepaliveWatchers), scripts/ (ลบ 2 ไฟล์), transport/discord/gateway_liveness.go (comments), README/docs, tests, requirements/functional.md (REQ-043/044)
 Validation: unit (phase/gates/rollback/promote/emergency/no-supervisor-files); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`
 Status: accepted
 
@@ -755,7 +755,7 @@ Conflict: none (tightens REQ-043 gates; no flow/architecture change)
 Previous: health gates/live-confirm ค้น log marker แบบ substring ใน tail — marker ของ handover ก่อนหน้ายังค้างอยู่ ทำให้ waitForGreenLive ผ่านทันทีจากหลักฐานของ blue เก่า แล้ว updater ล้าง phase ก่อน green เห็น cutover-done: green รอ probation เปล่า ๆ บน ai.pid ที่ชี้มันอยู่ bot ไม่มี intake
 New: REQ-043 — ready/live marker ต้อง correlate `marker + pid=<greenPID>` (logTailContainsPidMarker; markers มี pid อยู่แล้ว); waitForGreenLive รับ greenPID; phase จะถูก clear ก็ต่อเมื่อ green ตัวนั้น log live เอง (green เห็น cutover แน่นอน); บทเรียน LESSON-002
 Reason: หลักฐาน readiness ที่ไม่ผูก identity ของ run จะถูกหลักฐานเก่าปลอมผ่านได้เสมอ — gate ต้องผูก pid
-Impact: cmd/ai/update_bluegreen.go (gates), cmd/ai/update_bluegreen_test.go (stale-marker tests), requirements/functional.md (REQ-043), requirements/lessons.md (LESSON-002)
+Impact: cmd/ai-engine/update_bluegreen.go (gates), cmd/ai-engine/update_bluegreen_test.go (stale-marker tests), requirements/functional.md (REQ-043), requirements/lessons.md (LESSON-002)
 Validation: unit (stale marker ตก gate, pid ตรงผ่าน); `go test ./... -timeout 3m`; `go vet ./...`; `git diff --check`; deploy จริงต้องเห็น live intake ของ green pid ใหม่ใน log
 Status: accepted
 
@@ -768,7 +768,7 @@ Conflict: CON-001 (config ต้องอยู่ใน `config/*.json`, ห้
 Previous: ทุกอย่างเป็นไฟล์ใต้ state root — `config/*.json` + `data/sessions/<base64url(id)>.db` — daemon ไม่มี transport อื่นนอก CLI/Discord และไม่เคยคุยกับ cloud
 New: REQ-046 — เพิ่ม `transport/mobile` (WebSocket source/display, handshake 2 ขั้น + lockout 5 ครั้ง/30 วิ แบบขยับขึ้น, token เก็บใน memory เท่านั้น) และ `runtime/d1store` (D1 เป็น authoritative copy, local เป็น materialization: config JSON + session DB ไฟล์เดิมถูกดึง/เขียนกลับผ่าน Worker) + turn ingest แบบ FIFO; CON-012 ระบุว่า local materialization ต้องคงรูปแบบเดิมและห้ามสร้าง credential ใหม่
 Reason: ผู้ใช้ต้องการ daemon ที่รีสตาร์ตแล้วยังคุยต่อได้โดยไม่ต้องมี local state แต่ข้อกำหนดเดิมของโปรเจกต์บังคับให้รูปแบบไฟล์เป็นแกน — การทำ D1 เป็น sync layer (ไม่ใช่ storage ที่ core อ่านตรง) จึงได้ทั้ง stateless ที่ต้องการโดยไม่ละ CON-001/002/011 และไม่แตะ core loop/SDK
-Impact: transport/mobile/ (ใหม่: auth.go, gateway.go, tunnel.go + tests), runtime/d1store/ (ใหม่: client.go, sync.go + tests), transport/config.go (mobile block ใน entry.json), runtime/provider_manager.go (Reload หลัง hydrate), cmd/ai/main.go (wire mobile + hydrate callback), index.md (module map), requirements/functional.md (REQ-046), requirements/constraints.md (CON-012)
+Impact: transport/mobile/ (ใหม่: auth.go, gateway.go, tunnel.go + tests), runtime/d1store/ (ใหม่: client.go, sync.go + tests), transport/config.go (mobile block ใน entry.json), runtime/provider_manager.go (Reload หลัง hydrate), cmd/ai-engine/main.go (wire mobile + hydrate callback), index.md (module map), requirements/functional.md (REQ-046), requirements/constraints.md (CON-012)
 Validation: unit (`go test ./... -timeout 3m` ครอบคลุม handshake/lockout/hydrate/push/ขนาดเกิน limit/ไม่มี token), `go vet ./...`, `git diff --check`; integration ต้องเช็คกับ Worker จริงว่า 401 เมื่อไม่มี header, 429 เมื่อผิดครบ 5 ครั้ง, และ turn เขียนลง D1 ตามลำดับ
 Status: accepted
 
@@ -779,9 +779,9 @@ Type: revise (remove product surface)
 Request: "ส่วนของ daemon ไม่ต้องทำ CLI หรือ Discord แล้ว พวกคำสั่ง ai update อะไรก็ไม่ต้องทำแล้ว ให้ gateway มีแค่ผ่าน url tunnel อย่างเดียว"
 Conflict: REQ-011 (entry.json เดินมี transport หลายแบบ), REQ-025/026 (attachment boundary ผ่าน Discord), REQ-031/035/036/039/040/041/044 (พฤติกรรม Discord ทั้งหมด), REQ-043 (`ai update` blue-green), REQ-045 (ส่วนที่อ้าง Discord display), CON-001 (`config/entry.json` เป็นแหล่ง transport config) — ทั้งหมดนี้ถูกยกเลิก/แทนที่ ไม่ใช่การเปลี่ยนแค่ implementation
 Previous: `ai` เป็น harness สายตัว: `ai start` (daemon + PID/log/green handover), `ai daemon [--standby]`, `ai cli` (interactive TUI), `ai discord`, `ai browser`, `ai system`, `ai update`, `ai stop`, `ai uninstall`; transports = CLI + Discord; Discord gateway มี slash commands, actor panels, attachments, liveness/heartbeat, session mapping; release pipeline ผลิต Linux arm64 binary + checksums เพื่อ self-update
-New: REQ-047 — process เดียวคือ daemon ที่ serve `transport/mobile` ผ่าน Cloudflare quick tunnel และมี handshake 2 ขั้นตาม REQ-046; runtime state (config + session) อยู่ D1 ตาม REQ-046/CON-012; CON-013 ห้ามคืน transport/คำสั่งที่ถอดโดยไม่มี spec change ใหม่; โค้ด `transport/cli/`, `transport/discord/`, `cmd/ai/cli.go`, `cmd/ai/command.go`, `cmd/ai/update*.go`, `cmd/ai/uninstall.go` ถูกลบ; `config/entry.json` เหลือบล็อก `mobile` เดียว; workflow release เปลี่ยนเป็น build+test เท่านั้น (ไม่ publish สำหรับ self-update)
+New: REQ-047 — process เดียวคือ daemon ที่ serve `transport/mobile` ผ่าน Cloudflare quick tunnel และมี handshake 2 ขั้นตาม REQ-046; runtime state (config + session) อยู่ D1 ตาม REQ-046/CON-012; CON-013 ห้ามคืน transport/คำสั่งที่ถอดโดยไม่มี spec change ใหม่; โค้ด `transport/cli/`, `transport/discord/`, `cmd/ai-engine/cli.go`, `cmd/ai-engine/command.go`, `cmd/ai-engine/update*.go`, `cmd/ai-engine/uninstall.go` ถูกลบ; `config/entry.json` เหลือบล็อก `mobile` เดียว; workflow release เปลี่ยนเป็น build+test เท่านั้น (ไม่ publish สำหรับ self-update)
 Reason: ผู้ใช้ต้องการ single-purpose daemon ที่ AIxodia เป็น client เดียว — CLI/Discord เป็น surface ที่ไม่ได้ใช้และเป็นภาระดูแล (slash commands, actor display, attachments, liveness); self-update ซับซ้อนและผูก state/pid/handoff ที่ไม่จำเป็นกับ daemon ที่ stateless แล้ว
-Impact: transport/discord/ (ลบ 26 ไฟล์), transport/cli/ (ลบ 11 ไฟล์), cmd/ai/{cli,command,update*,uninstall}.go (ลบ), cmd/ai/main.go (dispatch + wiring เหลือ daemon+tunnel), cmd/ai/attachments.go (Discord attachment wiring ถูกถอด; filestore/tools ยังอยู่), transport/config.go (Config = Mobile), .github/workflows/release.yml (build/test only), scripts/{install.sh,dc-keepalive.sh} (ถูกถอด), index.md, README.md, INSTALL.md, docs/, workflow.md, AGENTS.md (start-here routes), requirements/{functional,constraints,decisions}.md
+Impact: transport/discord/ (ลบ 26 ไฟล์), transport/cli/ (ลบ 11 ไฟล์), cmd/ai-engine/{cli,command,update*,uninstall}.go (ลบ), cmd/ai-engine/main.go (dispatch + wiring เหลือ daemon+tunnel), cmd/ai-engine/attachments.go (Discord attachment wiring ถูกถอด; filestore/tools ยังอยู่), transport/config.go (Config = Mobile), .github/workflows/release.yml (build/test only), scripts/{install.sh,dc-keepalive.sh} (ถูกถอด), index.md, README.md, INSTALL.md, docs/, workflow.md, AGENTS.md (start-here routes), requirements/{functional,constraints,decisions}.md
 Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 3m`, `git diff --check`; ยืนยันว่า `grep -ri discord` ไม่เหลือในโค้ด/เอกสาร และ `ai` รันแล้วตอบผ่าน tunnel ได้จริง
 Status: accepted
 
@@ -794,7 +794,7 @@ Conflict: REQ-046(4) (config ต้องถูก hydrate ก่อน turn แ
 Previous: runtime โหลด provider ตอนบูตจาก `config/provider.json` ที่อาจยังว่าง แล้วไม่มีการ reload หลัง hydrate; `Transport.Display` อ่านข้อความจาก `output.Content` อย่างเดียว แต่ `sdk.HarnessLoop` (sdk/loop.go) ข้าม final output เมื่อ turn ถูก trace แล้วส่งคำตอบผ่าน `TraceResponseContent`/`TraceResponse` — โทรศัพท์จึงไม่เห็นคำตอบแม้ daemon ทำงานถูก; `config/entry.json` ถูกดึง/เขียนกลับผ่าน D1 ทั้งที่เป็น bootstrap ของ gateway เอง
 New: หลัง hydrate สำเร็จ daemon เรียก `ProviderManager.Reload` (provider adapters/router สร้างใหม่จาก config ที่เพิ่งถูกดึง); `transport/mobile` แปลง trace stream เป็น frame (`TraceResponseContent` → `message`, `TraceResponse` → `done`, stage อื่น → `trace` status, subagent ได้ `agent=sub`) และ `FinalText` เป็นตัวหา text เดียวกับที่โทรศัพท์เห็น; user turn ที่รับเข้าถูก mirror เป็น role `user` ใน D1 (model turn ที่ trace แล้วถูก mirror เป็น role `model`); `DefaultConfigFiles` ตัด `config:entry` ออกจากรายการ sync เพราะ gateway ต้องอ่านไฟล์นี้ก่อนถึง D1 ได้
 Reason: การรันจริงเผยว่าบั๊กทั้งสามอยู่บนเส้นทางเดียวกัน (token → hydrate → provider → frame) และทำให้ daemon "ขึ้น" แต่ใช้งานไม่ได้จริง ทั้งหมดเป็นพฤติกรรมที่ REQ-046 กำหนดไว้อยู่แล้ว จึงเป็นการแก้ให้ตรงสเปก ไม่ใช่การเปลี่ยนสเปก
-Impact: transport/mobile/gateway.go (Display/displayTrace/FinalText, subscriber interface เพื่อทดสอบ, MirrorInput hook), transport/mobile/display_trace_test.go (ใหม่), runtime/d1store/sync.go (ตัด config:entry), cmd/ai/mobile.go (wire reloadProviders + mirrorUserTurn + mirror จาก trace), cmd/ai/main.go (ส่ง listen/tunnel/cloudflared เข้า transport), index.md, requirements/functional.md, requirements/changes.md
+Impact: transport/mobile/gateway.go (Display/displayTrace/FinalText, subscriber interface เพื่อทดสอบ, MirrorInput hook), transport/mobile/display_trace_test.go (ใหม่), runtime/d1store/sync.go (ตัด config:entry), cmd/ai-engine/mobile.go (wire reloadProviders + mirrorUserTurn + mirror จาก trace), cmd/ai-engine/main.go (ส่ง listen/tunnel/cloudflared เข้า transport), index.md, requirements/functional.md, requirements/changes.md
 Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 4m`; e2e จริงผ่าน quick tunnel: 401 เมื่อไม่มี header, trace→message→done พร้อม usage, `turn ok` ใน log, D1 มี user+model turn เรียงลำดับ และ `/api/node` ชี้ tunnel ของ daemon ที่ heartbeat สด
 Status: accepted
 
@@ -807,7 +807,7 @@ Conflict: REQ-046(4) (หลัง hydrate runtime ต้องใช้งา�
 Previous: `runtime.SessionManager` เก็บ provider/model จาก env ไว้ครั้งเดียวตอนบูต (ตอนนั้น provider ยังไม่ถูก hydrate) และ `sdk.OpenSession` ให้ค่าที่เก็บใน DB ของแชทนั้นชนะเสมอ — แชทที่สร้างก่อนหน้านี้จึงยังผูก provider ที่ไม่มีอยู่แล้ว (หรือว่าง) และทุก turn จบด้วย `sdk: provider is required` หลัง retry ครบ 7 ครั้ง
 New: `SessionManager.AdoptProviders(configs, base)` ถูกเรียกใน reload callback หลัง hydrate เพื่ออัปเดต provider key pools + base และย้าย session ที่เปิดอยู่; `Resolve` ย้าย provider/model ของ session ที่ provider เดิมไม่อยู่ในรายการใหม่ทันทีหลังเปิด (เทสต์ `TestSessionManagerAdoptsProvidersAndRepointsStaleSessions` ครอบทั้ง cached session และ session ที่เปิดใหม่)
 Reason: REQ-046 กำหนดให้ daemon ทำงานต่อได้หลัง restart โดยไม่ต้องมี local state — session row ที่เก็บ provider เก่าคือ local state ที่หลงเหลือ จึงต้องถูกจัดการตอน materialize ไม่ใช่ปล่อยให้ล้ม
-Impact: runtime/session_manager.go (AdoptProviders + repoint ใน Resolve), runtime/session_manager_test.go (เทสต์ใหม่), cmd/ai/main.go (reload callback เรียก AdoptProviders), requirements/functional.md (REQ-046(4)), requirements/changes.md
+Impact: runtime/session_manager.go (AdoptProviders + repoint ใน Resolve), runtime/session_manager_test.go (เทสต์ใหม่), cmd/ai-engine/main.go (reload callback เรียก AdoptProviders), requirements/functional.md (REQ-046(4)), requirements/changes.md
 Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 4m`; e2e จริง: ส่งข้อความจากมือถือจริงในแชท `work-1` (turn ที่เคยล้ม) แล้วได้คำตอบจริงจาก provider พร้อม user+model turn ใน D1
 Status: accepted
 
@@ -833,7 +833,7 @@ Conflict: REQ-046(2)(3)(5)(6), CON-012, REQ-047, `transport/config.go` (`mobile.
 Previous: daemon เชื่อม Worker ผ่าน `worker_base` และใช้ D1 token ที่ผมสร้างเป็น Worker secret; แอปต้องมี Worker URL; `d1store` เรียก `/api/state` ของ Worker
 New: credential เดียวของระบบคือ **Cloudflare API token ที่ผู้ใช้เป็นเจ้าของ** ส่งมาใน `Authorization` header ของ handshake — daemon ตรวจด้วย `GET /user/tokens/verify`, หา account id ด้วย `GET /accounts` และ database id ด้วย `GET /accounts/{a}/d1/database` (ค่าตั้งต้นชื่อ `d1_database`, ถ้า account มีหลายฐานต้องระบุชื่อ), แล้วคุย D1 ตรงผ่าน `POST /accounts/{a}/d1/database/{d}/query`; `transport/mobile` เสิร์จ history API เองจาก D1 (`history.go`) แทนการ proxy ไป Worker และไม่เสิร์จ `/api/state`; tunnel ประกาศตัวเองลงตาราง `nodes` ใน D1; `config/entry.json` เปลี่ยนจาก `worker_base` เป็น `cloudflare_api` + `d1_database`
 Reason: ผู้ใช้ระบุชัดว่า credential คือ Cloudflare token ที่หา account/database id ได้เอง และสั่งลบ Worker secret ที่ผมสร้างโดยไม่ได้ขอ — สเปกเดิมบอกว่า "operator สร้าง token" ผมจึงต้องลบสิ่งที่ผมสร้างและย้ายไปใช้ token ของผู้ใช้จริงแทน
-Impact: runtime/d1store/{client.go,client_test ใหม่: fakecloudflare_test.go, d1store_test.go}, transport/mobile/{history.go ใหม่, history_test.go ใหม่, proxy.go+proxy_test.go ลบ, gateway.go, auth.go, tunnel.go}, transport/config.go + config_test.go, cmd/ai/{mobile.go, main.go}, requirements/{functional,constraints,changes}.md, index.md
+Impact: runtime/d1store/{client.go,client_test ใหม่: fakecloudflare_test.go, d1store_test.go}, transport/mobile/{history.go ใหม่, history_test.go ใหม่, proxy.go+proxy_test.go ลบ, gateway.go, auth.go, tunnel.go}, transport/config.go + config_test.go, cmd/ai-engine/{mobile.go, main.go}, requirements/{functional,constraints,changes}.md, index.md
 Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 4m`; e2e จริงผ่าน quick tunnel ด้วย Cloudflare token: 401 เมื่อไม่มี header, 401 เมื่อ token ผิดรูปแบบถูกแต่ใช้ไม่ได้, 503 เมื่อ Cloudflare ตอบผิดรูป, `/api/sessions` = 200 พร้อมแชทจริง 4 รายการ, handshake → hydrate `config:provider` → reload 6 provider → `turn ok`, turn ถูกเขียนกลับ D1 เรียง `seq`, `/api/node` คืน tunnel URL ปัจจุบัน
 Status: accepted
 
@@ -846,7 +846,7 @@ Conflict: REQ-046(5) (turn เขียน D1 ตามลำดับ), REQ-046
 Previous: คำตอบของโมเดลถูกส่งเป็น `TraceResponseContent` ทั้งก้อน (หรือทีละ chunk ที่ transport มองเป็นข้อความใหม่ทุกครั้ง) และข้อความ authoritative ที่ `TraceResponse` ถูกทิ้ง; harness ไม่เคยสั่ง `Stream`; adapter `openai` stream ผ่าน `/responses` อย่างเดียวจึงไม่มี delta จาก gateway; ไม่มีทางเลือก provider/model; mirror เขียน turn ซ้ำเมื่อ provider รายงานคำตอบสองครั้ง
 New: mapping trace → frame แบบ streaming (delta/trace/message/done + per-turn bookkeeping กันข้อความซ้ำ), `Request.Stream: true` ทุก turn, adapter เลือก dialect ตาม endpoint พร้อม fallback ก่อนมี event แรก, `GET /api/models` + `PATCH /api/sessions/:id {provider, model}` (ตรวจกับ router → ใส่ session ที่เปิด → เก็บ D1), `SessionManager.SetSessionDefaults` ให้ค่าที่บันทึกไว้มี precedence เหนือค่า boot, `turnMirror` กัน D1 มี turn ซ้ำ; แอปได้ bubble สด + tool steps + ตัวเลือก provider/model ในหน้าตั้งค่า
 Reason: ผู้ใช้ต้องการเห็นคำตอบทีละส่วนและเลือกโมเดลเองจากเครื่อง โดยไม่ต้องแก้ไฟล์บน daemon — สิ่งที่เป็นอยู่ทำให้ข้อความถูกตัดและเขียน D1 ซ้ำ
-Impact: transport/mobile/{gateway.go, history.go, display_test.go, history_test.go}, sdk/providers/openai/{openai.go, openai_test.go}, sdk/routing.go (ProviderIDs), runtime/{session_manager.go, session_manager_test.go}, runtime/d1store/client.go (SetSessionRoute), cmd/ai/{main.go, mobile.go, mobile_turn_mirror_test.go}, requirements/{functional,changes}.md; ฝั่งแอป: data/model/ChatModels.kt, data/remote/HistoryApi.kt, data/repo/ChatRepository.kt, ui/chat/{ChatViewModel,ChatScreen}.kt, ui/settings/SettingsScreen.kt + AX-080..082/AXCH-012
+Impact: transport/mobile/{gateway.go, history.go, display_test.go, history_test.go}, sdk/providers/openai/{openai.go, openai_test.go}, sdk/routing.go (ProviderIDs), runtime/{session_manager.go, session_manager_test.go}, runtime/d1store/client.go (SetSessionRoute), cmd/ai-engine/{main.go, mobile.go, mobile_turn_mirror_test.go}, requirements/{functional,changes}.md; ฝั่งแอป: data/model/ChatModels.kt, data/remote/HistoryApi.kt, data/repo/ChatRepository.kt, ui/chat/{ChatViewModel,ChatScreen}.kt, ui/settings/SettingsScreen.kt + AX-080..082/AXCH-012
 Validation: `go build ./...`, `go vet ./...`, `go test ./... -timeout 4m`; e2e จริงผ่าน quick tunnel: 32 `delta` → `done` จาก provider จริง, D1 มี user 1 + model 1 turn (ไม่ซ้ำ), `/api/models` คืน 6 provider พร้อม catalogue, `PATCH /api/sessions/:id` ตอบค่าที่เลือก; โค้ดฝั่งแอปยังไม่ได้ compile เพราะเครื่องนี้ไม่มี JDK
 Status: accepted
 
@@ -870,9 +870,9 @@ Type: add
 Request: "การแสดงผลบัค, แก้ไข provider opencode ที่ใช้งานไม่ได้, ทำให้สามารถเพิ่ม provider ได้, ตั้ง api pool / model สำหรับ main agent/sub agent, เพิ่มปุ่มหยุดการทำงาน"
 Conflict: REQ-046(6) (เดิมมีแต่อ่าน provider ผ่าน `/api/models` และเลือกต่อแชท — ไม่มีเส้นทางเขียน provider/key/route และไม่มีการหยุด turn), REQ-047 (`/api/state/...` ถูกยกเลิกใน CHANGE-063 จึงไม่มีที่ให้มือถือตั้งค่า provider), CON-012 (ห้ามเพิ่ม credential ใหม่ — key ที่มือถือใส่คือ key ของ provider ไม่ใช่ credential ของระบบ)
 Previous: provider/key pool แก้ได้เฉพาะบนเครื่อง daemon (`config/provider.json`); มือถืออ่านได้อย่างเดียว และ provider ที่ใช้ไม่ได้ (OpenCode: 401 key ตาย, 403 free tier) ไม่มีทางบอกเหตุผลจากมือถือ; main/sub agent ใช้ค่าจาก env ที่บูตครั้งเดียว; ไม่มีปุ่มหยุด — turn ที่ค้างหรือ provider ที่ค้างหยุดไม่ได้จนกว่าจะ restart
-New: REQ-048 — เพิ่ม `transport/mobile/admin.go` (`GET|POST /api/providers`, `POST /api/providers/{id}/keys` add/remove/replace, `DELETE /api/providers/{id}`, `POST /api/providers/refresh` ที่ probe จริง 1 token เพื่อดูเหตุผล, `GET|PUT /api/settings` สำหรับ main/sub route), key เป็น write-only ไม่มีเส้นทางไหนส่ง key กลับ; `cmd/ai/admin_store.go` เขียนทั้งไฟล์และ D1 (`config/provider`, `config/system`) แล้ว reload runtime ทันที; `ProviderManager.Rt/RefreshProvider` ให้ admin เห็น router ที่ยังมีชีวิตและรีเฟรช catalogue ราย provider; เฟรม `cancel` + `sdk.HarnessLoop.CancelTurn/Busy` ยกเลิก context ของ turn ที่วิ่งใน session นั้น (ตอบ `done/cancelled` หรือ `already_done`, trace ที่ถูกยกเลิกกลายเป็น `done/cancelled` ไม่ใช่ provider error); `OnTurnError` ยิง `ReportTurnError` เป็นเฟรม `error` ข้อความสั้นให้มือถือเห็นเหตุผลจริง
+New: REQ-048 — เพิ่ม `transport/mobile/admin.go` (`GET|POST /api/providers`, `POST /api/providers/{id}/keys` add/remove/replace, `DELETE /api/providers/{id}`, `POST /api/providers/refresh` ที่ probe จริง 1 token เพื่อดูเหตุผล, `GET|PUT /api/settings` สำหรับ main/sub route), key เป็น write-only ไม่มีเส้นทางไหนส่ง key กลับ; `cmd/ai-engine/admin_store.go` เขียนทั้งไฟล์และ D1 (`config/provider`, `config/system`) แล้ว reload runtime ทันที; `ProviderManager.Rt/RefreshProvider` ให้ admin เห็น router ที่ยังมีชีวิตและรีเฟรช catalogue ราย provider; เฟรม `cancel` + `sdk.HarnessLoop.CancelTurn/Busy` ยกเลิก context ของ turn ที่วิ่งใน session นั้น (ตอบ `done/cancelled` หรือ `already_done`, trace ที่ถูกยกเลิกกลายเป็น `done/cancelled` ไม่ใช่ provider error); `OnTurnError` ยิง `ReportTurnError` เป็นเฟรม `error` ข้อความสั้นให้มือถือเห็นเหตุผลจริง
 Reason: ผู้ใช้ต้องจัดการ provider/key/model จากมือถือโดยไม่แตะเครื่อง daemon และต้องหยุดงานที่ค้างได้ทันที — ทั้งหมดทำผ่านช่องทางเดียวที่มีอยู่แล้ว (tunnel + Cloudflare token) โดยไม่เพิ่ม credential หรือทางเข้าใหม่
-Impact: transport/mobile/{admin.go ใหม่, admin_test.go ใหม่, gateway.go (FrameCancel/Admin/ReportError/cancelStage/เสิร์จ route admin)}, sdk/{loop.go (CancelTurn/Busy + per-turn cancel ctx), loop_cancel_test.go ใหม่}, runtime/provider_manager.go (Rt/RefreshProvider), cmd/ai/{main.go, admin_store.go ใหม่, admin_store_test.go ใหม่}, index.md, requirements/functional.md (REQ-048); ฝั่งแอป data/remote/{AiDirectSocket.kt (cancel), HistoryApi.kt (providers/keys/settings)}, data/repo/ChatRepository.kt (stopTurn), ui/chat/{ChatViewModel.kt, ChatScreen.kt (ปุ่มหยุด + padding + autoscroll)}, ui/settings/SettingsScreen.kt (provider/key pool/agent) + AX-083..086/AXCH-013
+Impact: transport/mobile/{admin.go ใหม่, admin_test.go ใหม่, gateway.go (FrameCancel/Admin/ReportError/cancelStage/เสิร์จ route admin)}, sdk/{loop.go (CancelTurn/Busy + per-turn cancel ctx), loop_cancel_test.go ใหม่}, runtime/provider_manager.go (Rt/RefreshProvider), cmd/ai-engine/{main.go, admin_store.go ใหม่, admin_store_test.go ใหม่}, index.md, requirements/functional.md (REQ-048); ฝั่งแอป data/remote/{AiDirectSocket.kt (cancel), HistoryApi.kt (providers/keys/settings)}, data/repo/ChatRepository.kt (stopTurn), ui/chat/{ChatViewModel.kt, ChatScreen.kt (ปุ่มหยุด + padding + autoscroll)}, ui/settings/SettingsScreen.kt (provider/key pool/agent) + AX-083..086/AXCH-013
 Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่านทั้งหมด; e2e จริงผ่าน quick tunnel: `POST /api/providers/refresh` คืน NousResearch ผ่าน / AgentRouter 503 / B.AI 403 / OpenCode 401 (เหตุผลจริงจาก provider) / cavoti 402 / tokenharbor 402, เพิ่ม-ลบ key ผ่าน REST เดียวกับที่แอปใช้แล้วคืนจำนวนเดิม, ปุ่มหยุดบนมือถือจริงเปลี่ยนสถานะเป็น "หยุดแล้ว" และ log เป็น `turn stopped by the phone`, provider status/error แสดงบนมือถือจริง, bubble ไม่ชนกับแถบพิมพ์
 Status: accepted
 
@@ -885,8 +885,8 @@ Conflict: REQ-048(1) (refresh ต้องยิงจริงเพื่อ�
 Previous: `ProviderStatus.Reachable = LastError == "" && ModelCount > 0` — provider ที่ gateway แค่ list model ได้ (แต่ generate ไม่ได้ เช่น Opencode free tier) ขึ้น "ใช้ได้" จนกว่าจะกด refresh
 New: `ProviderStatus.Probed` บอกว่ามี probe ตอบสำหรับ provider นั้นหรือยัง; `adminStore` แยก `status` (ข้อความ) กับ `probed` (ผลการตรวจจริง) — `RefreshProviders` เป็นเจ้าของ `probed` ส่วน reload หลังแก้ไฟล์ใช้ `setDiscovery` ที่บันทึกข้อผิดพลาดแต่ไม่อ้างว่า probe แล้ว; `UpdateKeys` ล้างผลเดิมด้วย `forgetStatus` เพราะ key ใหม่ต้องทดสอบใหม่
 Reason: REQ-048(1) ต้องการให้มือถือเห็นความจริงก่อนส่งงานจริง การรายงาน provider ที่ยังไม่รู้ว่าใช้ได้หรือไม่ว่า "ใช้ได้" ทำให้ผู้ใช้เลือก provider ที่พัง
-Impact: transport/mobile/admin.go (Probed), cmd/ai/admin_store.go (probed map, forgetStatus, setDiscovery, statusOf), cmd/ai/admin_store_test.go (เทสต์สามสถานะ), requirements/changes.md; ฝั่งแอป AX-088 แสดงสามสถานะและเชื่อผลของ probe ที่เพิ่งกดในหน้านั้น
-Validation: `go build ./...`, `go vet ./...`, `go test ./cmd/ai/... ./transport/mobile/...` ผ่าน; e2e จริงบนมือถือ: ก่อนกดทดสอบขึ้น "ยังไม่ทดสอบ", หลังกดขึ้น "5 provider ใช้ไม่ได้" พร้อมข้อความจริงจาก provider
+Impact: transport/mobile/admin.go (Probed), cmd/ai-engine/admin_store.go (probed map, forgetStatus, setDiscovery, statusOf), cmd/ai-engine/admin_store_test.go (เทสต์สามสถานะ), requirements/changes.md; ฝั่งแอป AX-088 แสดงสามสถานะและเชื่อผลของ probe ที่เพิ่งกดในหน้านั้น
+Validation: `go build ./...`, `go vet ./...`, `go test ./cmd/ai-engine/... ./transport/mobile/...` ผ่าน; e2e จริงบนมือถือ: ก่อนกดทดสอบขึ้น "ยังไม่ทดสอบ", หลังกดขึ้น "5 provider ใช้ไม่ได้" พร้อมข้อความจริงจาก provider
 Status: accepted
 
 CHANGE-068
@@ -898,8 +898,8 @@ Conflict: REQ-048(1) มีแต่ `POST /api/providers/refresh` ที่ย�
 Previous: ทดสอบ provider ได้เฉพาะทั้งชุด (`/api/providers/refresh`) และ UI ฝั่งแอปแสดง key เป็นจำนวนล้วน เพราะ key เป็น write-only
 New: `POST /api/providers/{id}/refresh` → `ProviderStatus` ของ provider นั้น (`adminStore.RefreshProvider` ทำ discovery + probe เฉพาะตัว) เพื่อให้มือถือตอบสนองต่อ provider ที่ผู้ใช้กำลังแก้ทันที
 Reason: การรอคิวคือ UX ที่แย่: ปุ่มเดียวที่ผู้ใช้กดคือปุ่มที่กู้ปัญหาที่เขากำลังเจออยู่
-Impact: transport/mobile/admin.go (AdminStore.RefreshProvider + route `/api/providers/{id}/refresh`), transport/mobile/admin_test.go (fake), cmd/ai/admin_store.go (RefreshProvider), requirements/functional.md (REQ-048(8)), requirements/changes.md; ฝั่งแอป AX-089
-Validation: `go build ./...`, `go vet ./...`, `go test ./cmd/ai/... ./transport/mobile/...` ผ่าน
+Impact: transport/mobile/admin.go (AdminStore.RefreshProvider + route `/api/providers/{id}/refresh`), transport/mobile/admin_test.go (fake), cmd/ai-engine/admin_store.go (RefreshProvider), requirements/functional.md (REQ-048(8)), requirements/changes.md; ฝั่งแอป AX-089
+Validation: `go build ./...`, `go vet ./...`, `go test ./cmd/ai-engine/... ./transport/mobile/...` ผ่าน
 Status: accepted
 
 CHANGE-069
@@ -911,7 +911,7 @@ Conflict: REQ-048(1) กำหนดให้ probe ยิงจริงเพ�
 Previous: `adminStore.probe` เดินโมเดล 3 ตัวแรกตามลำดับแคตตาล็อกเสมอ (ไม่รู้ว่าโมเดลไหนเคยตอบ) และเดินต่อแม้เจอ 401/403/429; `Agent.retryableAgentError` retry ทุก error ที่ไม่ใช่ cancel/deadline จึงเคยยิงซ้ำ 7 ครั้งต่อ turn บนคำตอบ 403 FreeTierError; `ProviderStatus` ไม่มีบอกว่าโมเดลไหนตอบได้จริง
 New: probe เริ่มจาก `probedModel` ของ provider นั้น (`probeOrder`) แล้วค่อยไล่แคตตาล็อก, เขียนผลผ่าน `setProbedModel` ภายใต้ lock เดียวกับผู้อ่าน, หยุดทันทีเมื่อเจอคำตอบที่จะซ้ำ (`refusalMessage`: 401/403/429 พร้อมข้อความไทยบอกว่าเป็นการปฏิเสธ/โควตาหมด), และเปิดเผยโมเดลที่ตอบได้เป็น `ProviderStatus.WorkingModel` (ใช้เป็น `default_model` ของ `GET /api/models`); `Agent.retryableAgentError` ไม่ retry 401/403 (`isPolicyRefusal`) เพราะเป็นคำตอบจาก provider ไม่ใช่อาการชั่วคราว
 Reason: วัดจริงกับ OpenCode Zen: free tier ตอบ 200 ได้ 8 จาก 9 โมเดล แต่ปฏิเสธ (403 FreeTierError) ทันทีเมื่อคำขอถูกนับเต็มโควตา และทุกครั้งที่ถูกปฏิเสธก็กินโควตาเพิ่ม — health check ที่ถามต่อและ turn ที่ retry ทำให้ผู้ใช้กู้ provider ที่ใช้ได้จริงไม่ได้เลย
-Impact: cmd/ai/admin_store.go (probe, probeOrder, setProbedModel, refusalMessage), cmd/ai/admin_store_test.go, sdk/agent.go (isPolicyRefusal), sdk/retry_test.go, transport/mobile/admin.go (WorkingModel), cmd/ai/mobile.go (default_model), requirements/functional.md (REQ-048(9)); ฝั่งแอป AX-090 แสดง `working_model`
+Impact: cmd/ai-engine/admin_store.go (probe, probeOrder, setProbedModel, refusalMessage), cmd/ai-engine/admin_store_test.go, sdk/agent.go (isPolicyRefusal), sdk/retry_test.go, transport/mobile/admin.go (WorkingModel), cmd/ai-engine/mobile.go (default_model), requirements/functional.md (REQ-048(9)); ฝั่งแอป AX-090 แสดง `working_model`
 Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่าน; วัดกับ Zen ตรง ๆ: ตอนที่ยังมีโควตา 8 จาก 9 โมเดลตอบ (`jev-1.13-free` ใช้ไม่ได้ทุก endpoint) และเมื่อคำขอถูกนับเต็มโควตาจะเป็น 403 FreeTierError ทุกครั้งจนกว่าจะฟื้น — จริงบนมือถือ: กด "ทดสอบ" ที่ Opencode แล้วขึ้น "ผู้ให้บริการปฏิเสธคำขอนี้ (403) — เช่น free tier ที่ใช้ได้เฉพาะในตัว client ของผู้ให้บริการ" โดยยิง 1 คำขอแทน 3 และ `working_model` แสดงจริงที่ AgentRouter (`deepseek-v4-flash`) กับ NousResearch (`inclusionai/ling-3.0-flash-sante:free`)
 Status: accepted
 
@@ -924,7 +924,7 @@ Conflict: REQ-048(1)/(8) ต้องให้เหตุผลจริงจ�
 Previous: `RefreshProviders` วิ่ง discovery + probe ของ provider ทีละตัวแบบไม่จำกัดเวลา (6 ตัว × โมเดลสูงสุด 3 ตัว) — ผ่าน Cloudflare quick tunnel คำขอจะโดนตัดก่อนตอบ
 New: `RefreshProviders` เปิด goroutine ต่อ provider ภายใต้ `probeConcurrency = 4` และ `check()` ครอบทั้ง discovery+probe ด้วย `probeBudget = 25s`; `RefreshProvider` (ปุ่มทดสอบ provider เดี่ยว) ใช้งบเวลาเดียวกัน
 Reason: ผู้ใช้กดปุ่มเดียวแล้วต้องได้คำตอบของทุก provider ภายในเวลาที่ tunnel รอได้ ไม่ใช่รอจน request ตายแล้วเห็นคำตอบปลอม
-Impact: cmd/ai/admin_store.go (RefreshProviders, RefreshProvider, check, probeConcurrency, probeBudget), requirements/functional.md (REQ-048(10)); ฝั่งแอป AX-091 (ไม่ล้างรายการเมื่อโหลดไม่สำเร็จ + ห้ามสรุปว่า "ทุก provider ใช้งานได้" ตอนรายการว่าง + ยกดอก timeout ของ REST ให้รอ provider check ได้จริง)
+Impact: cmd/ai-engine/admin_store.go (RefreshProviders, RefreshProvider, check, probeConcurrency, probeBudget), requirements/functional.md (REQ-048(10)); ฝั่งแอป AX-091 (ไม่ล้างรายการเมื่อโหลดไม่สำเร็จ + ห้ามสรุปว่า "ทุก provider ใช้งานได้" ตอนรายการว่าง + ยกดอก timeout ของ REST ให้รอ provider check ได้จริง)
 Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่าน; จริงบนมือถือ: กด "ทดสอบใหม่" แล้วรายการ provider ไม่หายและข้อความตรงกับสิ่งที่ daemon ตอบ
 Status: accepted
 
@@ -964,7 +964,7 @@ Reason: ผู้ใช้ต้องเห็นว่า agent คิดอ�
 Impact: sdk/subagent.go (RequestStop), sdk/agent.go (StopSubAgent),
 sdk/subagent_test.go, transport/mobile/gateway.go (Inbound.JobID, Config.CancelSubAgent,
 SetCancelSubAgent, cancelSubAgent, subAgentStopStage), transport/mobile/cancel_subagent_test.go
-(ใหม่), cmd/ai/main.go (wire), sdk/providers/openai/openai.go (addStreamUsage + usage ใน
+(ใหม่), cmd/ai-engine/main.go (wire), sdk/providers/openai/openai.go (addStreamUsage + usage ใน
 stream), sdk/providers/openai/openai_test.go, sdk/providers/opencode/opencode.go + test,
 requirements/functional.md (REQ-048(11)(12)); ฝั่งแอป AX-092/AX-093
 Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่าน; เทสต์จริง: เฟรม cancel
@@ -991,7 +991,7 @@ context.Canceled) และ `subagent_failed` (TraceError อื่น) แล�
 ("เสร็จแล้ว"/"หยุดแล้ว"/"ล้มเหลว")
 Reason: แถวที่ค้าง "กำลังหยุด…" ทำให้ผู้ใช้เข้าใจว่ายังหยุดไม่ได้ และไม่มีทางรู้ว่า worker จบแล้วหรือยัง
 Impact: transport/mobile/gateway.go (TraceResponse/TraceError ตาม job, error frame มี agent/job,
-SubAgentTerminal), cmd/ai/main.go (ต่อ SetSubAgentSinks), transport/mobile/display_test.go
+SubAgentTerminal), cmd/ai-engine/main.go (ต่อ SetSubAgentSinks), transport/mobile/display_test.go
 (`TestSubAgentTerminalNamesTheStoppedJob`),
 app ChatViewModel.onSubAgentStopped, requirements/functional.md (AX-093), requirements/changes.md
 Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่าน (เทสต์ใหม่
@@ -1042,8 +1042,8 @@ Reason: ผู้ใช้ถามว่าต้องแก้ตาม clien
 เหมือน client เฉพาะ provider ที่เข้มสุด
 Impact: sdk/types.go (Instruction, Request.Instructions),
 sdk/providers/opencode/opencode.go (withInstructions + ทั้งสี่ builder),
-sdk/providers/opencode/opencode_test.go, cmd/ai/main.go (instructionFiles),
-cmd/ai/main_test.go, requirements/changes.md
+sdk/providers/opencode/opencode_test.go, cmd/ai-engine/main.go (instructionFiles),
+cmd/ai-engine/main_test.go, requirements/changes.md
 Validation: `go build ./...`, `go vet ./...`, `go test ./...` ผ่าน (เทสต์ใหม่
 `TestInstructionFilesJoinTheSystemMessage`, `TestNoInstructionFilesLeavesTheSystemPromptAlone`,
 `TestInstructionFilesFollowTheClientOrder`); วัดสดด้วย curl ต่อ Zen ตามตารางข้างบน
@@ -1058,8 +1058,8 @@ Conflict: none (ทำให้ REQ-048 และ D-012 ชัดเจนขึ
 Previous: PATCH แชทรับเฉพาะ provider/model ที่ไม่ว่าง ทำให้ไม่มีวิธีล้าง pin กลับไปใช้ค่าเริ่มต้นสากล; เฟรมมือถือมีเฉพาะ input/output tokens ไม่มี cache; reasoning เป็นเพียงสถานะคงที่โดยไม่มีเวลาที่บันทึก; tool result ไม่มีเวลาที่บันทึก
 New: `ModelChoice.Clear` + `PATCH /api/sessions/:id {"clear_model":true}` ล้าง route ของแชทใน D1 และลืม session ที่แคชไว้เพื่อใช้ค่าเริ่มต้นสากลใน turn ถัดไป; เฟรม `message` มี `cache_read_tokens/cache_write_tokens`; เฟรม reasoning มี `reasoning_ms` จาก timestamp ที่บันทึกโดยไม่ส่งเนื้อหา reasoning; เฟรม tool result/call มี `tool_duration_ms`; `TurnMeta`/`TurnRow` เก็บ cache; `EnsureTurnFooter` เติมคอลัมน์ cache ให้ฐานเก่า
 Reason: แยกขอบเขต session/global ให้ชัด ป้องกัน unpin ที่ตีความผิด และทำให้ footer/cache/streaming/tool/reasoning ตรงกับค่าที่ provider/daemon บันทึกจริง
-Impact: transport/mobile/history.go, transport/mobile/gateway.go, transport/mobile/display_test.go, transport/mobile/history_test.go, cmd/ai/mobile.go, runtime/session_manager.go (+Forget), runtime/session_manager_test.go, runtime/d1store/client.go (+cache + ensure), runtime/d1store tests/fake, sdk/providers/opencode (parse cache usage)
-Validation: `go test ./transport/mobile ./runtime/d1store ./runtime ./cmd/ai ./sdk/providers/opencode -count=1`; `go test ./... -count=1`; `git diff --check`
+Impact: transport/mobile/history.go, transport/mobile/gateway.go, transport/mobile/display_test.go, transport/mobile/history_test.go, cmd/ai-engine/mobile.go, runtime/session_manager.go (+Forget), runtime/session_manager_test.go, runtime/d1store/client.go (+cache + ensure), runtime/d1store tests/fake, sdk/providers/opencode (parse cache usage)
+Validation: `go test ./transport/mobile ./runtime/d1store ./runtime ./cmd/ai-engine ./sdk/providers/opencode -count=1`; `go test ./... -count=1`; `git diff --check`
 Status: accepted
 
 CHANGE-078
@@ -1086,9 +1086,9 @@ Previous: daemon อ่านค่าเริ่มต้นจาก env ต�
 New: `adminStore.RefreshRoutesFromDisk` อ่าน `config/system.json` แล้ว `applySettings` ทุกครั้งหลัง
 hydrate (ต่อจาก reload providers) ผ่าน hook `mobileRuntime.applySystemRoutes`
 Reason: ค่าเริ่มต้นสากลต้องมีผลกับ runtime จริง ไม่ใช่แค่ตัวหนังสือในหน้าตั้งค่า
-Impact: cmd/ai/admin_store.go (RefreshRoutesFromDisk), cmd/ai/mobile.go (hook + เรียกใน Hydrate),
-cmd/ai/main.go (ต่อ hook), cmd/ai/admin_store_test.go, requirements/changes.md
-Validation: `TestRefreshRoutesFromDiskPicksUpStoredDefaults`; `go test ./cmd/ai -count=1`
+Impact: cmd/ai-engine/admin_store.go (RefreshRoutesFromDisk), cmd/ai-engine/mobile.go (hook + เรียกใน Hydrate),
+cmd/ai-engine/main.go (ต่อ hook), cmd/ai-engine/admin_store_test.go, requirements/changes.md
+Validation: `TestRefreshRoutesFromDiskPicksUpStoredDefaults`; `go test ./cmd/ai-engine -count=1`
 Status: accepted
 
 CHANGE-081
@@ -1105,8 +1105,8 @@ New: `mobileRuntime` มี gate ต่อ session ให้ answer mirror ร�
 model/token/เวลา สำหรับ answer); log ตอน announce เพิ่ม database UUID
 Reason: ลำดับแถวใน D1 ต้องเป็น user-ก่อน-answer เสมอ ไม่ใช่แค่ส่วนใหญ่ และเวลา
 debug ต้องเห็น seq ที่ D1 ให้จริง ไม่ใช่เดา
-Impact: cmd/ai/mobile.go (mirrorGates, waitUserMirror, mirror logging),
-cmd/ai/mobile_turn_mirror_test.go, requirements/changes.md
+Impact: cmd/ai-engine/mobile.go (mirrorGates, waitUserMirror, mirror logging),
+cmd/ai-engine/mobile_turn_mirror_test.go, requirements/changes.md
 Validation: `TestWaitUserMirrorWaitsForTheGate`; `go test ./... -count=1`; จริงบนมือถือ:
 log ขึ้น `mirrored user turn session=warm4 seq=7` แล้ว `mirrored answer ... seq=8`
 ตามลำดับ
@@ -1129,11 +1129,11 @@ CHANGE-083
 
 Date: 2026-09-26
 Type: fix
-Request: รัน daemon บน Kaggle (CPU, ไม่มี secret ตอนบูต) แล้วโปรเซสล้มด้วย SIGSEGV ที่ `cmd/ai/main.go:186` ทันที
+Request: รัน daemon บน Kaggle (CPU, ไม่มี secret ตอนบูต) แล้วโปรเซสล้มด้วย SIGSEGV ที่ `cmd/ai-engine/main.go:186` ทันที
 Conflict: REQ-046(3) กำหนดว่า daemon ไม่มี credential ของตัวเอง — บูตเปล่าได้ แล้วรอ Cloudflare token จาก handshake ของมือถือ; แต่ `newMobileRuntime` คืน `(nil, nil)` เมื่อ `cloudflare_api` ว่าง แล้ว caller deref `mobileRT.client` ทันที จึงบูตเปล่าไม่ได้เลย
-Previous: `cmd/ai/mobile.go` — `if cloudflare_api == "" { return nil, nil }`; `cmd/ai/main.go:186` ใช้ `mobileRT.client` โดยไม่ตรวจ nil
+Previous: `cmd/ai-engine/mobile.go` — `if cloudflare_api == "" { return nil, nil }`; `cmd/ai-engine/main.go:186` ใช้ `mobileRT.client` โดยไม่ตรวจ nil
 New: `cloudflare_api` ที่ว่างหมายถึงใช้ `d1store.DefaultAPIBase` (override ของ discovery ตาม CHANGE-082) — `newMobileRuntime` สร้าง runtime + client ได้เสมอ; `main.go` มี nil guard กัน crash ซ้ำ (`mobile runtime is not configured`); `config/entry.json` บนเครื่องรันจึงไม่ต้องมี secret ใด ๆ
 Reason: ทางเดียวที่ daemon จะรันบนเครื่องเปล่า (Kaggle/CI/เครื่องใหม่) คือบูตแบบไม่มี credential ตามสเปก — crash นี้ปิดทางนั้นทั้งหมด ทั้งที่ client/transport รองรับ token จากมือถืออยู่แล้ว
-Impact: cmd/ai/mobile.go (default API base), cmd/ai/main.go (nil guard), cmd/ai/main_test.go (`TestNewMobileRuntimeBootsWithoutCloudflareAPIOverride`), requirements/changes.md — ไม่แตะ transport, sdk, D1 schema
+Impact: cmd/ai-engine/mobile.go (default API base), cmd/ai-engine/main.go (nil guard), cmd/ai-engine/main_test.go (`TestNewMobileRuntimeBootsWithoutCloudflareAPIOverride`), requirements/changes.md — ไม่แตะ transport, sdk, D1 schema
 Validation: `TestNewMobileRuntimeBootsWithoutCloudflareAPIOverride`; `go test ./... -count=1`; บูต binary จริงด้วย HOME เปล่า + entry.json ที่ไม่มี `cloudflare_api` ได้ `mobile: quick tunnel public URL` + `ai daemon ready` ไม่มี panic; Kaggle kernel `kyomusen/aixodia` Phase A/B
 Status: accepted

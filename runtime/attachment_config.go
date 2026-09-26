@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Tulipskun/ai/runtime/filestore"
+	"github.com/Tulipskun/ai-engine/runtime/filestore"
 )
 
 // AttachmentConfig is the config/attachment.json view of the attachment file

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai-engine/sdk"
 )
 
 // OS-level mouse and keyboard control as an alternative to direct browser

@@ -1,4 +1,4 @@
-module github.com/Tulipskun/ai
+module github.com/Tulipskun/ai-engine
 
 go 1.25.0
 

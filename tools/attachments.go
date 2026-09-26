@@ -16,8 +16,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/Tulipskun/ai/runtime/filestore"
-	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai-engine/runtime/filestore"
+	"github.com/Tulipskun/ai-engine/sdk"
 )
 
 // Attachment read bounds. Both are tool-side caps: the store may legitimately
@@ -42,7 +42,7 @@ var errNoAttachmentStore = errors.New("attachment store is not configured")
 
 // AttachmentStore is the read-only view of the attachment file store these
 // tools need. The method set matches the real *filestore.Store signatures so
-// cmd/ai injects the concrete store without an adapter. Only Get returns file
+// cmd/ai-engine injects the concrete store without an adapter. Only Get returns file
 // content, and only for the session key the caller supplies; traversal,
 // withinRoot, and symlink discipline stay inside the store, which uses the same
 // safePath/withinRoot style this module uses for the workspace (REQ-026).
@@ -77,7 +77,7 @@ func newAttachmentFile(meta filestore.Meta) attachmentFile {
 }
 
 // SetAttachmentStore injects the store used by list_attachments,
-// read_attachment, and describe_attachment. It is a setter because cmd/ai opens
+// read_attachment, and describe_attachment. It is a setter because cmd/ai-engine opens
 // the store from runtime configuration after the registry is built; passing nil
 // disables the tools again with a clear error.
 func (r *Registry) SetAttachmentStore(store AttachmentStore) {

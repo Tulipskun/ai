@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Tulipskun/ai/runtime"
-	"github.com/Tulipskun/ai/runtime/filestore"
-	"github.com/Tulipskun/ai/sdk"
-	"github.com/Tulipskun/ai/tools"
+	"github.com/Tulipskun/ai-engine/runtime"
+	"github.com/Tulipskun/ai-engine/runtime/filestore"
+	"github.com/Tulipskun/ai-engine/sdk"
+	"github.com/Tulipskun/ai-engine/tools"
 )
 
 // These tests cover only the wiring: config in, one store out, and that store

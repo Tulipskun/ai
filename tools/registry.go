@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai-engine/sdk"
 )
 
 type handler func(context.Context, json.RawMessage) (string, error)

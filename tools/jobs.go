@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai-engine/sdk"
 )
 
 const maxJobOutputBytes = 1 << 20

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai-engine/sdk"
 )
 
 func TestBackgroundJobLifecycle(t *testing.T) {

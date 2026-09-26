@@ -1,4 +1,4 @@
-# Tulipskun/ai
+# Tulipskun/ai-engine
 
 The AI harness behind **AIxodia** (the Android client). `ai` is a single
 daemon whose only gateway is a WebSocket published through a Cloudflare quick
@@ -7,7 +7,7 @@ tunnel; runtime configuration and session state live in Cloudflare D1 (REQ-047).
 ## Run
 
 ```bash
-go build -o ai ./cmd/ai
+go build -o ai ./cmd/ai-engine
 ./ai          # or: ./ai daemon
 ```
 

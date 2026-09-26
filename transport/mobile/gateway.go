@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai-engine/sdk"
 	"github.com/gorilla/websocket"
 )
 

@@ -14,7 +14,7 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 ```text
 .
 ├── bin/               empty placeholder (reserved install target)
-├── cmd/ai/            daemon entry + agent/registry construction (single gateway)
+├── cmd/ai-engine/            daemon entry + agent/registry construction (single gateway)
 ├── cmd/demo/          throwaway provider-smoke prototype (not shipped)
 ├── sdk/               provider-neutral Agent runtime, sessions, orchestration
 ├── tools/             worker execution tools (files, shell, jobs, browser)
@@ -46,8 +46,8 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
 | Outbound file-send intents (worker → transport) | `sdk/outbound_attachments.go` |
 | Runtime config + session manager | `runtime/session_manager.go`, `runtime/*.go` |
 | Stateless runtime state ↔ Cloudflare D1 | `runtime/d1store/client.go`, `runtime/d1store/sync.go` |
-| Mobile gateway (AIxodia, the only transport) + auth gate | `transport/mobile/gateway.go`, `transport/mobile/auth.go`, `transport/mobile/tunnel.go`, `transport/mobile/history.go` (ประวัติแชทจาก D1 ผ่าน tunnel), `transport/mobile/admin.go` (provider/key pool + agent settings ที่มือถือจัดการ), `cmd/ai/mobile.go` |
-| Phone-owned provider keys + per-agent routes (file ↔ D1) | `cmd/ai/admin_store.go`, `runtime/provider_manager.go` (Reload/Rt/RefreshProvider) |
+| Mobile gateway (AIxodia, the only transport) + auth gate | `transport/mobile/gateway.go`, `transport/mobile/auth.go`, `transport/mobile/tunnel.go`, `transport/mobile/history.go` (ประวัติแชทจาก D1 ผ่าน tunnel), `transport/mobile/admin.go` (provider/key pool + agent settings ที่มือถือจัดการ), `cmd/ai-engine/mobile.go` |
+| Phone-owned provider keys + per-agent routes (file ↔ D1) | `cmd/ai-engine/admin_store.go`, `runtime/provider_manager.go` (Reload/Rt/RefreshProvider) |
 
 ## Key files (what each owns)
 
@@ -97,13 +97,13 @@ requirements plus `requirements/changes.md` when behavior or spec changed.
   file; keep the change in the owning module (no cross-module refactors).
 - Provider / catalogue / retry issue: `sdk/router_client.go` +
   `sdk/routing.go` + `sdk/providers/<adapter>/`.
-- Daemon start / gateway / tunnel / D1 hydration: `cmd/ai/main.go`,
-  `cmd/ai/mobile.go`, `transport/mobile/`, `runtime/d1store/`.
+- Daemon start / gateway / tunnel / D1 hydration: `cmd/ai-engine/main.go`,
+  `cmd/ai-engine/mobile.go`, `transport/mobile/`, `runtime/d1store/`.
 - Session persist / workspace / settings: `sdk/session_db.go` +
   `sdk/session_settings.go` + `runtime/session_manager.go`.
 - Config or state that must come from D1 instead of disk: `runtime/d1store/`
   keys `config:*` and `sessions/<id>` (CON-012).
-- Mobile app (AIxodia) gateway: `transport/mobile/` plus `cmd/ai/mobile.go`;
+- Mobile app (AIxodia) gateway: `transport/mobile/` plus `cmd/ai-engine/mobile.go`;
   core orchestration stays untouched. There is no other transport
   (CHANGE-059).
 - Stateless runtime state / D1 sync: `runtime/d1store/` only (CON-012 keeps

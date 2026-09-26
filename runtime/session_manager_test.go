@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai-engine/sdk"
 )
 
 func TestSessionManagerReusesSessionByID(t *testing.T) {

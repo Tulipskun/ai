@@ -1,7 +1,7 @@
 package openai
 
 import (
-	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai-engine/sdk"
 )
 
 // Canonical OpenAI Responses wire is the central interface.

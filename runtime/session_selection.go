@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai-engine/sdk"
 )
 
 // SessionSelector is the transport-neutral API for selecting a session.

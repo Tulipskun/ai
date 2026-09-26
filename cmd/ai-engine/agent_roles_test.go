@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai-engine/sdk"
 )
 
 // Exercise the CLI's real execution registry through a delegated SDK worker.

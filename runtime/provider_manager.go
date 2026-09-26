@@ -11,11 +11,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Tulipskun/ai/sdk"
-	"github.com/Tulipskun/ai/sdk/providers/anthropic"
-	"github.com/Tulipskun/ai/sdk/providers/gemini"
-	"github.com/Tulipskun/ai/sdk/providers/openai"
-	"github.com/Tulipskun/ai/sdk/providers/opencode"
+	"github.com/Tulipskun/ai-engine/sdk"
+	"github.com/Tulipskun/ai-engine/sdk/providers/anthropic"
+	"github.com/Tulipskun/ai-engine/sdk/providers/gemini"
+	"github.com/Tulipskun/ai-engine/sdk/providers/openai"
+	"github.com/Tulipskun/ai-engine/sdk/providers/opencode"
 )
 
 type ProviderManager struct {

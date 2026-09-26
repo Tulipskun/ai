@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai-engine/sdk"
 )
 
 const DefaultProviderConfigPath = "config/provider.json"

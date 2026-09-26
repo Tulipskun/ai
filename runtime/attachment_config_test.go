@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Tulipskun/ai/runtime/filestore"
+	"github.com/Tulipskun/ai-engine/runtime/filestore"
 )
 
 func TestLoadAttachmentConfigMissingUsesDefaults(t *testing.T) {

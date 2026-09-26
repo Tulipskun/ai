@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	"github.com/Tulipskun/ai/sdk"
+	"github.com/Tulipskun/ai-engine/sdk"
 )
 
 // mobileDisplayAdapter keeps the harness-facing display contract narrow: the

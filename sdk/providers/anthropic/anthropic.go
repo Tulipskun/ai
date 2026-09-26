@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Tulipskun/ai/sdk"
-	"github.com/Tulipskun/ai/sdk/providers/internal"
-	"github.com/Tulipskun/ai/sdk/providers/openai"
+	"github.com/Tulipskun/ai-engine/sdk"
+	"github.com/Tulipskun/ai-engine/sdk/providers/internal"
+	"github.com/Tulipskun/ai-engine/sdk/providers/openai"
 )
 
 type Client struct {

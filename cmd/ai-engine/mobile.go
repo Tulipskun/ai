@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -115,6 +116,23 @@ type modelStore struct {
 	workingModel func(sdk.ProviderID) string
 }
 
+// adminSettings reads the global agent defaults (config:system) from D1.
+// Called by ResolveAgentConfig to fall back when a session has no pin.
+func (m modelStore) adminSettings(ctx context.Context) (mobiletransport.SettingsView, error) {
+	val, found, err := m.client.Get(ctx, "config:system")
+	if err != nil {
+		return mobiletransport.SettingsView{}, err
+	}
+	if !found {
+		return mobiletransport.SettingsView{}, nil
+	}
+	var cfg mobiletransport.SettingsView
+	if err := json.Unmarshal([]byte(val), &cfg); err != nil {
+		return mobiletransport.SettingsView{}, fmt.Errorf("decode config:system: %w", err)
+	}
+	return cfg, nil
+}
+
 func (m modelStore) Providers(context.Context) ([]mobiletransport.ProviderView, error) {
 	if m.router == nil {
 		return nil, errors.New("runtime: router is not available")
@@ -163,7 +181,7 @@ func (m modelStore) SetSessionModel(ctx context.Context, sessionID string, choic
 	}
 	provider := sdk.ProviderID(choice.Provider)
 	model := choice.Model
-	if model == "" && provider == "" {
+	if model == "" && provider == "" && !choice.ClearSub {
 		return m.sessionRow(ctx, sessionID)
 	}
 	if provider == "" || model == "" {
@@ -180,13 +198,22 @@ func (m modelStore) SetSessionModel(ctx context.Context, sessionID string, choic
 			model = models[0].ID
 		}
 	}
-	if provider == "" || model == "" {
+	if (provider != "" || model != "") && (provider == "" || model == "") {
 		return mobiletransport.SessionRow{}, fmt.Errorf("provider %q has no model %q", choice.Provider, choice.Model)
 	}
-	if _, err := m.router.Resolve(provider, model); err != nil {
-		return mobiletransport.SessionRow{}, fmt.Errorf("%s/%s is not available: %w", provider, model, err)
+	if provider != "" && model != "" {
+		if _, err := m.router.Resolve(provider, model); err != nil {
+			return mobiletransport.SessionRow{}, fmt.Errorf("%s/%s is not available: %w", provider, model, err)
+		}
 	}
 	if err := m.client.SetSessionRoute(ctx, sessionID, string(provider), model); err != nil {
+		return mobiletransport.SessionRow{}, err
+	}
+	subEnabled := choice.SubEnabled
+	if choice.ClearSub {
+		subEnabled = nil
+	}
+	if err := m.client.SetSessionSubAgent(ctx, sessionID, choice.SubProvider, choice.SubModel, subEnabled); err != nil {
 		return mobiletransport.SessionRow{}, err
 	}
 	row, err := m.sessionRow(ctx, sessionID)
@@ -205,11 +232,53 @@ func (m modelStore) SetSessionModel(ctx context.Context, sessionID string, choic
 }
 
 func (m modelStore) SessionModel(ctx context.Context, sessionID string) (mobiletransport.ModelChoice, bool, error) {
-	row, found, err := m.client.GetSession(ctx, sessionID)
-	if err != nil || !found || row.Provider == "" {
+	cfg, err := m.ResolveAgentConfig(ctx, sessionID)
+	if err != nil {
 		return mobiletransport.ModelChoice{}, false, err
 	}
-	return mobiletransport.ModelChoice{Provider: row.Provider, Model: row.Model}, true, nil
+	if !cfg.Pinned && !cfg.SubPinned {
+		return mobiletransport.ModelChoice{}, false, nil
+	}
+	return mobiletransport.ModelChoice{
+		Provider: cfg.Provider, Model: cfg.Model,
+		SubProvider: cfg.SubProvider, SubModel: cfg.SubModel, SubEnabled: &cfg.SubEnabled,
+	}, true, nil
+}
+
+// ResolveAgentConfig returns the effective per-session agent setup: session
+// pins when present, else the global agent defaults (config:system). This is
+// the ACP session-config pattern: each chat carries its own config options.
+func (m modelStore) ResolveAgentConfig(ctx context.Context, sessionID string) (mobiletransport.SessionAgentConfig, error) {
+	row, found, err := m.client.GetSession(ctx, sessionID)
+	if err != nil {
+		return mobiletransport.SessionAgentConfig{}, err
+	}
+	cfg := mobiletransport.SessionAgentConfig{}
+	if found {
+		cfg.Provider = row.Provider
+		cfg.Model = row.Model
+		cfg.Pinned = row.Provider != "" && row.Model != ""
+		cfg.SubProvider = row.SubProvider
+		cfg.SubModel = row.SubModel
+		if row.SubEnabled >= 0 {
+			cfg.SubEnabled = row.SubEnabled == 1
+		}
+		cfg.SubPinned = row.SubProvider != "" && row.SubModel != ""
+	}
+	global, err := m.adminSettings(ctx)
+	if err != nil {
+		return cfg, err
+	}
+	if !cfg.Pinned {
+		cfg.Provider = global.Main.Provider
+		cfg.Model = global.Main.Model
+	}
+	if !cfg.SubPinned {
+		cfg.SubProvider = global.Sub.Provider
+		cfg.SubModel = global.Sub.Model
+		cfg.SubEnabled = global.SubEnabled
+	}
+	return cfg, nil
 }
 
 func (m modelStore) sessionRow(ctx context.Context, sessionID string) (mobiletransport.SessionRow, error) {
@@ -222,6 +291,7 @@ func (m modelStore) sessionRow(ctx context.Context, sessionID string) (mobiletra
 	}
 	return mobiletransport.SessionRow{
 		ID: row.ID, Title: row.Title, Provider: row.Provider, Model: row.Model,
+		SubProvider: row.SubProvider, SubModel: row.SubModel, SubEnabled: row.SubEnabled,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}, nil
 }

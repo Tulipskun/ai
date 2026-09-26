@@ -191,6 +191,31 @@ func (f *fakeCloudflare) exec(sql string, params []string) ([]map[string]any, in
 		return nil, 1, 0, nil
 	case s == "UPDATE sessions SET updated_at = unixepoch() WHERE id = ?":
 		return nil, 0, 0, nil
+	case strings.HasPrefix(s, "UPDATE sessions SET provider = ?, model = ?"):
+		row, ok := f.sessions[params[2]]
+		if !ok {
+			return nil, 0, 0, nil
+		}
+		row["provider"] = params[0]
+		row["model"] = params[1]
+		return nil, 1, 0, nil
+	case strings.HasPrefix(s, "UPDATE sessions SET sub_provider = ?, sub_model = ?"):
+		row, ok := f.sessions[params[2]]
+		if !ok {
+			return nil, 0, 0, nil
+		}
+		row["sub_provider"] = params[0]
+		row["sub_model"] = params[1]
+		return nil, 1, 0, nil
+	case s == "UPDATE sessions SET sub_enabled = ?, updated_at = unixepoch() WHERE id = ?":
+		row, ok := f.sessions[params[1]]
+		if !ok {
+			return nil, 0, 0, nil
+		}
+		if v, err := strconv.Atoi(params[0]); err == nil {
+			row["sub_enabled"] = v
+		}
+		return nil, 1, 0, nil
 	case strings.HasPrefix(s, "SELECT id, title, provider, model, created_at, updated_at FROM sessions ORDER BY"):
 		ids := make([]string, 0, len(f.sessions))
 		for id := range f.sessions {
@@ -202,7 +227,7 @@ func (f *fakeCloudflare) exec(sql string, params []string) ([]map[string]any, in
 			rows = append(rows, f.sessions[id])
 		}
 		return rows, 0, 0, nil
-	case strings.HasPrefix(s, "SELECT id, title, provider, model, created_at, updated_at FROM sessions WHERE"):
+	case strings.HasPrefix(s, "SELECT id, title, provider, model, sub_provider, sub_model, sub_enabled, created_at, updated_at FROM sessions WHERE"):
 		row, ok := f.sessions[params[0]]
 		if !ok {
 			return nil, 0, 0, nil

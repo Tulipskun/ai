@@ -1150,3 +1150,16 @@ Reason: แอป `onTurnDone` ล้าง `liveText` (คำตอบที่
 Impact: cmd/ai-engine/mobile.go (PublishOutput ordering), requirements/changes.md — ไม่แตะ app, transport contract, D1 schema
 Validation: `go test ./... -count=1`; ตรวจสอบว่าการ mirror เกิดขึ้นก่อน Display ใน code
 Status: accepted
+
+CHANGE-085
+
+Date: 2026-09-27
+Type: feature
+Request: "ทำให้ sub agent ตั้งค่าราย session ได้ด้วย" — sub-agent provider/model/enabled ต้องตั้งค่าต่อแชทได้ ไม่ใช่แค่ค่าสากล
+Conflict: REQ-048(4) กำหนดว่า `PUT /api/settings` ตั้ง main/sub route ของ agent แต่ละตัวแบบสากล; ไม่ได้กำหนดว่าต้องตั้งราย session ได้
+Previous: `AgentSettings` (main + sub + sub_enabled) เก็บใน `config:system` เป็นค่าสากลเท่านั้น; session มีแค่ main-agent pin (`sessions.provider/model`)
+New: per-session sub-agent override ตาม ACP Session Config Options pattern — D1 `sessions` table มีคอลัมน์ `sub_provider/sub_model/sub_enabled`; daemon `ResolveAgentConfig(sessionID)` คืน session pin ถ้ามี ถ้าไม่มีคืน global default; แอป session sheet ตั้งค่า sub agent ของแชทนั้นได้ (provider/model/enabled) และล้างกลับใช้ค่าสากลได้
+Reason: ผู้ใช้อยากให้แต่ละแชทใช้ sub agent คนละตั้งค่ากัน (เช่น แชทนี้ใช้ sub agent บน provider อื่น) — ระบบเดิมบังคับใช้ค่าสากลทุกแชท
+Impact: transport/mobile/history.go (ModelChoice + SessionAgentConfig + ModelStore.ResolveAgentConfig), transport/mobile/admin.go (SettingsView passthrough), cmd/ai-engine/mobile.go (SetSessionModel writes sub columns, ResolveAgentConfig), runtime/d1store/client.go (Session.sub_*, SetSessionSubAgent), runtime/d1store tests, transport/mobile/history_test.go (fakeModels.ResolveAgentConfig), requirements/changes.md
+Validation: `go test ./... -count=1` ผ่านหมด; D1 ALTER TABLE + round-trip test
+Status: accepted

@@ -461,3 +461,36 @@ func TestEnsureTurnFooterAddsColumnsOnce(t *testing.T) {
 		t.Fatalf("a second run added %v again", fake.extraTurnColumns)
 	}
 }
+
+func TestSetSessionSubAgentRoundTrip(t *testing.T) {
+	fake := newFakeCloudflare("cf-token")
+	client, _ := testClient(t, fake)
+	ctx := context.Background()
+
+	if err := client.SetSessionRoute(ctx, "chat-1", "Opencode", "mimo-v2.5-free"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetSessionSubAgent(ctx, "chat-1", "AgentRouter", "mimo-v2.5-free", boolPtr(true)); err != nil {
+		t.Fatal(err)
+	}
+	row, found, err := client.GetSession(ctx, "chat-1")
+	if err != nil || !found {
+		t.Fatalf("GetSession: found=%v err=%v", found, err)
+	}
+	if row.SubProvider != "AgentRouter" || row.SubModel != "mimo-v2.5-free" || row.SubEnabled != 1 {
+		t.Fatalf("sub = %s/%s/%d, want AgentRouter/mimo-v2.5-free/1", row.SubProvider, row.SubModel, row.SubEnabled)
+	}
+
+	if err := client.SetSessionSubAgent(ctx, "chat-1", "", "", boolPtr(false)); err != nil {
+		t.Fatal(err)
+	}
+	row, _, err = client.GetSession(ctx, "chat-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.SubProvider != "" || row.SubModel != "" || row.SubEnabled != 0 {
+		t.Fatalf("cleared sub = %s/%s/%d, want empty/0", row.SubProvider, row.SubModel, row.SubEnabled)
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }

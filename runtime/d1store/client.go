@@ -423,12 +423,15 @@ func (c *Client) DeleteState(ctx context.Context, key string) error {
 
 // Session is one row of the history table the phone renders.
 type Session struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Provider  string `json:"provider"`
-	Model     string `json:"model"`
-	CreatedAt int64  `json:"created_at"`
-	UpdatedAt int64  `json:"updated_at"`
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	Provider     string `json:"provider"`
+	Model        string `json:"model"`
+	SubProvider  string `json:"sub_provider"`
+	SubModel     string `json:"sub_model"`
+	SubEnabled   int    `json:"sub_enabled"` // -1 = unset (follow global), 0 = off, 1 = on
+	CreatedAt    int64  `json:"created_at"`
+	UpdatedAt    int64  `json:"updated_at"`
 }
 
 // Turn is one history row, ordered by seq within a session.
@@ -470,7 +473,7 @@ func truncateRunes(text string, limit int) string {
 	return text
 }
 
-const sessionColumns = "id, title, provider, model, created_at, updated_at"
+const sessionColumns = "id, title, provider, model, sub_provider, sub_model, sub_enabled, created_at, updated_at"
 
 // ListSessions returns the newest chats, the order the phone shows them in.
 func (c *Client) ListSessions(ctx context.Context, limit int) ([]Session, error) {
@@ -534,6 +537,37 @@ func (c *Client) RenameSession(ctx context.Context, id, title string) (Session, 
 	}
 	session, found, err := c.GetSession(ctx, id)
 	return session, found, err
+}
+
+// SetSessionSubAgent stores the per-session sub-agent override. Empty fields
+// clear the pin so the session follows the global agent defaults again.
+// subEnabled == nil leaves the stored flag untouched.
+func (c *Client) SetSessionSubAgent(ctx context.Context, sessionID, subProvider, subModel string, subEnabled *bool) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return errors.New("d1store: session id is required")
+	}
+	if _, err := c.query(ctx,
+		"INSERT OR IGNORE INTO sessions(id, title, created_at, updated_at) VALUES(?, ?, unixepoch(), unixepoch())",
+		[]string{sessionID, sessionID}); err != nil {
+		return err
+	}
+	if _, err := c.query(ctx,
+		"UPDATE sessions SET sub_provider = ?, sub_model = ?, updated_at = unixepoch() WHERE id = ?",
+		[]string{subProvider, subModel, sessionID}); err != nil {
+		return err
+	}
+	if subEnabled != nil {
+		enabled := 0
+		if *subEnabled {
+			enabled = 1
+		}
+		if _, err := c.query(ctx,
+			"UPDATE sessions SET sub_enabled = ?, updated_at = unixepoch() WHERE id = ?",
+			[]string{strconv.Itoa(enabled), sessionID}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SetSessionRoute remembers which provider and model a chat runs on, so the

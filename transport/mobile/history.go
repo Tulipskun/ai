@@ -12,12 +12,15 @@ import (
 // SessionRow and TurnRow are the history shapes the phone reads. The JSON names
 // are the contract with AIxodia's HistoryApi, so they must not drift.
 type SessionRow struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Provider  string `json:"provider"`
-	Model     string `json:"model"`
-	CreatedAt int64  `json:"created_at"`
-	UpdatedAt int64  `json:"updated_at"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Provider    string `json:"provider"`
+	Model       string `json:"model"`
+	SubProvider string `json:"sub_provider"`
+	SubModel    string `json:"sub_model"`
+	SubEnabled  int    `json:"sub_enabled"`
+	CreatedAt   int64  `json:"created_at"`
+	UpdatedAt   int64  `json:"updated_at"`
 }
 
 type TurnRow struct {
@@ -61,10 +64,30 @@ type ProviderView struct {
 
 // ModelChoice is the provider and model a chat runs on. Clear removes an
 // explicit session pin and returns the chat to the global agent defaults.
+// Sub carries the per-session sub-agent override (ACP session config pattern):
+// each chat may pin its own sub provider/model instead of inheriting the
+// global agent defaults.
 type ModelChoice struct {
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
 	Clear    bool   `json:"clear_model,omitempty"`
+	SubProvider string `json:"sub_provider,omitempty"`
+	SubModel    string `json:"sub_model,omitempty"`
+	SubEnabled  *bool  `json:"sub_enabled,omitempty"`
+	ClearSub    bool   `json:"clear_sub,omitempty"`
+}
+
+// SessionAgentConfig is the resolved per-session agent setup: the main route
+// (possibly pinned) and the sub-agent route (possibly pinned). Empty fields
+// mean "follow the global default".
+type SessionAgentConfig struct {
+	Provider    string `json:"provider,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Pinned      bool   `json:"pinned"`
+	SubProvider string `json:"sub_provider,omitempty"`
+	SubModel    string `json:"sub_model,omitempty"`
+	SubEnabled  bool   `json:"sub_enabled"`
+	SubPinned   bool   `json:"sub_pinned"`
 }
 
 // ModelStore is the live half of provider configuration: what the runtime can
@@ -73,6 +96,10 @@ type ModelStore interface {
 	Providers(ctx context.Context) ([]ProviderView, error)
 	SetSessionModel(ctx context.Context, sessionID string, choice ModelChoice) (SessionRow, error)
 	SessionModel(ctx context.Context, sessionID string) (ModelChoice, bool, error)
+	// ResolveAgentConfig returns the effective per-session agent config: the
+	// session pin when present, else the global agent defaults. Sub-agent
+	// fields follow the same rule.
+	ResolveAgentConfig(ctx context.Context, sessionID string) (SessionAgentConfig, error)
 }
 
 // HistoryStore is the D1 side of the chat list: exactly what the phone needs to
@@ -229,16 +256,24 @@ func serveSessionItem(w http.ResponseWriter, r *http.Request, store HistoryStore
 	switch r.Method {
 	case http.MethodPatch:
 		var body struct {
-			Title      string `json:"title"`
-			Model      string `json:"model"`
-			Provider   string `json:"provider"`
-			ClearModel bool   `json:"clear_model"`
+			Title       string `json:"title"`
+			Model       string `json:"model"`
+			Provider    string `json:"provider"`
+			ClearModel  bool   `json:"clear_model"`
+			SubProvider string `json:"sub_provider"`
+			SubModel    string `json:"sub_model"`
+			SubEnabled  *bool  `json:"sub_enabled"`
+			ClearSub    bool   `json:"clear_sub"`
 		}
 		if err := decodeBody(r, &body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
 			return
 		}
-		choice := ModelChoice{Provider: strings.TrimSpace(body.Provider), Model: strings.TrimSpace(body.Model), Clear: body.ClearModel}
+		choice := ModelChoice{
+			Provider: strings.TrimSpace(body.Provider), Model: strings.TrimSpace(body.Model), Clear: body.ClearModel,
+			SubProvider: strings.TrimSpace(body.SubProvider), SubModel: strings.TrimSpace(body.SubModel),
+			SubEnabled: body.SubEnabled, ClearSub: body.ClearSub,
+		}
 		if models != nil && (body.ClearModel || choice.Provider != "" || choice.Model != "") {
 			row, err := models.SetSessionModel(r.Context(), id, choice)
 			if err != nil {

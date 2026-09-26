@@ -228,7 +228,6 @@ type fakeModels struct {
 	providers []ProviderView
 	choices   map[string]ModelChoice
 }
-
 func (f *fakeModels) Providers(context.Context) ([]ProviderView, error) { return f.providers, nil }
 
 func (f *fakeModels) SetSessionModel(_ context.Context, sessionID string, choice ModelChoice) (SessionRow, error) {
@@ -245,6 +244,28 @@ func (f *fakeModels) SetSessionModel(_ context.Context, sessionID string, choice
 func (f *fakeModels) SessionModel(_ context.Context, sessionID string) (ModelChoice, bool, error) {
 	choice, ok := f.choices[sessionID]
 	return choice, ok, nil
+}
+
+func (f *fakeModels) ResolveAgentConfig(_ context.Context, sessionID string) (SessionAgentConfig, error) {
+	choice, ok := f.choices[sessionID]
+	if !ok {
+		return SessionAgentConfig{}, nil
+	}
+	cfg := SessionAgentConfig{SubEnabled: true}
+	if choice.Provider != "" && choice.Model != "" {
+		cfg.Provider = choice.Provider
+		cfg.Model = choice.Model
+		cfg.Pinned = true
+	}
+	if choice.SubProvider != "" && choice.SubModel != "" {
+		cfg.SubProvider = choice.SubProvider
+		cfg.SubModel = choice.SubModel
+		cfg.SubPinned = true
+	}
+	if choice.SubEnabled != nil {
+		cfg.SubEnabled = *choice.SubEnabled
+	}
+	return cfg, nil
 }
 
 func TestModelsEndpointListsTheCatalogue(t *testing.T) {
